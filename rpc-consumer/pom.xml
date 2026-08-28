@@ -1,0 +1,64 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.feynman.rpc</groupId>
+    <artifactId>rpc-parent</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+  </parent>
+  <artifactId>rpc-consumer</artifactId>
+  <name>rpc-consumer</name>
+  <dependencies>
+  	<dependency>
+	    <groupId>io.netty</groupId>
+	    <artifactId>netty-all</artifactId>
+	  </dependency>
+	  <dependency>
+	    <groupId>org.slf4j</groupId>
+	    <artifactId>slf4j-api</artifactId>
+	  </dependency>
+	  <!-- Spring -->
+    <dependency>
+	    <groupId>org.springframework</groupId>
+	    <artifactId>spring-context</artifactId>
+    </dependency>
+    <dependency>
+	  <groupId>org.springframework</groupId>
+	  <artifactId>spring-core</artifactId>
+	</dependency>
+    <!-- Spring test -->
+    <dependency>
+	    <groupId>org.springframework</groupId>
+	    <artifactId>spring-test</artifactId>
+	    <scope>test</scope>
+    </dependency>
+    <dependency>
+	    <groupId>org.junit.jupiter</groupId>
+	    <artifactId>junit-jupiter</artifactId>
+	    <scope>test</scope>
+	</dependency>
+	  <dependency>
+	    <groupId>com.feynman.rpc</groupId>
+	    <artifactId>rpc-api</artifactId>
+	  </dependency>
+	  <dependency>
+	    <groupId>com.feynman.rpc</groupId>
+	    <artifactId>rpc-core</artifactId>
+	  </dependency>
+	  <!-- 消费端要用 ZK 做服务发现：引入具体的 Registry SPI 实现（按需替换/追加为 rpc-registry-nacos） -->
+	  <dependency>
+	    <groupId>com.feynman.rpc</groupId>
+	    <artifactId>rpc-registry-zookeeper</artifactId>
+	  </dependency>
+	  <!-- 需要至少一个 Serializer SPI 实现在 classpath 上（按需替换/追加为 rpc-serialize-protobuf） -->
+	  <dependency>
+	    <groupId>com.feynman.rpc</groupId>
+	    <artifactId>rpc-serialize-fastjson2</artifactId>
+	  </dependency>
+	  <!-- 测试时也接上真正的日志实现，不然每次跑测试都刷一遍 "SLF4J: no providers found" -->
+	  <dependency>
+	    <groupId>ch.qos.logback</groupId>
+	    <artifactId>logback-classic</artifactId>
+	    <scope>test</scope>
+	  </dependency>
+  </dependencies>
+</project>

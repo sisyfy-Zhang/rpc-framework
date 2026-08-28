@@ -1,0 +1,2 @@
+fastjson2=com.feynman.rpc.core.server.FakeSerializerA
+alt=com.feynman.rpc.core.server.FakeSerializerB

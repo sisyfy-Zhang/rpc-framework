@@ -1,0 +1,3 @@
+# 注释行和空行应当被忽略
+hello=com.feynman.rpc.core.extension.HelloGreeter
+hi=com.feynman.rpc.core.extension.HiGreeter

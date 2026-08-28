@@ -1,0 +1,3 @@
+failfast=com.feynman.rpc.core.cluster.FailfastCluster
+failover=com.feynman.rpc.core.cluster.FailoverCluster
+failback=com.feynman.rpc.core.cluster.FailbackCluster

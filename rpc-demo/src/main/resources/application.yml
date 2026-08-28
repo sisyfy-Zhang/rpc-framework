@@ -1,0 +1,8 @@
+rpc:
+  port: 9000
+  weight: 1
+  registry: zookeeper
+  registry-address: localhost:2181
+  serializer: fastjson2
+  load-balance: roundrobin
+  cluster: failfast

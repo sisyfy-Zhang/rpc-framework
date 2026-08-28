@@ -1,0 +1,222 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.feynman.rpc</groupId>
+  <artifactId>rpc-parent</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <modules>
+  	<module>rpc-api</module>
+  	<module>rpc-core</module>
+  	<module>rpc-registry-zookeeper</module>
+  	<module>rpc-registry-nacos</module>
+  	<module>rpc-serialize-fastjson2</module>
+  	<module>rpc-serialize-protobuf</module>
+  	<module>rpc-spring-boot-starter</module>
+  	<module>rpc-benchmark</module>
+  	<module>rpc-consumer</module>
+  	<module>rpc-demo</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+    <netty.version>4.1.136.Final</netty.version>
+    <spring.version>7.0.8</spring.version>
+    <junit-bom.version>6.1.2</junit-bom.version>
+    <fastjson2.version>2.0.60</fastjson2.version>
+    <slf4j.version>2.0.17</slf4j.version> <!-- 1.7.x 的 StaticLoggerBinder 机制和 logback-classic 1.5.x（基于 SLF4J 2.x ServiceLoader）不兼容，绑定了也不生效 -->
+    <zookeeper.version>3.9.4</zookeeper.version>
+    <curator.version>5.8.0</curator.version> <!-- 5.2.0 的 curator-test 和 zookeeper 3.9.4 有二进制不兼容（IncompatibleClassChangeError），升到 5.8.0 修复 -->
+    <protostuff.version>1.8.0</protostuff.version>
+    <nacos-client.version>2.4.3</nacos-client.version>
+    <logback.version>1.5.13</logback.version>
+    <spring-boot.version>4.1.0</spring-boot.version> <!-- 基于 Spring Framework 7.x，与本项目锁定的 spring.version 匹配 -->
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-all</artifactId>
+        <version>${netty.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-context</artifactId>
+        <version>${spring.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-core</artifactId>
+        <version>${spring.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-test</artifactId>
+        <version>${spring.version}</version>
+        <scope>test</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>com.alibaba.fastjson2</groupId>
+        <artifactId>fastjson2</artifactId>
+        <version>${fastjson2.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.zookeeper</groupId>
+        <artifactId>zookeeper</artifactId>
+        <version>${zookeeper.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-framework</artifactId>
+        <version>${curator.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-recipes</artifactId>
+        <version>${curator.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-test</artifactId>
+        <version>${curator.version}</version>
+        <scope>test</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>commons-lang</groupId>
+        <artifactId>commons-lang</artifactId>
+        <version>2.4</version>
+      </dependency>
+
+      <!-- Protostuff：通过运行时推导 schema 实现真正的 Protobuf 线上格式编码，不需要 .proto 文件/
+           代码生成。原生 google protobuf-java 要求每个消息类型都是生成出来的 Message 子类，
+           不适合需要处理任意 POJO 参数/返回值的通用 RPC 序列化器。 -->
+      <dependency>
+        <groupId>io.protostuff</groupId>
+        <artifactId>protostuff-core</artifactId>
+        <version>${protostuff.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.protostuff</groupId>
+        <artifactId>protostuff-runtime</artifactId>
+        <version>${protostuff.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>com.alibaba.nacos</groupId>
+        <artifactId>nacos-client</artifactId>
+        <version>${nacos-client.version}</version>
+      </dependency>
+
+      <!-- rpc-core/rpc-registry-*/rpc-serialize-* 只依赖 slf4j-api（库的通用规则：绝不强制给
+           使用方绑定具体日志实现）；logback-classic 在这里只作为*运行时*选择给实际应用
+           （如 rpc-demo）使用，和任何真实应用的做法一样。 -->
+      <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>${logback.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot</artifactId>
+        <version>${spring-boot.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-autoconfigure</artifactId>
+        <version>${spring-boot.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter</artifactId>
+        <version>${spring-boot.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-configuration-processor</artifactId>
+        <version>${spring-boot.version}</version>
+        <optional>true</optional>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-test</artifactId>
+        <version>${spring-boot.version}</version>
+        <scope>test</scope>
+      </dependency>
+
+      <!-- 本项目自己的模块，方便子模块间互相依赖时不用重复写 version -->
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-api</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-registry-zookeeper</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-registry-nacos</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-serialize-fastjson2</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-serialize-protobuf</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-consumer</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.2.5</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+
+</project>

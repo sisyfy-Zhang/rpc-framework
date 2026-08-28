@@ -1,0 +1,2 @@
+roundrobin=com.feynman.rpc.core.loadbalance.RoundRobinLoadBalance
+p2c=com.feynman.rpc.core.loadbalance.P2cLoadBalance

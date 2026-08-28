@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.feynman.rpc</groupId>
+    <artifactId>rpc-parent</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+  </parent>
+  <artifactId>rpc-registry-nacos</artifactId>
+  <name>rpc-registry-nacos</name>
+  <description>Registry SPI implementation backed by Nacos, mapping this project's ZK-flavored
+    path model (register("/rpc/host:port#weight")) onto Nacos's service/instance model.</description>
+  <dependencies>
+    <dependency>
+      <groupId>com.feynman.rpc</groupId>
+      <artifactId>rpc-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.nacos</groupId>
+      <artifactId>nacos-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
