@@ -337,3 +337,24 @@ ZookeeperRegistryTest.tightenedDefaultsAreInEffect:87 expected: <30000> but was:
 **修法**：测试序列化器改名 `simple`（`SimpleTestSerializer.NAME`），core 测试一律显式 `serializer(SimpleTestSerializer.NAME)`；starter 测试显式 `rpc.serializer=fastjson2`；另加 `SerializerDefaultTest` 与 starter 的缺省值断言，直接钉住缺省名。
 
 **教训**：测试替身不要借用真实实现的名字，尤其是缺省名；"不配置也能跑"的测试应当是有意为之并有断言，而不是碰巧。
+
+## 28. Testcontainers 2.x 只 shade 了 jackson-databind，jackson-annotations 走 classpath，与 nacos-client 带来的 2.13 冲突
+
+**现象**：CI 首跑在 rpc-registry-nacos 的 `NacosRegistryContractTest` 类级 `startBackend` 报错，14 条契约测试一条没跑：
+
+```
+java.lang.NoSuchFieldError: Class com.fasterxml.jackson.annotation.JsonFormat$Feature does not have member field 'READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE'
+	at org.testcontainers.shaded.com.fasterxml.jackson.databind.deser.std.EnumDeserializer.createContextual(...)
+	...
+	at org.testcontainers.DockerClientFactory.isDockerAvailable(...)
+```
+
+本机此前一直全绿：没开 Docker 时 `isDockerAvailable` 在解析 Docker 返回的 JSON 之前就返回 false，契约测试按门控跳过，出错的代码路径从未执行。开着 Docker Desktop 去掉修复重跑，本机同样复现。
+
+**根因**：testcontainers 2.0.5 的 jar 把 jackson-databind / jackson-core 重定位到 `org.testcontainers.shaded.com.fasterxml.jackson`，但 jackson-annotations 没有 shade（jar 里没有 `shaded/.../jackson/annotation/`），shade 后的 databind 用的是普通 classpath 上的 `com.fasterxml.jackson.annotation`。docker-java-api 3.7.1 声明 jackson-annotations 2.20；nacos-client 2.4.3 → jackson-databind 2.13.5 → jackson-annotations 2.13.5 与之同在第 3 层，nacos-client 在 pom 里声明在前，Maven 就近原则打平后取先声明的 2.13.5（`dependency:tree -Dverbose` 显示 `jackson-annotations:jar:2.20:test - omitted for conflict with 2.13.5`）。2.20 的 databind 读取 2.13 里还不存在的枚举常量，于是 `NoSuchFieldError`。
+
+**修法**：根 `pom.xml` 的 `dependencyManagement` 在 junit-bom 之后导入 `com.fasterxml.jackson:jackson-bom`（`jackson-bom.version` = 2.20.2），把 jackson 全族统一到 2.20 线（annotations 2.20，core / databind 2.20.2），nacos-client 随之使用 2.20.2。不在 rpc-registry-nacos 里直接声明 test scope 的 jackson-annotations 2.20：直接声明的 scope 会覆盖传递依赖的 scope，annotations 变成 test 后就被挤出编译期 / 运行期 classpath，而主代码里 nacos-client 的 databind 运行时离不开它。修复后本机（Docker Desktop）实跑 `NacosRegistryContractTest` 14 条，0 失败 0 错误（其中线程泄漏一条按 TCK 的能力假设跳过：Nacos 客户端不由实现控制线程名）。
+
+**教训**：
+- "部分 shade"的库最危险：被 shade 的部分自带版本，没 shade 的部分仍参与 classpath 仲裁，冲突只在走到那条代码路径时才出现；引入这类库后用 `dependency:tree -Dverbose` 看一眼它的未 shade 依赖有没有被 "omitted for conflict"。
+- 按环境门控跳过的测试在本机等于没跑；CI 门禁断言"必须实跑"才能把这类问题拦下，本机能开 Docker 时也应至少实跑一次。
