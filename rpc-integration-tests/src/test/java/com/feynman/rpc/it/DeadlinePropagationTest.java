@@ -15,6 +15,7 @@ import com.feynman.rpc.core.RpcContext;
 import com.feynman.rpc.core.RpcServer;
 import com.feynman.rpc.core.config.ReferenceOptions;
 import com.feynman.rpc.core.protocol.AttachmentKeys;
+import com.feynman.rpc.it.support.Discovery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -144,6 +145,10 @@ class DeadlinePropagationTest {
 		}
 		caller = RpcClient.builder().registry(zk.registry()).defaultTimeout(Duration.ofSeconds(10)).build();
 		a = caller.reference(ServiceA.class);
+		// clientOfB / clientOfA 在 C / B 注册之前就已订阅：registered() 之后仍要等 watch 推送到达各自的提供者视图
+		Discovery.awaitProviders("clientOfB", clientOfB, ServiceC.class);
+		Discovery.awaitProviders("clientOfA", clientOfA, ServiceB.class);
+		Discovery.awaitProviders("caller", caller, ServiceA.class);
 		a.callB("inherit"); // 预热整条链路的连接
 	}
 
