@@ -5,14 +5,25 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 精简版 Dubbo 风格 SPI 加载器。被 {@link SPI} 标注的接口，其扩展实现按每行
  * {@code name=impl.ClassName} 的格式声明在 classpath 下的
  * {@code META-INF/rpc/<接口全限定名>} 文件里。
+ *
+ * <p>SPI 的职责是"按名字找到实现类"。两种取实例的方式对应两类扩展：
+ * <ul>
+ *   <li>{@link #getExtension}：缓存单例，只用于无状态扩展（Serializer、RegistryFactory）；</li>
+ *   <li>{@link #newExtension}：每次新建，用于有状态扩展（LoadBalance 的轮询游标、Cluster 的重试线程），
+ *       由 RpcClient / RpcServer 持有并随之关闭，同 JVM 的多个实例互不干扰。</li>
+ * </ul>
+ * 类级的 {@code LOADERS} 与类定义缓存是 rpc-core 允许的少数静态状态之一：它只缓存"类路径上有什么"，
+ * 与任何运行时实例无关。
  */
 public final class ExtensionLoader<T> {
 
@@ -42,6 +53,7 @@ public final class ExtensionLoader<T> {
 		return (ExtensionLoader<T>) LOADERS.computeIfAbsent(type, ExtensionLoader::new);
 	}
 
+	/** 缓存的单例实例，仅适用于无状态扩展。 */
 	public T getExtension(String name) {
 		if (name == null || name.isEmpty()) {
 			throw new IllegalArgumentException("Extension name must not be empty");
@@ -49,9 +61,17 @@ public final class ExtensionLoader<T> {
 		return instanceCache.computeIfAbsent(name, this::createExtension);
 	}
 
+	/** 每次调用都新建一个实例，调用方负责其生命周期。 */
+	public T newExtension(String name) {
+		if (name == null || name.isEmpty()) {
+			throw new IllegalArgumentException("Extension name must not be empty");
+		}
+		return createExtension(name);
+	}
+
 	/** 该类型在 classpath 上声明过的所有扩展名（不只是已经实例化的那些）。 */
-	public java.util.Set<String> getSupportedExtensions() {
-		return java.util.Collections.unmodifiableSet(getExtensionClasses().keySet());
+	public Set<String> getSupportedExtensions() {
+		return Collections.unmodifiableSet(getExtensionClasses().keySet());
 	}
 
 	public T getDefaultExtension() {

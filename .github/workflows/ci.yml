@@ -1,0 +1,130 @@
+# 阶段 0 的 CI：每次 push / PR 跑全量构建与三项专门检查。
+# 只做相对正确性检查，不产出任何性能数字（压测数字只来自固定本机，见 README 路线图）。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # -B 非交互、-ntp 关掉下载进度日志（不用 MAVEN_ARGS 这个名字：Maven 3.9 会自动读取它，显式再传一遍会重复）
+  MVN_FLAGS: -B -ntp
+
+jobs:
+  verify:
+    name: verify (JDK 21, Linux, full build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Docker info (Nacos contract tests run only when Docker is available)
+        run: docker version
+      # 全量：单元 + 集成 + ArchUnit + Registry TCK（Nacos 经 Testcontainers 实跑）+ JaCoCo check（rpc-core ≥ 70%）
+      - name: mvn clean install
+        run: mvn $MVN_FLAGS clean install
+      - name: Nacos contract tests must have run (not skipped) on this runner
+        run: |
+          report=rpc-registry-nacos/target/surefire-reports/TEST-com.feynman.rpc.registry.nacos.NacosRegistryContractTest.xml
+          test -f "$report"
+          grep -o 'tests="[0-9]*"[^>]*skipped="[0-9]*"' "$report" || true
+          if grep -q 'skipped="0"' "$report"; then echo "Nacos contract tests ran"; else echo "::error::Nacos contract tests were skipped"; exit 1; fi
+      - name: Upload test reports and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-reports
+          path: |
+            **/target/surefire-reports/
+            rpc-core/target/site/jacoco/
+            rpc-integration-tests/target/site/jacoco-aggregate/
+          if-no-files-found: ignore
+
+  sigterm:
+    name: sigterm (real SIGTERM against a provider JVM, Linux only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and install all modules (no tests)
+        run: mvn $MVN_FLAGS install -DskipTests -Djacoco.skip=true
+      # SigtermShutdownTest：独立 JVM 起 rpc-examples 的 provider，连测试进程里的 ZooKeeper（curator TestingServer），
+      # 慢调用进行中 kill -TERM，断言：慢调用正常返回、节点先于它消失、进程在 shutdown-timeout 内以 143 退出。
+      # 本机（Windows）上该用例被 @EnabledOnOs(LINUX) 跳过。
+      - name: Run SigtermShutdownTest
+        run: >
+          mvn $MVN_FLAGS -pl rpc-integration-tests verify -Djacoco.skip=true
+          -Dtest=SigtermShutdownTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: The SIGTERM test must have run (not skipped)
+        run: |
+          report=rpc-integration-tests/target/surefire-reports/TEST-com.feynman.rpc.it.SigtermShutdownTest.xml
+          test -f "$report"
+          grep -q 'tests="1"' "$report" && grep -q 'skipped="0"' "$report" && grep -q 'failures="0"' "$report" && grep -q 'errors="0"' "$report"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sigterm-reports
+          path: rpc-integration-tests/target/surefire-reports/
+          if-no-files-found: ignore
+
+  paranoid-leak:
+    name: paranoid-leak (Netty ByteBuf leak detection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      # 每次分配都记录访问轨迹，未释放的 ByteBuf 被 GC 时打印 "LEAK:"（logback / slf4j 输出到控制台）
+      - name: mvn clean install with paranoid leak detection
+        run: |
+          set -o pipefail
+          mvn $MVN_FLAGS clean install -Djacoco.skip=true \
+            "-DargLine=-Dio.netty.leakDetection.level=paranoid" 2>&1 | tee build.log
+      - name: Leak detection was really on
+        run: grep -q "ResourceLeakDetector level = PARANOID" build.log
+      - name: No LEAK reports
+        run: |
+          if grep -n "LEAK:" build.log; then echo "::error::Netty reported ByteBuf leaks"; exit 1; fi
+          if grep -rln "LEAK:" --include='*.txt' --include='*.xml' . ; then echo "::error::Netty reported ByteBuf leaks"; exit 1; fi
+          echo "no LEAK reports"
+
+  jdk25:
+    name: jdk25 (optional)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    strategy:
+      matrix:
+        java: ['25']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - name: mvn clean install on JDK ${{ matrix.java }}
+        run: mvn $MVN_FLAGS clean install

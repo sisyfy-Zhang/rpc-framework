@@ -20,12 +20,21 @@ public enum MessageType {
 		return code;
 	}
 
-	public static MessageType fromCode(byte code) {
+	/** 未知编码返回 null（解码器据此判定帧非法），不抛异常。 */
+	public static MessageType find(byte code) {
 		for (MessageType type : values()) {
 			if (type.code == code) {
 				return type;
 			}
 		}
-		throw new IllegalArgumentException("Unknown message type code: " + code);
+		return null;
+	}
+
+	public static MessageType fromCode(byte code) {
+		MessageType type = find(code);
+		if (type == null) {
+			throw new IllegalArgumentException("Unknown message type code: " + code);
+		}
+		return type;
 	}
 }

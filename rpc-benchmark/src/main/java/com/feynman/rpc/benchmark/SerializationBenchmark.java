@@ -22,10 +22,12 @@ import com.feynman.rpc.serialize.protobuf.ProtobufSerializer;
  * <ul>
  *   <li>{@code fastjson2Text} —— fastjson2 生成/解析 String，对应按行分帧的文本协议
  *       会用到的做法，作为文本协议的性能对照组。</li>
- *   <li>{@code fastjson2Binary} —— 默认的 {@link Fastjson2Serializer}（fastjson2 直接输出
+ *   <li>{@code fastjson2Binary} —— 可选实现 {@link Fastjson2Serializer}（框架缺省为 Protostuff；fastjson2 直接输出
  *       {@code byte[]}，不经过 String 中转）。</li>
  *   <li>{@code protobuf} —— {@link ProtobufSerializer}（Protostuff 运行时 schema）。</li>
  * </ul>
+ * 序列化器 SPI 从协议 v2 起携带声明类型（{@code serialize(value, type)} / {@code deserialize(bytes, type)}），
+ * 这里传 {@code SampleUser.class}，与框架按方法签名传入声明类型的调用方式一致。
  * 运行方式：{@code mvn -pl rpc-benchmark package && java -jar rpc-benchmark/target/benchmarks.jar}。
  */
 @State(Scope.Thread)
@@ -51,8 +53,8 @@ public class SerializationBenchmark {
 		protobufSerializer = new ProtobufSerializer();
 
 		fastjson2TextEncoded = JSON.toJSONString(sample);
-		fastjson2BinaryEncoded = fastjson2Serializer.serialize(sample);
-		protobufEncoded = protobufSerializer.serialize(sample);
+		fastjson2BinaryEncoded = fastjson2Serializer.serialize(sample, SampleUser.class);
+		protobufEncoded = protobufSerializer.serialize(sample, SampleUser.class);
 	}
 
 	@Benchmark
@@ -67,21 +69,21 @@ public class SerializationBenchmark {
 
 	@Benchmark
 	public byte[] fastjson2Binary_serialize() {
-		return fastjson2Serializer.serialize(sample);
+		return fastjson2Serializer.serialize(sample, SampleUser.class);
 	}
 
 	@Benchmark
 	public SampleUser fastjson2Binary_deserialize() {
-		return fastjson2Serializer.deserialize(fastjson2BinaryEncoded, SampleUser.class);
+		return (SampleUser) fastjson2Serializer.deserialize(fastjson2BinaryEncoded, SampleUser.class);
 	}
 
 	@Benchmark
 	public byte[] protobuf_serialize() {
-		return protobufSerializer.serialize(sample);
+		return protobufSerializer.serialize(sample, SampleUser.class);
 	}
 
 	@Benchmark
 	public SampleUser protobuf_deserialize() {
-		return protobufSerializer.deserialize(protobufEncoded, SampleUser.class);
+		return (SampleUser) protobufSerializer.deserialize(protobufEncoded, SampleUser.class);
 	}
 }

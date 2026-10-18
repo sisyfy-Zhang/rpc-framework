@@ -1,10 +1,13 @@
 package com.feynman.rpc.core.loadbalance;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
+
+import com.feynman.rpc.core.registry.ServiceInstance;
+import com.feynman.rpc.core.testutil.Instances;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -12,27 +15,23 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class RoundRobinLoadBalanceTest {
 
 	@Test
-	void emptyMapReturnsNull() {
-		assertNull(new RoundRobinLoadBalance().select(Map.of()));
+	void emptyListReturnsNull() {
+		assertNull(new RoundRobinLoadBalance().select(List.of(), new LoadStats()));
 	}
 
 	@Test
 	void distributesProportionallyToWeight() {
 		RoundRobinLoadBalance lb = new RoundRobinLoadBalance();
-		Map<String, Integer> weights = new HashMap<>();
-		weights.put("a", 1);
-		weights.put("b", 3);
+		List<ServiceInstance> candidates = List.of(Instances.at(1, 1), Instances.at(2, 3));
+		LoadStats stats = new LoadStats();
 
-		Map<String, AtomicInteger> counts = new HashMap<>();
-		counts.put("a", new AtomicInteger());
-		counts.put("b", new AtomicInteger());
-
+		Map<Integer, Integer> counts = new HashMap<>();
 		int iterations = 400; // 是 (1+3) 的倍数，这样分布结果能精确整除
 		for (int i = 0; i < iterations; i++) {
-			counts.get(lb.select(weights)).incrementAndGet();
+			counts.merge(lb.select(candidates, stats).port(), 1, Integer::sum);
 		}
 
-		assertEquals(iterations / 4, counts.get("a").get());
-		assertEquals(iterations * 3 / 4, counts.get("b").get());
+		assertEquals(iterations / 4, counts.get(1));
+		assertEquals(iterations * 3 / 4, counts.get(2));
 	}
 }

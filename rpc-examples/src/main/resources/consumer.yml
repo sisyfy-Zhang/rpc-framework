@@ -1,0 +1,16 @@
+# 服务消费方示例配置（ConsumerApplication 以 spring.config.name=consumer 加载本文件）
+rpc:
+  registry:
+    type: zookeeper
+    address: localhost:2181
+  # 首选序列化方式；classpath 上同时有 fastjson2，建连时与对端协商
+  serializer: protobuf
+  client:
+    load-balance: roundrobin
+    cluster: failfast
+    default-timeout: 5s
+    empty-protection: true
+
+logging:
+  level:
+    com.feynman.rpc: INFO

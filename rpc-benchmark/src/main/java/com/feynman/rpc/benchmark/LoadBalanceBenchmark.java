@@ -1,5 +1,6 @@
 package com.feynman.rpc.benchmark;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -17,10 +18,12 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 
+import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.loadbalance.LoadBalance;
 import com.feynman.rpc.core.loadbalance.LoadStats;
 import com.feynman.rpc.core.loadbalance.P2cLoadBalance;
 import com.feynman.rpc.core.loadbalance.RoundRobinLoadBalance;
+import com.feynman.rpc.core.registry.ServiceInstance;
 
 /**
  * 不是 {@link SerializationBenchmark} 那种紧循环微基准——这里模拟一个 3 节点小集群，其中一个
@@ -39,9 +42,14 @@ import com.feynman.rpc.core.loadbalance.RoundRobinLoadBalance;
 @State(Scope.Benchmark)
 public class LoadBalanceBenchmark {
 
-	private static final Map<String, Integer> NODES = Map.of("fast-1", 1, "fast-2", 1, "slow-1", 1);
+	private static final ServiceKey KEY = new ServiceKey("com.feynman.rpc.benchmark.Simulated", "", "default");
+	// 三个同权节点，按端口区分："fast-1"=1、"fast-2"=2、"slow-1"=3
+	private static final List<ServiceInstance> NODES = List.of(
+			new ServiceInstance(KEY, "fast-1", 1, Map.of()),
+			new ServiceInstance(KEY, "fast-2", 2, Map.of()),
+			new ServiceInstance(KEY, "slow-1", 3, Map.of()));
 	// 一个节点比另外两个慢一个数量级——模拟降级/过载的节点，不是已经宕掉的节点
-	private static final Map<String, Long> SERVICE_TIME_MS = Map.of("fast-1", 2L, "fast-2", 2L, "slow-1", 20L);
+	private static final Map<String, Long> SERVICE_TIME_MS = Map.of("fast-1:1", 2L, "fast-2:2", 2L, "slow-1:3", 20L);
 	private static final int TOTAL_REQUESTS = 1000;
 	private static final int CONCURRENCY = 50;
 
@@ -55,8 +63,14 @@ public class LoadBalanceBenchmark {
 		return runScenario(new P2cLoadBalance());
 	}
 
-	/** @return 整批请求的平均每请求延迟（毫秒） */
+	/**
+	 * 每个场景一份新的 {@link LoadStats}：负载统计现在归调用方实例所有（对应真实运行时的一个 RpcClient），
+	 * 两个场景、两次迭代之间不再共享残留的在途计数。
+	 *
+	 * @return 整批请求的平均每请求延迟（毫秒）
+	 */
 	private long runScenario(LoadBalance loadBalance) throws InterruptedException {
+		LoadStats stats = new LoadStats();
 		ExecutorService pool = Executors.newFixedThreadPool(CONCURRENCY);
 		CountDownLatch latch = new CountDownLatch(TOTAL_REQUESTS);
 		AtomicLong totalLatencyNanos = new AtomicLong();
@@ -64,14 +78,14 @@ public class LoadBalanceBenchmark {
 		for (int i = 0; i < TOTAL_REQUESTS; i++) {
 			pool.submit(() -> {
 				long start = System.nanoTime();
-				String address = loadBalance.select(NODES);
-				LoadStats.begin(address);
+				String address = loadBalance.select(NODES, stats).address();
+				stats.begin(address);
 				try {
 					Thread.sleep(SERVICE_TIME_MS.get(address));
 				} catch (InterruptedException ignored) {
 					Thread.currentThread().interrupt();
 				} finally {
-					LoadStats.end(address);
+					stats.end(address);
 				}
 				totalLatencyNanos.addAndGet(System.nanoTime() - start);
 				latch.countDown();

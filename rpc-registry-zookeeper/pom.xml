@@ -26,8 +26,18 @@
       <artifactId>zookeeper</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.feynman.rpc</groupId>
+      <artifactId>rpc-registry-tck</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
       <scope>test</scope>
     </dependency>
     <!-- 内嵌 ZK 测试服务器：同进程启动/关闭，不受这个沙箱环境手动起 ZK 时遇到的连接问题影响 -->

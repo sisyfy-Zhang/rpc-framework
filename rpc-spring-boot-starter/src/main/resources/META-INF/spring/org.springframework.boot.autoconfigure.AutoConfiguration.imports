@@ -1,1 +1,2 @@
 com.feynman.rpc.starter.RpcAutoConfiguration
+com.feynman.rpc.starter.RpcHealthAutoConfiguration

@@ -1,0 +1,36 @@
+rpc-framework (https://github.com/sisyfy-Zhang/rpc-framework)
+Copyright (c) 2026 feynman
+
+本项目自身的代码以 MIT 许可证发布，见根目录 LICENSE。
+
+本仓库还包含下列第三方代码的派生作品，它们继续适用各自的原许可证（不因并入本仓库而改为 MIT）：
+
+-------------------------------------------------------------------------------
+Protostuff 1.8.0 —— protostuff-runtime
+  https://github.com/protostuff/protostuff
+  Licensed under the Apache License, Version 2.0（全文见 licenses/Apache-2.0.txt）
+-------------------------------------------------------------------------------
+
+  派生文件：
+    rpc-serialize-protobuf/src/main/java/io/protostuff/runtime/AllowlistIdStrategy.java
+
+  来源：protostuff-runtime 1.8.0 的 io.protostuff.runtime.DefaultIdStrategy
+        原作者：Leo Romanoff、David Yu（原文件 @author 标注）
+
+  修改说明（由本项目所作，文件头与类注释中亦有标注）：
+    1. 类改名为 AllowlistIdStrategy，构造参数改为 flags、类名白名单判定（Predicate<String>）与白名单描述；
+    2. 所有按线上类名加载类（RuntimeEnv.loadClass）之前先过白名单，不通过抛 ClassNotAllowedException；
+    3. getSchemaWrapper(Class, boolean) 拒绝为 Collection / Map 的实现类创建 POJO schema（集合守卫）；
+    4. 中文注释与说明。
+  其余逻辑逐行沿用原实现。放在同名包 io.protostuff.runtime 下是为了访问原库的包级可见类型
+  （DefaultIdStrategy 在 1.8.0 中为 final，无法继承），并不表示该文件属于 Protostuff 项目本身。
+
+  上述文件按 Apache License 2.0 第 4 条再分发：保留原作者署名、标注修改、附带许可证全文。
+  Protostuff 1.8.0 的发布构件中没有 NOTICE 文件，因此没有需要转载的上游 NOTICE 内容。
+
+-------------------------------------------------------------------------------
+运行时依赖
+-------------------------------------------------------------------------------
+本项目通过 Maven 依赖（而非复制源码）使用 Netty、Spring Framework / Spring Boot、Apache Curator / ZooKeeper、
+Nacos Client、fastjson2、Protostuff、SLF4J 等库，它们以各自的许可证分发，许可证随各自的构件提供，
+不在本文件中逐一列出。

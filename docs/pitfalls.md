@@ -1,0 +1,339 @@
+# 踩坑档案
+
+按现象 → 根因 → 修法 → 教训记录，只收有复用价值的；新条目追加在末尾。
+
+## 1. Maven 默认 JDK 与仓库编译目标不一致
+
+**现象**：本机 `JAVA_HOME` 指向 JDK 11（`D:\CS\JAVA\jdk-11`，`mvn -v` 显示 `Java version: 11.0.25`），直接运行 `mvn` 编译失败：
+
+```
+[INFO] Compiling 5 source files with javac [debug release 17] to target\classes
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.13.0:compile (default-compile) on project rpc-api: Fatal error compiling: 错误: 不支持发行版本 17 -> [Help 1]
+```
+
+**根因**：根 `pom.xml` 设置 `maven.compiler.release=17`，Maven 用 `JAVA_HOME` 指向的 JDK 运行 javac，JDK 11 的 javac 不认识 release 17。
+
+**修法**：把 `JAVA_HOME` 切到 JDK 21（用户动作）。不想改系统环境变量时，按命令临时指定：`JAVA_HOME='D:\CS\JAVA\jdk-21' mvn ...`。
+
+**教训**：把构建所需 JDK 写进 README 环境要求并在 CI 固定版本。
+
+## 2. Protostuff 对 JDK 集合类调 RuntimeSchema.getSchema 静默损坏并污染全局 IdStrategy
+
+**现象**（见 [docs/probes/protostuff-1.8.0.md](probes/protostuff-1.8.0.md) P2a–P2d）：
+
+- `ProtobufSerializer` 直接序列化顶层 `ArrayList<User>`：不抛异常，只产出 2 字节；解码出的列表 `size()=2`，`get(0)` 抛 `ArrayIndexOutOfBoundsException`，`toString`/`equals` 抛 `ConcurrentModificationException`。
+- 顶层 `HashMap<String,User>`：不抛异常，解码为空 Map。
+- 更隐蔽的是副作用：对某个 IdStrategy 调过 `getSchema(ArrayList/HashMap)` 之后，同一策略下其他类的 `Object` 字段里的 `ArrayList`、`Map` 值里的 `List` 也开始损坏，`Object` 字段里的 `HashMap` 变空。全局 `RuntimeEnv.ID_STRATEGY` 上同样复现（P2d），即一次错误调用会影响同一 JVM 之后所有走全局策略的序列化。声明为 `List<User>` 的字段不受影响。
+
+**根因**：`RuntimeSchema.getSchema(Class)` 把传入的类一律当 POJO 处理，按非 transient 字段生成 schema：`ArrayList` 只得到 `[1=size]`，`HashMap` 只得到 `[1=threshold 2=loadFactor]`，真正存数据的字段是 transient 的，被跳过。生成的 POJO schema 登记在该 IdStrategy 里，之后动态类型字段（`Object`、Map 值等）遇到 `ArrayList`/`HashMap` 时改用这份 POJO schema，而不是 Protostuff 自带的集合编码。`ProtobufSerializer.schemaFor` 对任意 `Class` 都调 `RuntimeSchema.getSchema`，所以顶层传集合就会触发。
+
+**修法**（已定方案，截至本条记录时尚未落地到 `ProtobufSerializer`）：
+
+- 按声明的 `Type`（含泛型参数）构造 Collection / Map 对应的 schema，而不是对集合运行时类调 `RuntimeSchema.getSchema`。
+- 加守卫：禁止对 JDK 集合类（`Collection`/`Map` 的实现）调用 `RuntimeSchema.getSchema`，命中即抛异常。
+
+**教训**：
+
+- 不抛异常的损坏只有特征化测试能提前抓到；对第三方库在边界输入上的行为，要用探针记录实际结果，而不是凭文档或直觉假设。
+- 会改全局状态的测试要隔离运行：`ProtostuffBehaviorProbeTest` 标 `@Tag("probe")`，默认构建排除，只用 `-Pprobe` 单独跑。
+
+## 3. Protostuff 1.8.0 不支持 record
+
+**现象**（见 [docs/probes/protostuff-1.8.0.md](probes/protostuff-1.8.0.md) P5）：
+
+- 默认 Unsafe 模式，`RuntimeSchema.getSchema` 阶段即失败：
+
+  ```
+  java.lang.UnsupportedOperationException: can't get field offset on a record class: private final int com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x
+  ```
+
+- 反射模式（`-Dprotostuff.runtime.use_sun_misc_unsafe=false`），序列化成功，`mergeFrom` 阶段失败：
+
+  ```
+  java.lang.RuntimeException: java.lang.IllegalAccessException: Can not set final int field com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x to (int)3
+  ```
+
+**根因**：Protostuff 1.8.0 的运行时 schema 先创建实例、再逐字段写入来还原对象。record 的字段是 final 的，JDK 不允许通过 Unsafe 取 record 字段偏移，也不允许反射修改 record 的 final 字段，所以两种模式都无法还原 record。
+
+**修法**：经序列化器传输的业务 DTO（RPC 参数、返回值）用普通类（可变字段 + 无参构造）；框架内部类型不走序列化器，可以用 record。
+
+**教训**：语言新特性能否用于线上传输取决于序列化库的支持，引入前先用探针在两种运行模式下确认；“编译通过”不代表“能序列化”。
+
+## 4. Netty 往"正在建连"的 channel 上写不会被缓冲，而是直接失败
+
+**现象**：旧 `ConnectionPool.next()` 在没有已激活连接时会返回一条仍在建连的 channel，注释认为"Netty 会先缓冲写入，等连接建立后统一 flush"。用探针验证（Netty 4.1.136，NIO）：
+
+- 连 `127.0.0.1`：`isActive()` 在写入时为 false，但写入成功——本机回环的 `connect()` 在事件循环里几乎同步完成，写任务排在它之后执行，掩盖了问题。
+- 连一个不可达地址（`10.255.255.1:80`，连接真正处于进行中）：
+
+  ```
+  active at write time = false
+  write success = false, cause = java.nio.channels.NotYetConnectedException
+  ```
+
+**根因**：`AbstractChannel.AbstractUnsafe.flush0()` 在 `!isActive()` 且 channel 仍 open 时，对已 flush 的待写消息直接 `failFlushed(new NotYetConnectedException())`，并不会挂起到连上为止。
+
+**修法**：`ConnectionPool.acquire()` 返回 `CompletableFuture<Channel>`：有已激活连接就直接给；只有建连中的连接时，在它的 connect future 上等完成再写；全都不可用才失败。发送失败另外挂 write listener 立刻让请求失败，而不是挂到超时。
+
+**教训**：本机回环测试会掩盖"连接尚未建立"一类时序问题；涉及建连时序的假设要用真正会处于进行中状态的连接（不可达地址、toxiproxy 延迟）去验证，而不是看注释或在 localhost 上跑通就算数。
+
+## 5. `mvn -rf :模块` 续跑时兄弟模块会从本地仓库解析旧快照
+
+**现象**：全量构建在 rpc-spring-boot-starter 失败后，按提示用 `mvn verify -rf :rpc-spring-boot-starter` 续跑，starter 的测试编译报大量"找不到符号"（`com.feynman.rpc.core.ServiceKey`、`RegistryFactory` 等刚在 rpc-core 里新增的类）。
+
+**根因**：`-rf` 只把从该模块开始的模块放进 reactor，前面的 rpc-core 不在本次 reactor 里，于是按普通依赖从 `~/.m2` 解析 `rpc-core:0.0.1-SNAPSHOT`——那是很早以前 install 过的旧版本，没有新 API。
+
+**修法**：改动跨模块 API 后直接从根目录全量 `mvn clean verify`；只想跑部分模块用 `-pl <模块> -am`，让上游模块一起进 reactor。
+
+**教训**：`-rf` 只适用于"上游模块本次没改过"的场景；SNAPSHOT 依赖从本地仓库解析时不会提示它是旧的，报错看起来像代码问题而不是构建问题。
+
+## 6. Protostuff 1.8.0 的 `DefaultIdStrategy` 是 final，白名单策略无法通过继承实现
+
+**现象**：按设计要"继承 DefaultIdStrategy、在按名加载前校验包前缀"，但 `io.protostuff.runtime.DefaultIdStrategy` 声明为 `public final class`，无法继承。退一步做委托（自写 IdStrategy 子类，把调用转给一个内部 DefaultIdStrategy）也不行：
+
+- IdStrategy 的抽象方法都是 `protected`，跨包只能在"自己类型的实例"上调用，不能转调另一个对象的；
+- 更根本的是，DefaultIdStrategy 为多态 POJO 建的 `Lazy` schema 持有的是**内部那个**策略，嵌套的 Object / 接口字段再解析类名时走的是内部策略，白名单被绕过。
+
+**根因**：策略对象既负责"按名找类"，也是它创建的所有 schema 的回指；白名单必须由 schema 实际持有的那个策略来执行。
+
+**修法**：在 rpc-serialize-protobuf 里放一个同名包 `io.protostuff.runtime` 下的 `AllowlistIdStrategy`，逐行沿用 DefaultIdStrategy 的实现（Apache 2.0，文件头注明来源），只改两处：所有 `RuntimeEnv.loadClass(className)` 前先过白名单；`getSchemaWrapper(Class, create)` 拒绝为 Collection / Map 实现类建 POJO schema（第 2 条的守卫）。同名包是为了用到包级可见的 `EnumIO.newEnumIO`、`RuntimeSchema.resolvePipeSchema` 等。
+
+**教训**：设计里写"继承某第三方类"之前先确认它不是 final、扩展点是否真的可达；"包一层委托"对会回指自身的对象（策略、工厂、上下文）往往不成立。
+
+## 7. Protostuff 默认标志下，POJO 里的空集合字段解码为 null
+
+**现象**：`Item{tags = []}` 经 Protostuff 往返后 `tags == null`；fastjson2 则保持 `[]`。同一个 A0-4 参数化用例只在 protobuf 分支失败：
+
+```
+expected: <{odd=[Item{1,a,[]}, Item{3,c,null}], ...}> but was: <{..., odd=[Item{1,a,null}, Item{3,c,null}]}>
+```
+
+**根因**：默认标志下集合字段走 `RuntimeRepeatedFieldFactory`，元素按 protobuf repeated 字段平铺写入，空集合一个字节都不写，读端无从区分"空"与"null"；字段里的 null 元素也默认被丢弃。`RuntimeEnv.COLLECTION_SCHEMA_ON_REPEATED_FIELDS` / `PRESERVE_NULL_ELEMENTS` 可以改变这一点，但它们是 JVM 级系统属性（本仓库禁止 System.setProperty）。
+
+**修法**：IdStrategy 的构造参数 `flags` 按实例生效。ProtobufSerializer 用 `DEFAULT_FLAGS | COLLECTION_SCHEMA_ON_REPEATED_FIELDS | PRESERVE_NULL_ELEMENTS` 构造自己的策略：集合字段编码成嵌套消息（空集合 = 长度 0 的嵌套消息），null 元素按位置保留。两端都是本序列化器，线上格式变化不影响互通。
+
+**教训**："空 vs null"要在每一层（信封、根对象、字段、元素）分别验证；第三方库的全局开关先找有没有按实例的等价物，而不是去改系统属性。
+
+## 8. Netty 引用计数断言：slice 的 refCnt 是父缓冲区的，EMPTY_BUFFER 恒为 1
+
+**现象**：编解码模糊测试里，"释放每条解出的消息后断言 `message.refCnt() == 0`"在部分随机输入上失败（refCnt 为 1），但并没有泄漏；另一个用例对空输入断言"输入缓冲区 refCnt 为 0"也失败。
+
+**根因**：
+
+- `readRetainedSlice` 得到的 slice 与父缓冲区共享引用计数，`slice.refCnt()` 返回的是父缓冲区的计数。同一输入切出两帧时，第一条消息释放后父缓冲区仍被第二条持有，计数自然不为 0。
+- 长度为 0 的 slice、`Unpooled.wrappedBuffer(new byte[0])` 返回的都是共享的 `EMPTY_BUFFER`，`release()` 是空操作，`refCnt()` 恒为 1。
+
+**修法**：泄漏判据改为"全部消息释放、channel finish 之后，**原始输入缓冲区**的 refCnt 为 0"（空输入除外）；另用 `-Dio.netty.leakDetection.level=paranoid` 跑集成测试，并先做一次故意泄漏的阳性对照，确认这套日志配置确实能打印 `LEAK:`。
+
+**教训**：引用计数断言要断在"所有权的根"上，而不是派生视图上；泄漏检测工具要先证明它在当前配置下能报警，"零告警"才有意义。
+
+## 9. surefire 默认只收 `*Test` / `Test*` / `*Tests` / `*TestCase`：jqwik 的 `*Properties` 类会被静默跳过
+
+**现象**（编写时核对 surefire 配置发现，未等到它造成漏测）：jqwik 属性测试类最初按社区习惯命名为 `CodecFuzzProperties`。这样的类不会出现在 surefire 的测试计划里，构建照样 BUILD SUCCESS，属性测试等于没跑。
+
+**根因**：maven-surefire 的默认 includes 是 `**/Test*.java`、`**/*Test.java`、`**/*Tests.java`、`**/*TestCase.java`；不匹配的类不进测试计划，也不报任何提示。jqwik 引擎本身是正常注册的。
+
+**修法**：属性测试类同样以 `Test` 结尾（`CodecFuzzTest`）；另外 jqwik 默认会在工作目录写 `.jqwik-database`，在 `src/test/resources/junit-platform.properties` 里设 `jqwik.database = target/jqwik-database`，免得模块根目录多出未跟踪文件。
+
+**教训**：新增测试类型后，用测试报告里的类名和用例数确认它真的跑了，而不是只看 BUILD SUCCESS。
+
+## 10. curator-test 5.x 的 `KillSession.kill` 只在客户端注入过期，服务端的旧会话和临时节点还活着
+
+**现象**：A0-3 用 `KillSession.kill(client.getZookeeperClient().getZooKeeper())` 模拟会话过期。探针（会话超时 20s）显示：kill 之后客户端立刻换了新会话（`0x...0000` → `0x...0002`），但另一个客户端看到的临时节点在之后至少 7 秒里一直存在，`ephemeralOwner` 仍是旧会话 `0x...0000`。如果断言写成"10 秒内节点重新出现"，即使完全没有重注册逻辑也会通过（节点根本没消失过）。
+
+**根因**：curator-test 5.8 的 `KillSession.kill(ZooKeeper)` 只调用 `zk.getTestable().injectSessionExpiration()`，让客户端在本地处理一个 Expired 事件；服务端并不知道，旧会话要等到会话超时才过期、临时节点才删除。这和生产里"服务端先判定过期、客户端随后收到 Expired"的顺序相反。
+
+**修法**：
+- 断言改为"节点的 `ephemeralOwner` 变成了提供者当前的新会话 ID"，并做了变异验证：关掉重注册后该用例 10 秒超时失败。
+- 重注册必须处理 `NodeExistsException`：节点属于当前会话就只在数据不同时 `setData`；属于别的会话（旧会话尚未在服务端过期）就删掉重建，否则旧会话到期时会把节点一起带走。
+
+**教训**：测试工具模拟出来的故障，和真实故障的时序不一定一样。先用探针看清模拟器实际做了什么，再决定断言什么；"节点存在"这类可能本来就成立的状态不能证明恢复逻辑生效了。
+
+## 11. Curator 5.8 的 runSafe 执行器在 `CuratorFramework.close()` 后不会关闭，每个客户端泄漏一个线程
+
+**现象**：换成 `CuratorCache` 之后，"close 后 5 秒内 `rpc-registry-zk-*` 线程全部结束"的契约用例失败，残留一个 `rpc-registry-zk-{id}-4`，停在 `ThreadPoolExecutor.getTask → LinkedBlockingQueue.take`。旧的一次性 watcher 实现没有这个问题。
+
+**根因**：`CuratorFrameworkImpl.makeRunSafeService` 在没有显式配置时，用 builder 的 threadFactory 新建 `Executors.newSingleThreadExecutor`，而 `close()` 从不关闭它。`CuratorCache` 的监听回调经 `client.runSafe(...)` 投递，第一次使用时这个线程就被创建出来，之后一直不退出。
+
+**修法**：自己创建 runSafe 执行器，经 `CuratorFrameworkFactory.builder().runSafeService(executor)` 交给 Curator，在 `client.close()` 之后自己 `shutdown` 并 `awaitTermination`。
+
+**教训**：库的 `close()` 不一定回收它创建的所有资源。框架线程统一加前缀，并在每次 close 后断言"带前缀的线程在 N 秒内为零"，这种泄漏在第一次引入新组件时就能发现。
+
+## 12. ZooKeeper 客户端的 SendThread / EventThread 名字取自"构造 ZooKeeper 的那个线程"
+
+**现象**：给 Curator 配了 `threadFactory("rpc-registry-zk-...")` 之后，线程快照里仍有 `main-SendThread(127.0.0.1:2181)`、`main-EventThread`（在 surefire 里是测试线程名），看不出属于哪个 Registry，按前缀做的线程泄漏断言也覆盖不到它们。
+
+**根因**：`ClientCnxn.makeThreadName(suffix)` = `Thread.currentThread().getName()`（去掉 `-EventThread`）+ 后缀，取的是调用 `new ZooKeeper(...)` 的线程。Curator 的 threadFactory 只管 Curator 自己的线程。
+
+**修法**：自定义 `ZookeeperFactory`（`NamedZookeeperFactory`），每次在一个名为 `rpc-registry-zk-{instanceId}` 的短命线程上构造 ZooKeeper，结果是 `rpc-registry-zk-{id}-SendThread(...)` / `rpc-registry-zk-{id}-EventThread`。会话过期后 Curator 重建 ZooKeeper 也走这个工厂，名字保持一致。不采用"临时改调用方线程名"的写法，因为那会改到不属于自己的线程。
+
+**教训**：要让线程名可追踪，得先查清每个线程是在哪里、以谁的名义创建的；只配 threadFactory 往往漏掉下层库自己起的线程。
+
+## 13. `@BeforeAll` 里 assumption 失败时，surefire 报告为"0 个测试"而不是 skipped
+
+**现象**：Nacos 契约测试在 `@BeforeAll`（PER_CLASS 生命周期）里用 `assumeTrue(Docker 可用)` 门控。Docker 不可用时，构建输出 `Tests run: 0, Failures: 0, Errors: 0, Skipped: 0 -- in NacosRegistryContractTest`，看起来像这个类没有测试，而不是被跳过了。
+
+**根因**：类级回调里抛出 `TestAbortedException` 会让整个容器 aborted，里面的测试方法不会被逐个报告，surefire 3.2.5 统计为 0。
+
+**修法**：契约基类在 `@BeforeAll` 里捕获 `TestAbortedException` 并记下原因，在 `@BeforeEach` 里再 `assumeTrue(原因 == null, 原因)`。现在报告为 `Tests run: 13, Skipped: 13`，每个用例都带有"Docker is not available and RPC_TEST_NACOS_ADDRESS ... is not set"。
+
+**教训**：门控测试要让"跳过"在报告里看得见、带原因，否则会被误读成没有测试，或者以为它跑过了。
+
+## 14. Nacos 2.x 客户端的 gRPC 端口固定为"HTTP 端口 + 1000"，Testcontainers 的随机端口映射对它无效
+
+**现象**（编写 Nacos 契约测试时核对客户端实现发现，本机 Docker 未运行，尚未实跑）：Testcontainers 默认把 8848、9848 分别映射到两个互不相关的随机端口，但 Nacos 2.x 客户端只接受一个 HTTP 地址，gRPC 端口按"HTTP 端口 + 1000"推算，连到的是一个没有映射的端口。
+
+**根因**：`com.alibaba.nacos.common.remote.client.grpc.GrpcClient.rpcPortOffset()` 只读 JVM 系统属性 `nacos.server.grpc.port.offset`（默认 1000），客户端 Properties 不能改它；本仓库又禁止 `System.setProperty`。
+
+**修法**：先找一个本机空闲端口 P，并确认 P+1000 也空闲，再用 `withCreateContainerCmdModifier` 把 P 固定映射到 8848、P+1000 固定映射到 9848，客户端地址用 `127.0.0.1:P`。
+
+**教训**：容器化中间件时要确认客户端是否从一个地址推算出其他端口；只读系统属性的配置项会和"禁止全局状态"的规则冲突，需要在环境侧（端口映射）解决。
+
+## 15. 容量很小的有界队列：同时到达的两个请求，第二个可能在第一个"还没被取走"时就被拒绝
+
+**现象**：过载测试把 A 配成 `ExecutorConfig.fixed(1, queueCapacity=1)`，预期"1 个执行 + 1 个排队"后第三个才被拒。两个占位请求同时发出时，偶发第二个就收到 SERVER_OVERLOADED，等待 `inFlight == 2` 的断言 5 秒超时：
+
+```
+OverloadProtectionTest.saturatedNodeRejectsAndFailoverMovesTheCallToAnotherNode:107 » ConditionTimeout
+Condition with alias 'A saturated' didn't complete within 5 seconds
+```
+
+**根因**：`ThreadPoolExecutor` 的核心线程已经存在且空闲时，新任务不是直接交给它，而是先 `offer` 进队列、再由空闲线程 `take` 出来。两个请求从两个 IO 线程几乎同时提交时，第一个可能还躺在队列里没被取走，第二个 `offer` 就因为队列已满（容量 1）失败，走 AbortPolicy 拒绝。这是经队列交接任务的固有时序，不是计数错误。
+
+**修法**：测试里逐个发出占位请求，并等前一个真正开始执行（`runningBusinessTasks() == 1`）再发下一个。生产语义不改：队列容量本来就是"突发缓冲"，默认 1000 时这个时序窗口可以忽略；需要"恰好 N 个并发"的严格语义时用虚拟线程 + 信号量（`virtualThreads(maxConcurrent)`）。
+
+**教训**：边界条件测试（容量 0 / 1）会把平时被大容量掩盖的交接时序暴露出来；测试要先确定"前一个已经处于什么状态"再制造下一个事件，而不是假设并发提交会按发出顺序落位。
+
+## 16. fastjson2 2.0.60 序列化 ZonedDateTime 不带偏移，夏令时回拨的那一小时读回来偏移错了
+
+**现象**：A0-4 矩阵补 java.time 时，fastjson2 分支失败（Protostuff 分支通过）：
+
+```
+SerializationMatrixTest.javaTimeScalarsRoundTripExactly:472
+expected: <2024-11-03T01:30-05:00[America/New_York]> but was: <2024-11-03T01:30-04:00[America/New_York]>
+```
+
+探针输出 `JSON.toJSONString(z)` = `"2024-11-03T01:30:00[America/New_York]"`。
+
+**根因**：fastjson2 对 ZonedDateTime 默认只写"本地时间 + 区域 ID"、不写偏移。夏令时回拨那一小时里同一个墙上时间对应两个瞬间（-04:00 与 -05:00），读回时 `ZonedDateTime.ofLocal` 取较早的偏移，较晚那个瞬间被悄悄平移了一小时。其他时刻因为偏移唯一，所以平时测不出来。
+
+**修法**：Fastjson2Serializer 持有自己的 `ObjectWriterProvider` / `ObjectReaderProvider`，为 ZonedDateTime 注册按 `ISO_ZONED_DATE_TIME`（偏移 + 区域）读写的实现，序列化 / 反序列化都传入带这两个 provider 的 Context。不用 `JSON.register`：那是 fastjson2 的全局默认 provider，会改变同一 JVM 里所有使用 fastjson2 的代码的行为（单测里断言了全局默认格式没有被改动）。Protostuff 侧同样用 ISO_ZONED_DATE_TIME，两种序列化器语义一致。另一个小坑：`DateTimeFormatter.ISO_*` 格式化时会输出值为 0 的秒（`01:30:00`），而 `toString()` 会省略（`01:30`），断言线上文本时要按格式化器的输出写。
+
+**教训**：时间类型的往返测试要专门挑"有歧义的时刻"（夏令时重叠、闰日、纪元前、纳秒），普通时刻的往返通过证明不了格式无歧义；修第三方库的默认行为要找按实例生效的扩展点，而不是全局注册。
+
+## 17. curator-test 的 TestingServer 会把协商后的会话超时压到 20 秒
+
+**现象**：断言 ZooKeeperRegistry 新默认值（session-timeout-ms 30000）时，协商出的会话超时是 20000：
+
+```
+ZookeeperRegistryTest.tightenedDefaultsAreInEffect:87 expected: <30000> but was: <20000>
+```
+
+**根因**：ZooKeeper 服务端把客户端请求的会话超时夹在 `[2 × tickTime, 20 × tickTime]` 之间；TestingServer 默认 tickTime 是 1000ms，上限就是 20s。客户端配置的值没错，是服务端改小了。生产 ZK 的 tickTime 通常是 2000ms（上限 40s），30s 原样生效。
+
+**修法**：这条断言单独起一个 `new TestingServer(new InstanceSpec(null, -1, -1, -1, true, -1, 2000, -1), true)`（tickTime 2000ms），断言 `getLastNegotiatedSessionTimeoutMs() == 30000`。
+
+**教训**：会话超时是"协商值"，客户端配置只是上界之一；文档里写"下线节点残留至会话超时"时，实际窗口取决于服务端的 tickTime 配置，排查时要看协商值而不是配置值。
+
+## 18. 连接关闭不会让这条连接上等响应的请求失败；关闭监听端口也不会关闭已接受的连接
+
+**现象**（实现优雅停机时核对发现）：在途表按 requestId 索引、与连接无关。服务端停机超时后关连接，客户端那条连接上已经写出的请求不会立刻失败，而是各自挂到超时（默认 20s）才以 RpcDeadlineExceededException 结束——"停机超时 500ms"在调用方看来变成了 20s。另外只关 `serverChannel` 时，已接受的子连接仍然开着（旧实现靠关闭 worker 线程组顺带关掉）。
+
+**根因**：Netty 的 channel 关闭只会让这条 channel 上尚未 flush 的写失败；已经写出、正在等响应的请求是应用层的状态，Netty 不知道。监听 channel 与子 channel 的生命周期互相独立。
+
+**修法**：客户端在每条连接的 attribute 上记"已写出未响应"的 requestId（`ChannelRequests`），`channelInactive` 时让它们立即以 RpcException（传输失败，D-009 的"连接重置"）失败；服务端用 `DefaultChannelGroup` 记录全部已接受连接，停机时显式关闭。验收测试断言：在途 2s、shutdownTimeout 500ms 时，调用在 close 开始后约 600ms 就失败，而不是 2s 或 20s。
+
+**教训**：请求级状态（在途表）与连接级事件之间要显式建立关联，否则"连接断了"在上层只表现为"慢"；停机测试要断言失败发生的时刻，而不只是"最终失败了"。
+
+## 19. Windows 上 `Process.destroy()` 不会触发被测 JVM 的关闭钩子，"真实 SIGTERM"测试做不了
+
+**现象**（任务简报指出，编写 A0-2 时确认）：想用子进程起 provider、`destroy()` 模拟 SIGTERM 验证优雅下线，在 Windows 上 Spring 的关闭钩子根本不执行。
+
+**根因**：Windows 的 `Process.destroy()` 实现为 `TerminateProcess`，等同于强杀；JVM 关闭钩子只在正常退出、SIGTERM / SIGINT（Unix）或控制台关闭事件时运行。
+
+**修法**：本机用进程内方式验证同一条路径（`ConfigurableApplicationContext.close()` → SmartLifecycle.stop → RpcServer.close，断言 DRAINING 状态、注册节点先于在途完成消失、新请求被拒）；真实 SIGTERM 用例放到 Linux CI（任务 4b / 阶段 3）。
+
+**教训**：信号相关的验收在跨平台开发机上要明确"本机能验证到哪一层"，并把剩下的一层排进 CI，而不是用一个在本机永远不会触发钩子的测试假装覆盖了它。
+
+## 20. 父 POM 把 logback 锁在 1.5.13，Spring Boot 4 应用的控制台日志满屏 `%PARSER_ERROR[clr]`
+
+**现象**：按 README 在本机运行 rpc-examples 的 Boot provider / consumer，每行日志都变成 `%PARSER_ERROR[clr] %PARSER_ERROR[clr] ... Starting ProviderApplication ...`，启动时 logback 打印 `There is no conversion class registered for composite conversion word [clr]`。应用功能正常；集成测试有自己的 `logback-test.xml`，所以从没暴露。
+
+**根因**：Spring Boot 4.1.0 的 `logback/defaults.xml` 用 `<conversionRule conversionWord="clr" class="..."/>` 注册颜色转换器，`class` 属性是 logback 较新版本才认识的写法；Boot 的 `spring-boot-starter-logging` 4.1.0 依赖 logback 1.5.34。父 POM 的 `dependencyManagement` 把 `logback-classic` 固定在 1.5.13，覆盖了 Boot 传递进来的版本，老版本忽略这个属性，`%clr` / `%wEx` 都解析失败。
+
+**修法**：`logback.version` 升到 1.5.34，与 Boot 4.1.0 对齐。
+
+**教训**：`dependencyManagement` 里锁的版本会静默覆盖框架传递依赖的版本；锁版本时要和所用框架的 BOM 对齐，并且至少跑一次"真实应用、默认日志配置"的冒烟，而不只是带测试专用配置的集成测试。
+
+## 21. JaCoCo `report-aggregate` 默认得到一份"看起来正常"的残缺报告
+
+**现象**：在只放测试的 `rpc-integration-tests` 里配 `report-aggregate`，第一次生成的 `jacoco.csv` 只有表头；把被测模块改成 compile scope 后有了数据，但各模块覆盖率与"只跑各自单元测试"的数字一模一样，集成测试的贡献是零（`jacoco-sessions.html` 里没有集成测试那个 JVM 的会话）。
+
+**根因**：
+- `report-aggregate` 只汇总 compile / runtime / provided scope 的依赖模块，test scope 的依赖直接被忽略；
+- `includeCurrentProject` 默认 false 时，不仅不分析本模块的类，**也不读本模块的 exec**——集成测试的执行数据恰恰在本模块的 `target/jacoco.exec` 里；
+- 另外 `jacoco:check` 没有"类目录"参数，只能检查本模块 `target/classes` 里的类，没法直接对别的模块做聚合检查。
+
+**修法**：被测模块改为 compile scope（本模块不安装、不发布，无副作用）；`includeCurrentProject=true`，报告放在 `post-integration-test` 阶段生成（此时本模块 `target/classes` 为空）；之后用 dependency 插件把 rpc-core 的类解包进本模块 `target/classes`，`verify` 阶段 `jacoco:merge` 全部模块的 exec 再 `check`。用"单独拿集成测试 exec 对 core 出报告"交叉核对过：集成测试单独覆盖 core 74.6%，与各模块单元测试合并后 83.5%。
+
+**教训**：覆盖率聚合要核对"有哪些会话被算进来了"，而不是看到一个合理的百分比就相信；能对照的数字（单独某个 exec 的报告）先算一遍。
+
+## 22. 用 test-jar 共享测试代码时，`mvn test` 会把整个 `target/test-classes` 塞进下游模块
+
+**现象**：rpc-core 发布只含泄漏断言扩展的 test-jar（jar 插件 `includes` 过滤），rpc-integration-tests 依赖它。`mvn install` / `verify` 一切正常；但只跑到 `test` 阶段（`mvn test -pl rpc-core,rpc-integration-tests -am`）时，JUnit 报告发现两份 `junit-platform.properties`，其中一份来自 `rpc-core/target/test-classes`。
+
+**根因**：`test` 阶段之前 test-jar 还没打包，Maven 的 reactor 解析会退回到上游模块的输出目录，于是整个 `target/test-classes`（包括 core 测试专用的 `META-INF/rpc` SPI 文件：假序列化器、内存注册中心）进入下游模块的 classpath，jar 插件的 `includes` 过滤此时不起作用。
+
+**修法**：集成测试统一用 `verify` / `install` 跑（README 与 CI 均如此）；`LeakCheckWiringTest` 断言 rpc-core 的 test-classes 不在 classpath 上，误用 `mvn test` 时直接失败并说明原因。
+
+**教训**：test-jar 的过滤只对"打出来的 jar"生效；跨模块共享测试代码时要考虑 reactor 在不同生命周期阶段解析出的是什么。
+
+## 23. JVM 收到 SIGTERM、关闭钩子正常跑完之后，退出码是 143 而不是 0
+
+**现象**：编写 Linux 下的真实 SIGTERM 用例（`SigtermShutdownTest`）时，按"优雅退出 = 退出码 0"写断言是错的：Spring 的关闭钩子完整执行、在途请求全部完成后，进程退出码仍为 143。
+
+**根因**：HotSpot 处理 SIGTERM 时运行关闭钩子，然后以 `128 + 信号值` 退出（SIGTERM = 15 → 143），这是 Unix 惯例，不表示失败；被 SIGKILL 强杀才是 137。Spring Boot 不改写这个退出码。（开发机是 Windows，无法本机复现；用例由 CI 的 sigterm 作业在 Linux 上执行验证。）
+
+**修法**：断言退出码为 143，并另外断言日志里出现 RpcServer 的 `all in-flight requests completed` 与注册节点先于在途调用完成而消失——用行为证明"优雅"，而不是用退出码。Kubernetes 等编排系统同样把 143 视为正常终止。
+
+**教训**：退出码只说明进程怎么结束，不说明结束前做了什么；停机测试要断言可观察的行为。
+
+## 24. `SmartLifecycle.stop(Runnable)` 改成异步后，容器的每阶段停机超时开始生效
+
+**现象**（实现异步停止时核对 Spring 源码发现）：`RpcServerLifecycle` 原本只实现同步 `stop()`，Spring 在停机线程上直接调用它，排空多久就阻塞多久；改为 `stop(Runnable)` 异步回调后，`DefaultLifecycleProcessor` 对每个 phase 只等待有限时间：纯 Spring 默认 10s，Spring Boot 由 `spring.lifecycle.timeout-per-shutdown-phase` 决定（默认 30s）。
+
+**根因**：默认的 `SmartLifecycle.stop(Runnable)` 实现是"同步 stop() 后回调"，等待超时形同虚设；真正异步之后，超时到了容器就继续销毁 bean、进程可能在排空完成前退出。
+
+**修法**：在 `RpcServerLifecycle` 与 README 配置项里写明最长阻塞时长约为 `deregister-grace + shutdown-timeout + 5s`（默认约 15s），要求 `spring.lifecycle.timeout-per-shutdown-phase`（以及 Kubernetes 的 `terminationGracePeriodSeconds`）大于它。
+
+**教训**：把同步回调改成异步时，要查清调用方对异步回调有没有超时；"更快"的代价可能是之前隐含的"一定等完"不再成立。
+
+## 25. 引入 JaCoCo 后，`-DargLine=-Dio.netty.leakDetection.level=paranoid` 被静默丢掉，"零 LEAK"失去意义
+
+**现象**：surefire 配成 `<argLine>@{argLine}</argLine>`、父 POM 定义空的 `argLine` 属性（让跳过 JaCoCo 时也能解析）之后，按原来的方式跑 paranoid 泄漏检测，构建通过、没有任何 `LEAK:`——但 `SerializationMatrixTest` 打印的是 `ResourceLeakDetector level = SIMPLE`。开不开 JaCoCo 都一样。
+
+**根因**：`@{argLine}` 是 surefire 的延迟替换，只读项目属性；JaCoCo 的 prepare-agent 也是在项目属性 `argLine`（父 POM 的空值）上追加 agent。命令行 `-DargLine=...` 是用户属性，两条路径都不读它。
+
+**修法**：`<argLine>@{argLine} ${argLine}</argLine>`：前一半取 JaCoCo 写入的 agent，后一半在模型插值时取值、用户属性优先，于是 `-DargLine=...` 重新生效。验证了三种组合：开 JaCoCo + paranoid → PARANOID 且仍产出 jacoco.exec；`-Djacoco.skip=true` + paranoid → PARANOID；不传 → SIMPLE。CI 的 paranoid 作业额外断言日志里出现 `level = PARANOID`，否则失败。
+
+**教训**："没有报警"必须先证明报警器是开着的；每次改动测试 JVM 的启动参数之后，都要重跑一次"检测器确实生效"的检查（第 8 条的阳性对照同理）。
+
+## 26. 超限的帧交给编码器去拒绝，失败会落进错误的通道
+
+**现象**（去掉预检查后用 `FrameLimitsTest` 复现）：客户端发一个超过 8 MiB 的参数，得到的是 `RpcException "Failed to send request ..."`（cause 为 `EncoderException: frame too large`），看起来像网络问题，且它走传输失败通道——配了 `retries` 就会换节点重发一个注定发不出去的请求；服务端 Filter 往回程 attachments 塞 70KB 字符串，客户端等满 10s 超时，拿到的是 `RpcDeadlineExceededException`。
+
+**根因**：`RpcEncoder` 拒绝超限帧时抛 `EncoderException`，在 Netty 里表现为"这次写失败"。客户端把写失败归为传输失败（future 异常完成），Cluster 据此重试；服务端的回包写失败没有任何人再回一个错误包，对端只能靠自己的超时结束。编码器是唯一检查点时，"确定性失败"被翻译成了"偶发传输故障"或"静默丢包"。
+
+**修法**：发送方在交给编码器之前按同一判定（`ProtocolConstants.exceedsMaxFrame`：23 + attachments + body ≤ 8 MiB）预先检查：客户端以 `RpcSerializationException` 放进结果通道、不写出、不重试；服务端回程 attachments 不合法时改回不带 attachments 的 `SERVER_ERROR`，OK 回包超限改回 `SERIALIZATION_ERROR`。编码器保留同一检查作为最后一道闸。`FrameLimitsTest` 用计数 LoadBalance 断言只尝试一次，并用"恰好 8 MiB 能送达、多 1 字节被拒"验证两端阈值一致。
+
+**教训**：底层组件的拒绝会被上层按"那一层的失败语义"解读；需要特定失败语义（不重试、必须回包）的错误，要在语义还清楚的那一层先拦下，而不是指望最底层的校验。
+
+## 27. 测试替身占用 SPI 缺省名，掩盖了"缺省实现必须在 classpath 上"
+
+**现象**：Serializer 的 SPI 缺省名从 `fastjson2` 改成 `protobuf` 后，rpc-core 的大部分端到端测试和 starter 的两个测试类同时报 `No extension named 'protobuf' found`。
+
+**根因**：rpc-core 的测试序列化器以 `fastjson2` 为 SPI 名注册，正好"冒名"占住了旧缺省名；starter 测试 classpath 上只有 fastjson2。所有没写 `serializer(...)` 的测试都隐式依赖"缺省名恰好能解析"，这层依赖在缺省名变化之前不可见。
+
+**修法**：测试序列化器改名 `simple`（`SimpleTestSerializer.NAME`），core 测试一律显式 `serializer(SimpleTestSerializer.NAME)`；starter 测试显式 `rpc.serializer=fastjson2`；另加 `SerializerDefaultTest` 与 starter 的缺省值断言，直接钉住缺省名。
+
+**教训**：测试替身不要借用真实实现的名字，尤其是缺省名；"不配置也能跑"的测试应当是有意为之并有断言，而不是碰巧。

@@ -7,7 +7,7 @@
   </parent>
   <artifactId>rpc-serialize-fastjson2</artifactId>
   <name>rpc-serialize-fastjson2</name>
-  <description>Serializer SPI implementation backed by fastjson2 (default). Populated in Phase 1.</description>
+  <description>Optional Serializer SPI implementation backed by fastjson2 (SPI name fastjson2); the default serializer is protobuf (rpc-serialize-protobuf).</description>
   <dependencies>
     <dependency>
       <groupId>com.feynman.rpc</groupId>

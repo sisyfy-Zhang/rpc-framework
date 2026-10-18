@@ -1,5 +1,7 @@
 package com.feynman.rpc.core.server;
 
+import java.lang.reflect.Type;
+
 import com.feynman.rpc.core.serialize.Serializer;
 
 /** 仅供测试用的第二个非默认序列化器占位实现（对应 protobuf 的角色）。 */
@@ -15,12 +17,12 @@ public class FakeSerializerB implements Serializer {
 	}
 
 	@Override
-	public byte[] serialize(Object obj) {
+	public byte[] serialize(Object value, Type declaredType) {
 		return new byte[0];
 	}
 
 	@Override
-	public <T> T deserialize(byte[] bytes, Class<T> type) {
+	public Object deserialize(byte[] bytes, Type declaredType) {
 		return null;
 	}
 }

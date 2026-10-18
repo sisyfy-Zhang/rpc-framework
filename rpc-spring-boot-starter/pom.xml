@@ -7,9 +7,8 @@
   </parent>
   <artifactId>rpc-spring-boot-starter</artifactId>
   <name>rpc-spring-boot-starter</name>
-  <description>Spring Boot 4.x auto-configuration: application.yml-driven setup for the RPC
-    framework, reusing rpc-core's existing RpcConsumerConfiguration/RpcProviderConfiguration
-    rather than re-registering the same beans a second way.</description>
+  <description>Spring Boot 集成：@RpcService / @RpcReference 注解、rpc.* properties 绑定到不可变的
+    RpcClientConfig / RpcServerConfig、SmartLifecycle 非阻塞启停。rpc-core 本身不依赖 Spring。</description>
   <dependencies>
     <dependency>
       <groupId>com.feynman.rpc</groupId>
@@ -24,6 +23,12 @@
       <artifactId>spring-boot-configuration-processor</artifactId>
       <optional>true</optional>
     </dependency>
+    <!-- optional：有 Actuator 的应用才装配 RpcServerHealthIndicator（@ConditionalOnClass），不传递给使用方 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+      <optional>true</optional>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -32,6 +37,17 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 测试里跑一次真实的 export → reference → 调用往返，需要一个真实序列化实现 -->
+    <dependency>
+      <groupId>com.feynman.rpc</groupId>
+      <artifactId>rpc-serialize-fastjson2</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

@@ -1,120 +1,252 @@
 package com.feynman.rpc.starter;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.core.config.RpcConfig;
-import com.feynman.rpc.core.mediator.InitialMediator;
-import com.feynman.rpc.core.proxy.InvokeProxy;
-import com.feynman.rpc.core.server.NettyInitializer;
+import com.feynman.rpc.core.RpcClient;
+import com.feynman.rpc.core.RpcServer;
+import com.feynman.rpc.core.ServiceKey;
+import com.feynman.rpc.core.config.ExecutorConfig;
+import com.feynman.rpc.core.config.ReferenceOptions;
+import com.feynman.rpc.core.config.RpcClientConfig;
+import com.feynman.rpc.core.config.RpcServerConfig;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
- * 把 {@link RpcAutoConfiguration} 直接注册进一个普通的 {@link AnnotationConfigApplicationContext}
- * （不需要完整的 {@code SpringApplication} 启动流程——{@code @AutoConfiguration} 只是一个
- * 排序特殊的 {@code @Configuration}），验证服务端的两条激活路径、消费端总是会激活，
- * 以及绑定的配置项真的写进了 {@link RpcConfig} 的系统属性 key，而不只是"没有抛异常"。
+ * 把 {@link RpcAutoConfiguration} 注册进普通的 {@link AnnotationConfigApplicationContext}（{@code @AutoConfiguration}
+ * 只是排序特殊的 {@code @Configuration}），验证：refresh 不再阻塞、注解驱动的 export / reference 真的能往返调用、
+ * 只有存在 {@code @RpcService} 才绑定端口、配置以不可变对象进入 core 而不是写进 System 属性。
  */
 class RpcAutoConfigurationTest {
 
+	public interface Greeter {
+		String greet(String name);
+	}
+
+	@RpcService(version = "1.0")
+	public static class GreeterImpl implements Greeter {
+		@Override
+		public String greet(String name) {
+			return "hello " + name;
+		}
+	}
+
+	@Component
+	public static class GreeterConsumer implements InitializingBean {
+		@RpcReference(version = "1.0", timeout = 3000)
+		private Greeter greeter;
+		private String seenDuringInit;
+
+		@Override
+		public void afterPropertiesSet() {
+			// 注入发生在初始化回调之前
+			seenDuringInit = String.valueOf(greeter);
+		}
+	}
+
 	private AnnotationConfigApplicationContext context;
+	private final String namespace = "starter-" + UUID.randomUUID();
 
 	@AfterEach
 	void cleanup() {
 		if (context != null) {
 			context.close();
 		}
-		System.clearProperty(RpcConfig.REGISTRY_KEY);
-		System.clearProperty(RpcConfig.SERIALIZER_KEY);
-		System.clearProperty(RpcConfig.LOADBALANCE_KEY);
-		System.clearProperty(RpcConfig.CLUSTER_KEY);
-		System.clearProperty("rpc.registry.zookeeper.address");
-		System.clearProperty("rpc.registry.nacos.address");
 	}
 
-	@Test
-	void consumerSideAlwaysActivatesWithNoProviderSideByDefault() {
-		context = contextWithProperties(Map.of());
-		context.register(RpcAutoConfiguration.class);
-		context.refresh();
-
-		assertNotNull(context.getBean(InvokeProxy.class));
-		assertEquals(0, context.getBeanNamesForType(NettyInitializer.class).length);
-	}
-
-	@Test
-	void providerSideActivatesViaProperty() throws InterruptedException {
-		// rpc.port=0 -> 随机端口，这个测试永远不会和其它正在监听的端口冲突
-		context = contextWithProperties(Map.of("rpc.provider.enabled", "true", "rpc.port", "0"));
-		context.register(RpcAutoConfiguration.class);
-		refreshInBackground(context); // NettyInitializer.start() 会在 closeFuture().sync() 上阻塞直到关闭
-
-		assertNotNull(waitForBean(context, NettyInitializer.class));
-		assertNotNull(waitForBean(context, InitialMediator.class));
-	}
-
-	@Test
-	void providerSideActivatesViaEnableRpcAnnotation() throws InterruptedException {
-		context = contextWithProperties(Map.of("rpc.port", "0"));
-		context.register(EnableRpcMarker.class);
-		context.register(RpcAutoConfiguration.class);
-		refreshInBackground(context);
-
-		assertNotNull(waitForBean(context, NettyInitializer.class));
-	}
-
-	@Test
-	void boundPropertiesReachRpcConfigSystemPropertyKeys() {
-		context = contextWithProperties(Map.of(
-				"rpc.registry", "nacos",
-				"rpc.serializer", "protobuf",
-				"rpc.load-balance", "p2c",
-				"rpc.cluster", "failover"));
-		context.register(RpcAutoConfiguration.class);
-		context.refresh();
-
-		assertEquals("nacos", System.getProperty(RpcConfig.REGISTRY_KEY));
-		assertEquals("protobuf", System.getProperty(RpcConfig.SERIALIZER_KEY));
-		assertEquals("p2c", System.getProperty(RpcConfig.LOADBALANCE_KEY));
-		assertEquals("failover", System.getProperty(RpcConfig.CLUSTER_KEY));
-	}
-
-	private static AnnotationConfigApplicationContext contextWithProperties(Map<String, Object> properties) {
+	private AnnotationConfigApplicationContext contextWith(Map<String, Object> extra, Class<?>... components) {
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
+		Map<String, Object> properties = new java.util.HashMap<>(Map.of(
+				"rpc.registry.type", "memory",
+				"rpc.registry.address", namespace,
+				"rpc.server.port", "0",
+				"rpc.server.host", "127.0.0.1",
+				// 本模块测试 classpath 上只有 fastjson2；缺省名是 protobuf（D-001），所以显式指定
+				"rpc.serializer", "fastjson2"));
+		properties.putAll(extra);
 		ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test", properties));
+		ctx.register(RpcAutoConfiguration.class);
+		if (components.length > 0) {
+			ctx.register(components);
+		}
 		return ctx;
 	}
 
-	/** NettyInitializer.start() 会让 refresh 所在线程阻塞在 channel.closeFuture().sync() 上直到关闭，
-	 * 所以在激活服务端的 context 上 refresh() 本身永远不会返回——放到后台线程跑，
-	 * 改为轮询等待 bean 出现（和 rpc-core 里 NettyInitializerResilienceTest 的手法一样）。 */
-	private static void refreshInBackground(AnnotationConfigApplicationContext context) {
-		Thread thread = new Thread(context::refresh, "test-context-refresh");
-		thread.setDaemon(true);
-		thread.start();
+	@Test
+	void providerAndConsumerRoundTripWithoutBlockingRefresh() {
+		context = contextWith(Map.of(), GreeterImpl.class, GreeterConsumer.class);
+		// 旧实现在 ContextRefreshedEvent 里 closeFuture().sync()，refresh 永不返回
+		assertTimeoutPreemptively(Duration.ofSeconds(15), () -> context.refresh());
+
+		RpcServer server = context.getBean(RpcServer.class);
+		ServiceKey key = new ServiceKey(Greeter.class.getName(), "1.0", null);
+		RpcServerLifecycle lifecycle = context.getBean(RpcServerLifecycle.class);
+		assertTrue(lifecycle.isRunning());
+		// start 不等注册；readiness 一类的检查经 RpcServerLifecycle.registered() 等它
+		lifecycle.registered().orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+		assertTrue(lifecycle.isRegistered());
+		assertEquals(List.of(key), server.exportedServices());
+		assertEquals(1, InMemoryRegistryFactory.instances(namespace, key).size());
+
+		GreeterConsumer consumer = context.getBean(GreeterConsumer.class);
+		assertEquals("RpcReference(" + key + ")", consumer.seenDuringInit);
+		assertEquals("hello spring", consumer.greeter.greet("spring"));
+
+		context.close();
+		assertFalse(server.isRunning());
+		assertTrue(InMemoryRegistryFactory.instances(namespace, key).isEmpty(), "close must unregister");
 	}
 
-	private static <T> T waitForBean(AnnotationConfigApplicationContext context, Class<T> type) throws InterruptedException {
-		long deadline = System.currentTimeMillis() + 5000;
-		while (System.currentTimeMillis() < deadline) {
-			try {
-				return context.getBean(type);
-			} catch (Exception notReadyYet) {
-				Thread.sleep(20);
-			}
-		}
-		throw new AssertionError("Bean of type " + type + " never became available");
+	@Test
+	void consumerOnlyContextDoesNotStartTheServer() {
+		context = contextWith(Map.of(), GreeterConsumer.class);
+		context.refresh();
+
+		assertFalse(context.getBean(RpcServerLifecycle.class).isRunning());
+		assertFalse(context.getBean(RpcServer.class).isRunning());
+		assertTrue(Thread.getAllStackTraces().keySet().stream().noneMatch(t -> t.getName().startsWith("rpc-server-")));
 	}
 
-	@Configuration
-	@EnableRpc
-	static class EnableRpcMarker {
+	@Test
+	void providerOnlyContextNeverCreatesTheClient() {
+		context = contextWith(Map.of(), GreeterImpl.class);
+		context.refresh();
+
+		assertTrue(context.getBean(RpcServer.class).isRunning());
+		assertFalse(context.getBeanFactory().containsSingleton("rpcClient"), "RpcClient is lazy and nobody referenced anything");
+	}
+
+	@Test
+	void propertiesBindToImmutableConfigsAndNeverTouchSystemProperties() {
+		context = contextWith(Map.ofEntries(
+				Map.entry("rpc.serializer", "fastjson2"),
+				Map.entry("rpc.serializer-options.fastjson2.some-option", "on"),
+				Map.entry("rpc.serializer-options.protobuf.allowed-packages", "com.acme.api.,com.acme.dto."),
+				Map.entry("rpc.registry.properties.session-timeout-ms", "3000"),
+				Map.entry("rpc.client.load-balance", "p2c"),
+				Map.entry("rpc.client.cluster", "failover"),
+				Map.entry("rpc.client.default-timeout", "3s"),
+				Map.entry("rpc.client.connections-per-node", "4"),
+				Map.entry("rpc.client.empty-protection", "false"),
+				Map.entry("rpc.client.shutdown-timeout", "2s"),
+				Map.entry("rpc.client.exception-allowlist", "com.acme.common.,com.acme.errors."),
+				Map.entry("rpc.server.weight", "7"),
+				Map.entry("rpc.server.shutdown-timeout", "4s"),
+				Map.entry("rpc.server.deregister-grace", "1500ms"),
+				Map.entry("rpc.server.remote-stack-trace", "false"),
+				Map.entry("rpc.server.remote-stack-trace-max-bytes", "1024"),
+				Map.entry("rpc.server.executor.type", "virtual"),
+				Map.entry("rpc.server.executor.max-concurrent", "64")));
+		context.refresh();
+
+		RpcClientConfig client = context.getBean(RpcClient.class).config();
+		assertEquals("memory", client.registry().type());
+		assertEquals("3000", client.registry().properties().get("session-timeout-ms"));
+		assertEquals("p2c", client.loadBalance());
+		assertEquals("failover", client.cluster());
+		assertEquals(Duration.ofSeconds(3), client.defaultTimeout());
+		assertEquals(4, client.connectionsPerNode());
+		assertFalse(client.emptyProtection());
+		assertEquals(Duration.ofSeconds(2), client.shutdownTimeout());
+		assertEquals(List.of("com.acme.common.", "com.acme.errors."), client.exceptionAllowlist());
+		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
+				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
+		assertEquals(expectedOptions, client.serializerOptions());
+
+		RpcServerConfig server = context.getBean(RpcServer.class).config();
+		assertEquals(0, server.port());
+		assertEquals("127.0.0.1", server.host());
+		assertEquals(7, server.weight());
+		assertEquals(new ExecutorConfig.VirtualThreads(64), server.executor());
+		assertEquals(Duration.ofSeconds(4), server.shutdownTimeout());
+		assertEquals(1024, server.remoteStackTraceMaxBytes());
+		assertEquals(Duration.ofMillis(1500), server.deregisterGrace());
+		assertFalse(server.remoteStackTrace());
+		assertEquals(expectedOptions, server.serializerOptions(), "serializer-options are shared by client and server");
+
+		List<String> rpcSystemProperties = System.getProperties().stringPropertyNames().stream()
+				.filter(name -> name.startsWith("rpc."))
+				.toList();
+		assertTrue(rpcSystemProperties.isEmpty(), "starter leaked configuration into System properties: " + rpcSystemProperties);
+	}
+
+	@Test
+	void unsetPropertiesFallBackToCoreDefaults() {
+		RpcProperties properties = new RpcProperties();
+		RpcClientConfig client = properties.toClientConfig();
+		assertEquals("zookeeper", client.registry().type());
+		assertEquals("protobuf", client.serializer(), "Serializer SPI default is protobuf (D-001)");
+		assertEquals("protobuf", properties.toServerConfig().serializer());
+		assertEquals("roundrobin", client.loadBalance());
+		assertEquals("failfast", client.cluster());
+		assertEquals(RpcClientConfig.DEFAULT_TIMEOUT, client.defaultTimeout());
+		assertTrue(client.emptyProtection());
+		assertEquals(RpcServerConfig.DEFAULT_PORT, properties.toServerConfig().port());
+		assertEquals(RpcClientConfig.DEFAULT_SHUTDOWN_TIMEOUT, client.shutdownTimeout());
+		RpcServerConfig server = properties.toServerConfig();
+		assertEquals(RpcServerConfig.DEFAULT_SHUTDOWN_TIMEOUT, server.shutdownTimeout());
+		assertEquals(ExecutorConfig.defaults(), server.executor());
+		assertEquals(RpcServerConfig.DEFAULT_DEREGISTER_GRACE, server.deregisterGrace());
+		assertTrue(server.remoteStackTrace());
+		assertEquals(RpcServerConfig.DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES, server.remoteStackTraceMaxBytes());
+		assertTrue(server.serializerOptions().isEmpty());
+	}
+
+	@Test
+	void fixedExecutorPropertiesBindThroughTheEnvironment() {
+		context = contextWith(Map.of(
+				"rpc.server.executor.type", "fixed",
+				"rpc.server.executor.threads", "3",
+				"rpc.server.executor.queue-capacity", "7"));
+		context.refresh();
+		assertEquals(ExecutorConfig.fixed(3, 7), context.getBean(RpcServer.class).config().executor());
+	}
+
+	@Test
+	void virtualExecutorWithoutLimitUsesTheCoreDefault() {
+		context = contextWith(Map.of("rpc.server.executor.type", "virtual"));
+		context.refresh();
+		assertEquals(ExecutorConfig.virtualThreads(), context.getBean(RpcServer.class).config().executor());
+	}
+
+	static class AnnotatedFields {
+		@RpcReference
+		Greeter defaults;
+		@RpcReference(version = "2.0", group = "g", timeout = 1500, retries = 2, inheritDeadline = false)
+		Greeter everything;
+	}
+
+	@Test
+	void rpcReferenceAttributesMapToReferenceOptions() throws Exception {
+		ReferenceOptions defaults = RpcReferenceInjector.optionsOf(
+				AnnotatedFields.class.getDeclaredField("defaults").getAnnotation(RpcReference.class));
+		assertEquals(ReferenceOptions.defaults().version("").group(""), defaults);
+		assertTrue(defaults.inheritDeadline(), "inheritDeadline defaults to true");
+
+		ReferenceOptions everything = RpcReferenceInjector.optionsOf(
+				AnnotatedFields.class.getDeclaredField("everything").getAnnotation(RpcReference.class));
+		assertEquals(new ReferenceOptions("2.0", "g", Duration.ofMillis(1500), 2, false), everything);
+	}
+
+	@Test
+	void fixedExecutorQueueCapacityBinds() {
+		RpcProperties properties = new RpcProperties();
+		properties.getServer().getExecutor().setThreads(3);
+		properties.getServer().getExecutor().setQueueCapacity(5);
+		assertEquals(ExecutorConfig.fixed(3, 5), properties.toServerConfig().executor());
 	}
 }
