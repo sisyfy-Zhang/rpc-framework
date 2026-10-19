@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "label": "baseline",
+  "profile": {
+    "id": "loopback-latency-v1",
+    "parsed": {
+      "profile": "loopback-latency-v1",
+      "question": "同机 loopback、1KB、单提供者，开环 10000 req/s 下的延迟分布",
+      "target": {
+        "transport": "rpc",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {
+          "kind": "bytes",
+          "size": 1024
+        },
+        "serializer": "protobuf",
+        "providers": 1
+      },
+      "load": {
+        "model": "open",
+        "concurrency": null,
+        "rate": 10000,
+        "duration": "60s",
+        "duration_ms": 60000.0,
+        "warmup": "20s",
+        "warmup_ms": 20000.0,
+        "steady_window": ["20s", "55s"],
+        "steady_window_ms": [20000.0, 55000.0],
+        "rounds": 3,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": 20000
+      },
+      "isolation": {
+        "client_process": "separate_jvm",
+        "server_process": "separate_jvm",
+        "same_host": true,
+        "registry": "docker-compose/zookeeper"
+      },
+      "measure": {
+        "histogram": {
+          "significant_digits": 3,
+          "max": "10s",
+          "max_ms": 10000.0
+        },
+        "report": ["throughput", "p50", "p95", "p99", "p999", "max", "errors_by_status"]
+      },
+      "assert": [
+        {
+          "key": "errors_max",
+          "metric": "errors",
+          "bound": "max",
+          "threshold": "0"
+        }
+      ]
+    },
+    "raw_yaml": "# 口径卡：同机 loopback、1KB、单提供者，开环 10000 req/s——回答\"给定负载下的延迟分布（含尾延迟）\"。\n# 开环按计划发出时刻计时（修正 coordinated omission），见 docs/benchmarking.md。\n# 改动口径请复制成新 id（-v2），不要原地改。\nprofile: loopback-latency-v1\nquestion: 同机 loopback、1KB、单提供者，开环 10000 req/s 下的延迟分布\ntarget:\n  transport: rpc\n  service: BenchService#echo\n  payload: { kind: bytes, size: 1024 }\n  serializer: protobuf\n  providers: 1\nload:\n  model: open\n  rate: 10000\n  duration: 60s\n  warmup: 20s\n  steady_window: [20s, 55s]\n  rounds: 3\n  timeout: 1s\nisolation:\n  client_process: separate_jvm\n  server_process: separate_jvm\n  same_host: true\n  registry: docker-compose/zookeeper\nmeasure:\n  histogram: { significant_digits: 3, max: 10s }\n  report: [throughput, p50, p95, p99, p999, max, errors_by_status]\nassert:\n  errors_max: 0\n"
+  },
+  "run": {
+    "command": "rpc-bench-e2e run --profile bench/profiles/loopback-latency-v1.yaml --registry zk://127.0.0.1:2181 --label baseline --out bench/reports/20261019-77d04f2",
+    "target": {
+      "transport": "rpc",
+      "mode": "registry",
+      "address": "zk://127.0.0.1:2181",
+      "providers": ["127.0.0.1:19100"],
+      "serializer": "protobuf",
+      "load_balance": "roundrobin",
+      "cluster": "failfast",
+      "connections_per_node": 2,
+      "retries": 0,
+      "call_style": "sync proxy method",
+      "metrics_filter": false
+    }
+  },
+  "environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": true,
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "cpus_allowed": "5-9",
+    "total_memory_bytes": 10428227584,
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "gc": ["G1 Young Generation", "G1 Concurrent GC", "G1 Old Generation"],
+    "netty_version": "4.1.136.Final",
+    "git_sha": "77d04f2887adcf67072c614880ebcabb88250625",
+    "git_dirty": false,
+    "git_dirty_files": [],
+    "hostname": "localhost",
+    "power_supply": {
+      "AC1": "1"
+    },
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": 13184,
+    "metrics_enabled": false,
+    "started_at": "2026-10-19T00:42:30.345697598Z",
+    "ended_at": "2026-10-19T00:45:31.415974445Z"
+  },
+  "server_environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": "true",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": "5",
+    "host_cpus": "10",
+    "cpus_allowed": "0-4",
+    "total_memory_bytes": "10428227584",
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": "-Xms1g -Xmx1g -XX:+AlwaysPreTouch",
+    "gc": "G1 Young Generation G1 Concurrent GC G1 Old Generation",
+    "netty_version": "4.1.136.Final",
+    "git_sha": "77d04f2887adcf67072c614880ebcabb88250625",
+    "git_dirty": "false",
+    "git_dirty_files": "",
+    "hostname": "localhost",
+    "power_supply": "AC1=1",
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": "13138",
+    "metrics_enabled": "false"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-10-19T00:42:31.227891008Z",
+      "ended_at": "2026-10-19T00:43:31.224791666Z",
+      "elapsed_ms": 60000.431,
+      "issued": 600000,
+      "requests_total": 600000,
+      "successes_total": 600000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 350000,
+        "successes": 350000,
+        "errors": 0
+      },
+      "throughput_rps": 10000.0,
+      "latency_ms": {
+        "count": 350000,
+        "mean": 0.544,
+        "min": 0.117,
+        "p50": 0.433,
+        "p90": 0.606,
+        "p95": 0.766,
+        "p99": 2.746,
+        "p999": 18.874,
+        "max": 40.927
+      },
+      "service_time_ms": {
+        "count": 350000,
+        "mean": 0.492,
+        "min": 0.104,
+        "p50": 0.395,
+        "p90": 0.563,
+        "p95": 0.698,
+        "p99": 2.257,
+        "p999": 16.425,
+        "max": 40.829
+      },
+      "dispatch_lag_ms": {
+        "count": 600000,
+        "mean": 0.059,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.011,
+        "p99": 1.147,
+        "p999": 10.756,
+        "max": 28.099
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 100000,
+        "dispatched": 600000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 236205,
+        "spin_window_final_ns": 472410,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 20000,
+        "max_inflight": 8275,
+        "call_style": "sync proxy method on a new virtual thread per request"
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 54.7,
+        "server_cpus": "0-4",
+        "server_busy_pct": 38.8
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [1780, 18186, 10021, 10007, 10002, 10001, 9998, 10002, 9999, 10001, 9999, 9990, 10010, 9998, 10002, 10001, 10001, 9996, 10003, 9999, 9999, 10001, 9997, 10004, 10000, 9999, 10000, 10000, 10001, 10000, 9999, 10000, 10001, 9999, 10000, 10001, 9999, 10002, 9999, 9999, 10001, 9998, 9999, 10003, 9998, 10002, 9996, 10003, 9999, 10002, 9995, 10005, 9999, 10000, 10000, 10001, 10000, 10001, 9998, 10002, 2, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 2,
+      "started_at": "2026-10-19T00:43:31.265548013Z",
+      "ended_at": "2026-10-19T00:44:31.261728080Z",
+      "elapsed_ms": 60000.477,
+      "issued": 600000,
+      "requests_total": 600000,
+      "successes_total": 600000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 350000,
+        "successes": 350000,
+        "errors": 0
+      },
+      "throughput_rps": 10000.0,
+      "latency_ms": {
+        "count": 350000,
+        "mean": 0.477,
+        "min": 0.098,
+        "p50": 0.423,
+        "p90": 0.583,
+        "p95": 0.686,
+        "p99": 1.562,
+        "p999": 7.705,
+        "max": 21.217
+      },
+      "service_time_ms": {
+        "count": 350000,
+        "mean": 0.434,
+        "min": 0.094,
+        "p50": 0.387,
+        "p90": 0.544,
+        "p95": 0.633,
+        "p99": 1.407,
+        "p999": 5.349,
+        "max": 21.168
+      },
+      "dispatch_lag_ms": {
+        "count": 600000,
+        "mean": 0.003,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.043,
+        "p999": 0.499,
+        "max": 6.566
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 100000,
+        "dispatched": 600000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 141633,
+        "spin_window_final_ns": 283266,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 20000,
+        "max_inflight": 208,
+        "call_style": "sync proxy method on a new virtual thread per request"
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 53.6,
+        "server_cpus": "0-4",
+        "server_busy_pct": 39.2
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [9996, 10000, 10000, 10000, 10000, 10001, 9999, 10001, 10000, 10000, 10000, 10000, 10000, 9999, 10000, 10001, 9999, 10001, 10000, 9999, 9999, 9999, 10001, 10000, 10000, 10002, 9999, 9999, 10001, 10000, 10001, 9999, 10000, 10001, 9999, 10000, 10002, 9998, 9993, 10007, 9999, 10001, 10001, 10000, 10000, 9998, 10001, 10001, 9997, 10002, 9999, 10001, 10001, 9999, 10000, 10000, 10001, 9998, 10002, 10000, 3, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 3,
+      "started_at": "2026-10-19T00:44:31.289124003Z",
+      "ended_at": "2026-10-19T00:45:31.285274048Z",
+      "elapsed_ms": 60000.386,
+      "issued": 600000,
+      "requests_total": 600000,
+      "successes_total": 600000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 350000,
+        "successes": 350000,
+        "errors": 0
+      },
+      "throughput_rps": 10000.0,
+      "latency_ms": {
+        "count": 350000,
+        "mean": 0.562,
+        "min": 0.111,
+        "p50": 0.465,
+        "p90": 0.668,
+        "p95": 0.848,
+        "p99": 2.437,
+        "p999": 12.247,
+        "max": 35.881
+      },
+      "service_time_ms": {
+        "count": 350000,
+        "mean": 0.506,
+        "min": 0.109,
+        "p50": 0.435,
+        "p90": 0.617,
+        "p95": 0.764,
+        "p99": 2.163,
+        "p999": 7.889,
+        "max": 20.316
+      },
+      "dispatch_lag_ms": {
+        "count": 600000,
+        "mean": 0.013,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.099,
+        "p999": 1.38,
+        "max": 31.195
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 100000,
+        "dispatched": 600000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 178286,
+        "spin_window_final_ns": 356572,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 20000,
+        "max_inflight": 331,
+        "call_style": "sync proxy method on a new virtual thread per request"
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 59.0,
+        "server_cpus": "0-4",
+        "server_busy_pct": 40.3
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [9995, 10000, 10001, 10000, 10000, 9999, 10001, 10001, 9999, 9999, 10001, 9999, 10000, 10001, 10000, 9999, 9998, 10001, 10002, 10000, 10000, 9997, 9970, 10031, 10003, 9998, 10000, 10000, 10002, 9999, 9999, 10000, 9999, 10001, 10001, 10000, 9999, 10002, 9999, 10001, 9998, 10001, 9998, 10003, 10000, 9999, 10000, 10000, 10000, 10000, 9994, 10006, 9999, 10002, 9999, 9999, 10001, 9999, 10002, 9999, 4, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    }
+  ],
+  "summary": {
+    "official_round": 3,
+    "selection_rule": "开环：窗口 p99 的中位数那一轮",
+    "official": {
+      "throughput_rps": 10000.0,
+      "p50_ms": 0.465,
+      "p90_ms": 0.668,
+      "p95_ms": 0.848,
+      "p99_ms": 2.437,
+      "p999_ms": 12.247,
+      "max_ms": 35.881,
+      "mean_ms": 0.562,
+      "window_requests": 350000,
+      "window_errors": 0
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 3,
+        "min": 10000.0,
+        "max": 10000.0,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "p50_ms": {
+        "rounds": 3,
+        "min": 0.423,
+        "max": 0.465,
+        "range": 0.042,
+        "range_pct": 9.929
+      },
+      "p95_ms": {
+        "rounds": 3,
+        "min": 0.686,
+        "max": 0.848,
+        "range": 0.162,
+        "range_pct": 23.615
+      },
+      "p99_ms": {
+        "rounds": 3,
+        "min": 1.562,
+        "max": 2.746,
+        "range": 1.184,
+        "range_pct": 75.8
+      },
+      "p999_ms": {
+        "rounds": 3,
+        "min": 7.705,
+        "max": 18.874,
+        "range": 11.169,
+        "range_pct": 144.958
+      },
+      "max_ms": {
+        "rounds": 3,
+        "min": 21.217,
+        "max": 40.927,
+        "range": 19.71,
+        "range_pct": 92.897
+      }
+    }
+  },
+  "validity": {
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "client_bound": false,
+    "statements": ["开环负载（open）：延迟从计划发出时刻算起，发压端自身的调度滞后（见“发出滞后”列）也计入延迟；发出滞后的 p99 明显大于服务时间时，说明压测端本身成了瓶颈，数字不代表被测服务。", "开环调度线程以忙等对齐节拍，独占一个核；本报告的 CPU 亲和见环境表。", "错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。"],
+    "topology": "client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19100]），经 zk://127.0.0.1:2181 发现；卡片声明的注册中心：docker-compose/zookeeper。",
+    "asserts": [
+      {
+        "key": "errors_max",
+        "threshold": "0",
+        "actual": "0",
+        "actual_value": 0.0,
+        "scope": "全部轮次窗口内错误之和",
+        "passed": true
+      }
+    ],
+    "asserts_passed": true,
+    "passed": true
+  }
+}

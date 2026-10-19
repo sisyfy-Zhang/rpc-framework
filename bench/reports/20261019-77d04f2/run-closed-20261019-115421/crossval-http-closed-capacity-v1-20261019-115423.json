@@ -1,0 +1,378 @@
+{
+  "schema_version": 1,
+  "label": "crossval",
+  "profile": {
+    "id": "crossval-http-closed-capacity-v1",
+    "parsed": {
+      "profile": "crossval-http-closed-capacity-v1",
+      "question": "标定 harness 闭环发压上限与服务端上限（64 连接、1KB）",
+      "target": {
+        "transport": "http",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {
+          "kind": "bytes",
+          "size": 1024
+        },
+        "serializer": null,
+        "providers": 1,
+        "http": {
+          "url": "http://127.0.0.1:19180/echo",
+          "connections": 64
+        }
+      },
+      "load": {
+        "model": "closed",
+        "concurrency": 64,
+        "rate": null,
+        "duration": "60s",
+        "duration_ms": 60000.0,
+        "warmup": "20s",
+        "warmup_ms": 20000.0,
+        "steady_window": ["20s", "60s"],
+        "steady_window_ms": [20000.0, 60000.0],
+        "rounds": 3,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": null
+      },
+      "isolation": {
+        "client_process": "separate_jvm",
+        "server_process": "separate_jvm",
+        "same_host": true,
+        "registry": "none (direct HTTP URL)"
+      },
+      "measure": {
+        "histogram": {
+          "significant_digits": 3,
+          "max": "10s",
+          "max_ms": 10000.0
+        },
+        "report": ["throughput", "p50", "p95", "p99", "p999", "max", "errors_by_status"]
+      },
+      "assert": [
+        {
+          "key": "errors_max",
+          "metric": "errors",
+          "bound": "max",
+          "threshold": "0"
+        }
+      ]
+    },
+    "raw_yaml": "# 口径卡（harness 校验卡）：不是框架的性能卡。同一个 HTTP 目标（bench server --http-port 的 POST /echo）分别用 harness 与\n# wrk 打，做闭环发压容量标定：两边各自的吞吐上限与瓶颈侧（CPU 采样判别），见 docs/benchmarking.md「交叉验证」。\n# 由 bench/bin/crossval.sh --mode closed 驱动；改动口径请复制成新 id（-v2），不要原地改。\nprofile: crossval-http-closed-capacity-v1\nquestion: 标定 harness 闭环发压上限与服务端上限（64 连接、1KB）\ntarget:\n  transport: http\n  service: BenchService#echo\n  payload: { kind: bytes, size: 1024 }\n  http: { url: \"http://127.0.0.1:19180/echo\", connections: 64 }\nload:\n  model: closed\n  concurrency: 64\n  duration: 60s\n  warmup: 20s\n  steady_window: [20s, 60s]\n  rounds: 3\n  timeout: 1s\nisolation:\n  client_process: separate_jvm\n  server_process: separate_jvm\n  same_host: true\n  registry: none (direct HTTP URL)\nmeasure:\n  histogram: { significant_digits: 3, max: 10s }\n  report: [throughput, p50, p95, p99, p999, max, errors_by_status]\nassert:\n  errors_max: 0\n"
+  },
+  "run": {
+    "command": "rpc-bench-e2e run --profile /home/yifan/rpc-bench/bench/profiles/crossval-http-closed-capacity-v1.yaml --out bench/reports/20261019-77d04f2/run-closed-20261019-115421 --label crossval",
+    "target": {
+      "transport": "http",
+      "mode": "http",
+      "address": "http://127.0.0.1:19180/echo",
+      "providers": ["127.0.0.1:19180"],
+      "connections": 64,
+      "connection_model": "closed: one connection per virtual user (pool = load.concurrency); one in-flight request per connection",
+      "http_client": "netty HttpClientCodec + HttpObjectAggregator(8MiB), keep-alive, no pipelining",
+      "io_transport": "epoll",
+      "io_threads": 5,
+      "timeout_check": "sweep every 10ms",
+      "retries": 0,
+      "pre_warmup_calls_per_connection": 200,
+      "call_style": "sync: the calling virtual thread writes one HTTP/1.1 request and waits for its response",
+      "metrics_filter": false
+    }
+  },
+  "environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": true,
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "cpus_allowed": "5-9",
+    "total_memory_bytes": 10428227584,
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "gc": ["G1 Young Generation", "G1 Concurrent GC", "G1 Old Generation"],
+    "netty_version": "4.1.136.Final",
+    "git_sha": "77d04f2887adcf67072c614880ebcabb88250625",
+    "git_dirty": false,
+    "git_dirty_files": [],
+    "hostname": "localhost",
+    "power_supply": {
+      "AC1": "1"
+    },
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": 15023,
+    "metrics_enabled": false,
+    "started_at": "2026-10-19T00:54:23.558434476Z",
+    "ended_at": "2026-10-19T00:57:25.457467586Z"
+  },
+  "server_environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": "true",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": "5",
+    "host_cpus": "10",
+    "cpus_allowed": "0-4",
+    "total_memory_bytes": "10428227584",
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": "-Xms1g -Xmx1g -XX:+AlwaysPreTouch",
+    "gc": "G1 Young Generation G1 Concurrent GC G1 Old Generation",
+    "netty_version": "4.1.136.Final",
+    "git_sha": "77d04f2887adcf67072c614880ebcabb88250625",
+    "git_dirty": "false",
+    "git_dirty_files": "",
+    "hostname": "localhost",
+    "power_supply": "AC1=1",
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": "14982",
+    "metrics_enabled": "false",
+    "endpoint": "http"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-10-19T00:54:25.425177054Z",
+      "ended_at": "2026-10-19T00:55:25.422112701Z",
+      "elapsed_ms": 60001.158,
+      "issued": 7068112,
+      "requests_total": 7068112,
+      "successes_total": 7068112,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 4954537,
+        "successes": 4954537,
+        "errors": 0
+      },
+      "throughput_rps": 123863.425,
+      "latency_ms": {
+        "count": 4954537,
+        "mean": 0.516,
+        "min": 0.031,
+        "p50": 0.429,
+        "p90": 0.877,
+        "p95": 1.085,
+        "p99": 1.859,
+        "p999": 4.69,
+        "max": 55.968
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 97.1,
+        "server_cpus": "0-4",
+        "server_busy_pct": 73.9
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [21203, 23991, 57349, 91129, 95539, 110062, 98685, 118563, 133486, 121922, 115518, 118104, 128779, 131782, 129623, 129112, 108335, 125316, 125271, 129742, 129210, 128946, 115331, 131080, 127894, 129531, 114324, 122573, 126576, 101277, 121705, 123632, 111078, 127087, 133820, 137896, 108626, 131806, 127894, 125595, 131842, 133654, 138502, 112564, 139729, 131957, 109876, 124545, 130004, 105693, 101382, 110274, 112647, 117171, 136379, 139600, 110965, 127819, 132200, 131853, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 2,
+      "started_at": "2026-10-19T00:55:25.443612129Z",
+      "ended_at": "2026-10-19T00:56:25.440243655Z",
+      "elapsed_ms": 60000.52,
+      "issued": 7549877,
+      "requests_total": 7549877,
+      "successes_total": 7549877,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 5056015,
+        "successes": 5056015,
+        "errors": 0
+      },
+      "throughput_rps": 126400.375,
+      "latency_ms": {
+        "count": 5056015,
+        "mean": 0.506,
+        "min": 0.03,
+        "p50": 0.419,
+        "p90": 0.846,
+        "p95": 1.051,
+        "p99": 1.933,
+        "p999": 4.989,
+        "max": 37.061
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 96.5,
+        "server_cpus": "0-4",
+        "server_busy_pct": 74.3
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [124548, 131921, 132301, 131323, 116786, 125573, 97006, 108122, 132014, 126717, 122391, 131809, 132599, 135345, 122272, 125748, 106308, 130651, 129215, 131149, 132348, 138576, 132953, 131523, 116672, 113210, 107325, 125087, 122954, 116432, 133106, 134565, 135939, 129096, 129127, 121633, 110179, 127896, 131922, 125385, 129560, 122796, 120026, 122153, 138994, 137147, 99254, 129615, 131468, 119617, 131408, 135513, 140012, 133421, 133063, 131172, 103231, 118245, 136249, 127143, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 3,
+      "started_at": "2026-10-19T00:56:25.446541033Z",
+      "ended_at": "2026-10-19T00:57:25.444649229Z",
+      "elapsed_ms": 60002.104,
+      "issued": 7499320,
+      "requests_total": 7499320,
+      "successes_total": 7499320,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 4979464,
+        "successes": 4979464,
+        "errors": 0
+      },
+      "throughput_rps": 124486.6,
+      "latency_ms": {
+        "count": 4979464,
+        "mean": 0.514,
+        "min": 0.029,
+        "p50": 0.421,
+        "p90": 0.853,
+        "p95": 1.068,
+        "p99": 2.138,
+        "p999": 5.231,
+        "max": 35.291
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 95.8,
+        "server_cpus": "0-4",
+        "server_busy_pct": 74.0
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [129762, 135225, 128772, 137226, 132406, 134929, 116312, 106057, 125413, 125334, 126993, 131290, 136016, 134596, 140221, 121083, 111468, 104338, 114585, 127766, 135267, 136857, 134188, 133279, 122868, 131047, 114063, 121624, 112678, 112948, 136365, 128870, 134103, 129205, 126265, 123403, 113331, 116989, 98532, 105476, 131604, 137485, 123904, 140640, 128681, 132292, 116500, 119547, 132439, 115416, 139187, 126070, 128080, 115963, 120457, 136811, 115972, 100412, 128139, 122507, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    }
+  ],
+  "summary": {
+    "official_round": 3,
+    "selection_rule": "闭环：窗口吞吐的中位数那一轮",
+    "official": {
+      "throughput_rps": 124486.6,
+      "p50_ms": 0.421,
+      "p90_ms": 0.853,
+      "p95_ms": 1.068,
+      "p99_ms": 2.138,
+      "p999_ms": 5.231,
+      "max_ms": 35.291,
+      "mean_ms": 0.514,
+      "window_requests": 4979464,
+      "window_errors": 0
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 3,
+        "min": 123863.425,
+        "max": 126400.375,
+        "range": 2536.95,
+        "range_pct": 2.048
+      },
+      "p50_ms": {
+        "rounds": 3,
+        "min": 0.419,
+        "max": 0.429,
+        "range": 0.01,
+        "range_pct": 2.387
+      },
+      "p95_ms": {
+        "rounds": 3,
+        "min": 1.051,
+        "max": 1.085,
+        "range": 0.034,
+        "range_pct": 3.235
+      },
+      "p99_ms": {
+        "rounds": 3,
+        "min": 1.859,
+        "max": 2.138,
+        "range": 0.279,
+        "range_pct": 15.008
+      },
+      "p999_ms": {
+        "rounds": 3,
+        "min": 4.69,
+        "max": 5.231,
+        "range": 0.541,
+        "range_pct": 11.535
+      },
+      "max_ms": {
+        "rounds": 3,
+        "min": 35.291,
+        "max": 55.968,
+        "range": 20.677,
+        "range_pct": 58.59
+      }
+    }
+  },
+  "validity": {
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "client_bound": true,
+    "statements": ["闭环负载（closed）低估尾延迟：每个虚拟用户等上一次调用返回才发下一次，服务端一慢，发压随之变慢，排队时间不会被计入（coordinated omission）。本卡的 p99 / p99.9 只能当下界看，尾延迟以开环卡为准。", "本卡吞吐受发压端 CPU 限制（有效轮里客户端核平均忙碌率超过 90%），是 harness 的发压上限而非服务端上限。", "错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。"],
+    "topology": "client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19180]），经 http://127.0.0.1:19180/echo 发现；卡片声明的注册中心：none (direct HTTP URL)。",
+    "asserts": [
+      {
+        "key": "errors_max",
+        "threshold": "0",
+        "actual": "0",
+        "actual_value": 0.0,
+        "scope": "全部轮次窗口内错误之和",
+        "passed": true
+      }
+    ],
+    "asserts_passed": true,
+    "passed": true
+  }
+}
