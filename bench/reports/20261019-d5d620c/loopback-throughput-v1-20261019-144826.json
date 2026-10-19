@@ -1,0 +1,545 @@
+{
+  "schema_version": 1,
+  "label": "baseline",
+  "profile": {
+    "id": "loopback-throughput-v1",
+    "parsed": {
+      "profile": "loopback-throughput-v1",
+      "question": "同机 loopback、1KB、单提供者，闭环 64 并发下的吞吐与延迟量级",
+      "target": {
+        "transport": "rpc",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {
+          "kind": "bytes",
+          "size": 1024
+        },
+        "serializer": "protobuf",
+        "providers": 1
+      },
+      "load": {
+        "model": "closed",
+        "concurrency": 64,
+        "rate": null,
+        "duration": "60s",
+        "duration_ms": 60000.0,
+        "warmup": "20s",
+        "warmup_ms": 20000.0,
+        "steady_window": ["20s", "55s"],
+        "steady_window_ms": [20000.0, 55000.0],
+        "rounds": 3,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": null
+      },
+      "isolation": {
+        "client_process": "separate_jvm",
+        "server_process": "separate_jvm",
+        "same_host": true,
+        "registry": "docker-compose/zookeeper"
+      },
+      "measure": {
+        "histogram": {
+          "significant_digits": 3,
+          "max": "10s",
+          "max_ms": 10000.0
+        },
+        "report": ["throughput", "p50", "p95", "p99", "p999", "max", "errors_by_status"]
+      },
+      "assert": [
+        {
+          "key": "errors_max",
+          "metric": "errors",
+          "bound": "max",
+          "threshold": "0"
+        }
+      ]
+    },
+    "raw_yaml": "# 口径卡：同机 loopback、1KB、单提供者，闭环 64 并发——回答\"吞吐的量级\"。\n# 字段含义见 docs/benchmarking.md。改动口径（并发、负载、时长、窗口……）请复制成新 id（-v2），不要原地改：\n# 报告里的数字以卡片 id 为准，同一个 id 必须始终代表同一个口径。\nprofile: loopback-throughput-v1\nquestion: 同机 loopback、1KB、单提供者，闭环 64 并发下的吞吐与延迟量级\ntarget:\n  transport: rpc\n  service: BenchService#echo\n  payload: { kind: bytes, size: 1024 }\n  serializer: protobuf\n  providers: 1\nload:\n  model: closed\n  concurrency: 64\n  duration: 60s\n  warmup: 20s\n  steady_window: [20s, 55s]\n  rounds: 3\n  timeout: 1s\nisolation:\n  client_process: separate_jvm\n  server_process: separate_jvm\n  same_host: true\n  registry: docker-compose/zookeeper\nmeasure:\n  histogram: { significant_digits: 3, max: 10s }\n  report: [throughput, p50, p95, p99, p999, max, errors_by_status]\nassert:\n  errors_max: 0\n"
+  },
+  "run": {
+    "command": "rpc-bench-e2e run --profile bench/profiles/loopback-throughput-v1.yaml --registry zk://127.0.0.1:2181 --label baseline --out bench/reports/20261019-d5d620c",
+    "target": {
+      "transport": "rpc",
+      "mode": "registry",
+      "address": "zk://127.0.0.1:2181",
+      "providers": ["127.0.0.1:9000"],
+      "serializer": "protobuf",
+      "load_balance": "roundrobin",
+      "cluster": "failfast",
+      "connections_per_node": 2,
+      "retries": 0,
+      "call_style": "sync proxy method",
+      "metrics_filter": false
+    }
+  },
+  "environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": true,
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "cpus_allowed": "5-9",
+    "total_memory_bytes": 10428227584,
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "gc": ["G1 Young Generation", "G1 Concurrent GC", "G1 Old Generation"],
+    "netty_version": "4.1.136.Final",
+    "git_sha": "d5d620c73dcc066296a27c37e6536bf02d69ac27",
+    "git_dirty": false,
+    "git_dirty_files": [],
+    "hostname": "localhost",
+    "power_supply": {
+      "AC1": "1"
+    },
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": 5153,
+    "metrics_enabled": false,
+    "started_at": "2026-10-19T03:48:26.112645410Z",
+    "ended_at": "2026-10-19T03:51:27.273037348Z"
+  },
+  "server_environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": "true",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": "5",
+    "host_cpus": "10",
+    "cpus_allowed": "0-4",
+    "total_memory_bytes": "10428227584",
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": "-Xms1g -Xmx1g -XX:+AlwaysPreTouch",
+    "gc": "G1 Young Generation G1 Concurrent GC G1 Old Generation",
+    "netty_version": "4.1.136.Final",
+    "git_sha": "d5d620c73dcc066296a27c37e6536bf02d69ac27",
+    "git_dirty": "false",
+    "git_dirty_files": "",
+    "hostname": "localhost",
+    "power_supply": "AC1=1",
+    "cpu_governor": "n/a",
+    "harness_version": "0.0.1-SNAPSHOT",
+    "pid": "5094",
+    "metrics_enabled": "false"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-10-19T03:48:27.137103935Z",
+      "ended_at": "2026-10-19T03:49:27.134045973Z",
+      "elapsed_ms": 60001.466,
+      "issued": 4362611,
+      "requests_total": 4362611,
+      "successes_total": 4362611,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 2698461,
+        "successes": 2698461,
+        "errors": 0
+      },
+      "throughput_rps": 77098.886,
+      "latency_ms": {
+        "count": 2698461,
+        "mean": 0.83,
+        "min": 0.139,
+        "p50": 0.742,
+        "p90": 1.251,
+        "p95": 1.519,
+        "p99": 2.527,
+        "p999": 4.714,
+        "max": 14.41
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 58.7,
+        "server_cpus": "0-4",
+        "server_busy_pct": 57.5
+      },
+      "gc": {
+        "client": {
+          "collections": 27,
+          "pause_ms": 52,
+          "pause_pct": 0.149,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 27,
+              "time_ms": 52
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 230.161,
+          "heap_used_mb_end": 142.259,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 24,
+          "pause_ms": 44,
+          "pause_pct": 0.126,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 24,
+              "time_ms": 44
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 254.997,
+          "heap_used_mb_end": 482.108,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [11157, 24595, 44289, 50770, 68574, 74789, 75344, 70627, 77558, 74827, 73344, 66447, 67935, 60828, 61073, 77301, 65170, 68639, 83425, 81835, 67695, 72194, 77943, 66024, 80019, 78367, 62690, 85918, 83351, 77961, 85685, 77308, 86694, 77720, 76997, 82445, 71558, 80330, 81865, 69513, 79434, 77741, 82801, 74467, 71704, 78248, 79979, 84723, 81450, 79599, 73233, 83548, 67910, 63108, 78239, 76177, 72391, 71477, 83856, 81658, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 2,
+      "started_at": "2026-10-19T03:49:27.152095839Z",
+      "ended_at": "2026-10-19T03:50:27.147393189Z",
+      "elapsed_ms": 60000.654,
+      "issued": 4668729,
+      "requests_total": 4668729,
+      "successes_total": 4668729,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 2767834,
+        "successes": 2767834,
+        "errors": 0
+      },
+      "throughput_rps": 79080.971,
+      "latency_ms": {
+        "count": 2767834,
+        "mean": 0.809,
+        "min": 0.15,
+        "p50": 0.73,
+        "p90": 1.206,
+        "p95": 1.447,
+        "p99": 2.331,
+        "p999": 4.903,
+        "max": 17.76
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 58.0,
+        "server_cpus": "0-4",
+        "server_busy_pct": 57.6
+      },
+      "gc": {
+        "client": {
+          "collections": 28,
+          "pause_ms": 49,
+          "pause_pct": 0.14,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 28,
+              "time_ms": 49
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 343.836,
+          "heap_used_mb_end": 61.821,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 25,
+          "pause_ms": 42,
+          "pause_pct": 0.12,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 25,
+              "time_ms": 42
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 199.143,
+          "heap_used_mb_end": 204.238,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [80989, 84323, 78922, 64026, 77835, 75891, 77153, 74223, 78454, 77279, 74516, 82651, 83954, 62523, 71280, 75904, 81825, 82480, 88393, 83494, 85087, 88558, 86895, 69899, 56904, 76886, 77189, 87565, 80833, 67472, 82433, 88440, 85065, 72352, 73772, 78925, 81254, 85206, 81452, 85325, 77401, 70590, 82211, 77432, 76352, 77350, 78500, 83756, 85526, 83578, 80846, 82796, 83961, 65089, 70934, 70277, 54269, 78600, 78627, 62943, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 3,
+      "started_at": "2026-10-19T03:50:27.152250354Z",
+      "ended_at": "2026-10-19T03:51:27.149041659Z",
+      "elapsed_ms": 60000.604,
+      "issued": 4804437,
+      "requests_total": 4804437,
+      "successes_total": 4804437,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 55000.0,
+        "requests": 2815368,
+        "successes": 2815368,
+        "errors": 0
+      },
+      "throughput_rps": 80439.086,
+      "latency_ms": {
+        "count": 2815368,
+        "mean": 0.795,
+        "min": 0.146,
+        "p50": 0.726,
+        "p90": 1.185,
+        "p95": 1.408,
+        "p99": 2.173,
+        "p999": 4.09,
+        "max": 17.908
+      },
+      "service_time_ms": null,
+      "dispatch_lag_ms": null,
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": null,
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 35000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 58.6,
+        "server_cpus": "0-4",
+        "server_busy_pct": 57.9
+      },
+      "gc": {
+        "client": {
+          "collections": 28,
+          "pause_ms": 51,
+          "pause_pct": 0.146,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 28,
+              "time_ms": 51
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 230.46,
+          "heap_used_mb_end": 241.474,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 26,
+          "pause_ms": 44,
+          "pause_pct": 0.126,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 26,
+              "time_ms": 44
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 505.262,
+          "heap_used_mb_end": 159.284,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [56466, 72266, 71636, 75126, 75932, 83015, 73987, 76454, 87066, 85634, 85617, 85179, 79920, 78926, 79210, 86732, 83376, 77008, 88547, 88993, 86395, 88112, 88560, 78771, 80212, 77202, 81822, 83013, 84113, 83769, 75365, 70515, 83701, 77058, 70781, 81869, 71104, 81054, 70961, 83579, 86714, 84750, 83918, 71545, 73868, 83683, 81556, 87112, 84203, 73716, 88655, 83605, 82296, 76749, 75042, 85172, 67361, 85329, 82347, 77706, 64, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    }
+  ],
+  "summary": {
+    "official_round": 2,
+    "selection_rule": "闭环：窗口吞吐的中位数那一轮",
+    "official": {
+      "throughput_rps": 79080.971,
+      "p50_ms": 0.73,
+      "p90_ms": 1.206,
+      "p95_ms": 1.447,
+      "p99_ms": 2.331,
+      "p999_ms": 4.903,
+      "max_ms": 17.76,
+      "mean_ms": 0.809,
+      "window_requests": 2767834,
+      "window_errors": 0
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 3,
+        "min": 77098.886,
+        "max": 80439.086,
+        "range": 3340.2,
+        "range_pct": 4.332
+      },
+      "p50_ms": {
+        "rounds": 3,
+        "min": 0.726,
+        "max": 0.742,
+        "range": 0.016,
+        "range_pct": 2.204
+      },
+      "p95_ms": {
+        "rounds": 3,
+        "min": 1.408,
+        "max": 1.519,
+        "range": 0.111,
+        "range_pct": 7.884
+      },
+      "p99_ms": {
+        "rounds": 3,
+        "min": 2.173,
+        "max": 2.527,
+        "range": 0.354,
+        "range_pct": 16.291
+      },
+      "p999_ms": {
+        "rounds": 3,
+        "min": 4.09,
+        "max": 4.903,
+        "range": 0.813,
+        "range_pct": 19.878
+      },
+      "max_ms": {
+        "rounds": 3,
+        "min": 14.41,
+        "max": 17.908,
+        "range": 3.498,
+        "range_pct": 24.275
+      }
+    }
+  },
+  "validity": {
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "client_bound": false,
+    "client_gc_pause_pct_max": 0.149,
+    "statements": ["闭环负载（closed）低估尾延迟：每个虚拟用户等上一次调用返回才发下一次，服务端一慢，发压随之变慢，排队时间不会被计入（coordinated omission）。本卡的 p99 / p99.9 只能当下界看，尾延迟以开环卡为准。", "错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。"],
+    "topology": "client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:9000]），经 zk://127.0.0.1:2181 发现；卡片声明的注册中心：docker-compose/zookeeper。",
+    "asserts": [
+      {
+        "key": "errors_max",
+        "threshold": "0",
+        "actual": "0",
+        "actual_value": 0.0,
+        "scope": "全部轮次窗口内错误之和",
+        "passed": true
+      }
+    ],
+    "asserts_passed": true,
+    "passed": true
+  }
+}
