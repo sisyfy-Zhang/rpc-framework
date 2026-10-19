@@ -299,20 +299,14 @@ public final class RpcClient implements AutoCloseable {
 		loadStats.begin(address);
 		CompletableFuture<RpcMessage> response;
 		try {
-			response = transport.send(address, (alloc, serializer) -> {
+			// 调用方线程上只做序列化，不分配 ByteBuf：帧缓冲区由编码器在事件循环上分配（见 OutboundBody）
+			response = transport.send(address, serializer -> {
 				List<byte[]> encodedArgs = new ArrayList<>(args.length);
 				for (int i = 0; i < args.length; i++) {
 					encodedArgs.add(args[i] == null ? null : serializer.serialize(args[i], remoteMethod.genericParamTypes()[i]));
 				}
-				ByteBuf body = alloc.buffer();
-				try {
-					EnvelopeCodec.writeRequest(body, key.interfaceName(), key.version(), key.group(),
-							remoteMethod.method().getName(), remoteMethod.paramSig(), encodedArgs);
-					return body;
-				} catch (RuntimeException e) {
-					body.release();
-					throw e;
-				}
+				return EnvelopeCodec.request(key.interfaceName(), key.version(), key.group(), remoteMethod.method().getName(),
+						remoteMethod.paramSig(), encodedArgs);
 			}, attachments, remainingNanos);
 		} catch (RuntimeException e) {
 			response = CompletableFuture.failedFuture(e);

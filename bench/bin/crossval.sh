@@ -4,7 +4,9 @@
 #   bench/bin/crossval.sh --mode open     # 测量校验：crossval-http-open-v1 vs wrk2 -R 5000 -U（达成吞吐 / 服务时间 vs 未修正延迟 / 发出滞后）
 #   bench/bin/crossval.sh --mode closed   # 发压容量标定：crossval-http-closed-capacity-v1 vs wrk（两边吞吐 + 两侧 CPU，判别瓶颈侧）
 #
-# 选项：--out <dir>（缺省 target/crossval，已被 .gitignore 忽略；交叉验证报告不进 bench/reports）
+# 选项：--out <dir>（缺省 target/crossval，已被 .gitignore 忽略；归档时传该 sha 的归档目录 bench/reports/<yyyyMMdd>-<sha7>，
+#             交叉验证结果与同一 sha 的压测结果放在一起，作为 harness 可信度的证据，bench-report.sh 汇总时一并列出判定）
+#       --label <text>（缺省 crossval；透传给 harness 的 run --label，写进 harness 结果 JSON）
 #       --profile <card.yaml>（缺省按 mode 选仓库里的卡；只在调试脚本时换成短卡）
 # 环境变量：BENCH_SERVER_CPUS（缺省 0-4）、BENCH_CLIENT_CPUS（缺省 5-9，harness 与 wrk/wrk2 用同一组核）、
 #           CROSSVAL_TOOLS_BIN（wrk / wrk2 所在目录，缺省 ~/tools/bin）、
@@ -20,15 +22,21 @@ MODULE="$ROOT/rpc-bench-e2e"
 
 MODE=""
 OUT="$ROOT/target/crossval"
+LABEL="crossval"
 PROFILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="${2:-}"; shift 2 ;;
     --out) OUT="${2:-}"; shift 2 ;;
+    --label) LABEL="${2:-}"; shift 2 ;;
     --profile) PROFILE="${2:-}"; shift 2 ;;
-    *) echo "unknown argument: $1 (usage: crossval.sh --mode open|closed [--out <dir>] [--profile <card.yaml>])" >&2; exit 1 ;;
+    *) echo "unknown argument: $1 (usage: crossval.sh --mode open|closed [--out <dir>] [--label <text>] [--profile <card.yaml>])" >&2; exit 1 ;;
   esac
 done
+if [ -z "$OUT" ] || [ -z "$LABEL" ]; then
+  echo "--out and --label need a non-empty value" >&2
+  exit 1
+fi
 
 TOOLS_BIN="${CROSSVAL_TOOLS_BIN:-$HOME/tools/bin}"
 SERVER_CPUS="${BENCH_SERVER_CPUS:-0-4}"
@@ -74,7 +82,7 @@ CP="$MODULE/target/classes:$MODULE/target/lib/*"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 RUN_DIR="$OUT/run-$MODE-$STAMP"
 mkdir -p "$RUN_DIR"
-echo "crossval $MODE: profile $PROFILE, tool $TOOL_BIN, server cpus $SERVER_CPUS, client cpus $CLIENT_CPUS -> $RUN_DIR"
+echo "crossval $MODE: profile $PROFILE, label $LABEL, tool $TOOL_BIN, server cpus $SERVER_CPUS, client cpus $CLIENT_CPUS -> $RUN_DIR"
 
 # 工具运行期间的各核利用率采样（/proc/stat）：在后台等 $1 秒后采样 $2 秒，把一行结果写进 $3（格式由 crossval 子命令解析）
 expand_cpus() { # "0-4,7" -> "0 1 2 3 4 7"
@@ -143,7 +151,7 @@ cat "$RUN_DIR/server.log"
 
 # 2. harness（退出码 2 = 卡片判定未通过，照样比较；1 = 运行出错，中止）。CPU 由 run 自己在每轮统计窗口里采样（rounds[].cpu）
 set +e
-BENCH_CLIENT_CPUS="$CLIENT_CPUS" "$ROOT/bench/bin/bench-run.sh" --profile "$PROFILE" --out "$RUN_DIR" --label crossval \
+BENCH_CLIENT_CPUS="$CLIENT_CPUS" "$ROOT/bench/bin/bench-run.sh" --profile "$PROFILE" --out "$RUN_DIR" --label "$LABEL" \
   2>&1 | tee "$RUN_DIR/harness.log"
 HARNESS_CODE=${PIPESTATUS[0]}
 set -e

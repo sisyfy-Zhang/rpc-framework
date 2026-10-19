@@ -1,6 +1,7 @@
 package com.feynman.rpc.core.protocol;
 
 import java.util.Map;
+import java.util.Objects;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -10,8 +11,9 @@ import io.netty.util.ReferenceCounted;
  * 一帧协议 v2 消息：定长头的字段 + 已解码的 attachments + 未解码的 body。
  *
  * <p>为什么 body 是 {@link ByteBuf} 而不是 byte[]：入站时 body 是帧缓冲区上的一个 retained slice，
- * IO 线程不拷贝、不反序列化，交给业务线程再解（DESIGN §3.5）；出站时 body 由业务线程直接编码进缓冲区，
- * 编码器把它原样挂到头后面，不再拷贝一次。
+ * IO 线程不拷贝、不反序列化，交给业务线程再解（DESIGN §3.5）；服务端出站的响应 body 由业务线程编码进缓冲区，
+ * 编码器把它原样挂到头后面，不再拷贝一次。例外是客户端请求：调用方线程（常是虚拟线程）不碰池化分配器，
+ * 请求只携带备好的字节（{@link OutboundBody}），由编码器在事件循环上一次写成整帧。
  *
  * <p>引用计数委托给 body：谁拿到消息谁负责 {@link #release()}（入站由处理者释放，出站交给 Netty 后由编码器释放）。
  * 没有 body 的消息（心跳）用 {@link Unpooled#EMPTY_BUFFER}，释放是空操作。
@@ -25,11 +27,13 @@ public final class RpcMessage implements ReferenceCounted {
 	private final Status status;
 	private final Map<String, String> attachments;
 	private final ByteBuf body;
+	private final OutboundBody outboundBody;
 	private final String malformedAttachments;
 	private final long receivedNanos;
 
 	private RpcMessage(long requestId, MessageType messageType, byte serializer, byte flags, Status status,
-			Map<String, String> attachments, ByteBuf body, String malformedAttachments, long receivedNanos) {
+			Map<String, String> attachments, ByteBuf body, OutboundBody outboundBody, String malformedAttachments,
+			long receivedNanos) {
 		this.requestId = requestId;
 		this.messageType = messageType;
 		this.serializer = serializer;
@@ -37,6 +41,7 @@ public final class RpcMessage implements ReferenceCounted {
 		this.status = status;
 		this.attachments = attachments == null || attachments.isEmpty() ? Map.of() : attachments;
 		this.body = body == null ? Unpooled.EMPTY_BUFFER : body;
+		this.outboundBody = outboundBody;
 		this.malformedAttachments = malformedAttachments;
 		this.receivedNanos = receivedNanos;
 	}
@@ -44,7 +49,7 @@ public final class RpcMessage implements ReferenceCounted {
 	/** 出站消息。{@code body} 的所有权随消息转移。 */
 	public static RpcMessage outbound(long requestId, MessageType messageType, byte serializer, byte flags, Status status,
 			Map<String, String> attachments, ByteBuf body) {
-		return new RpcMessage(requestId, messageType, serializer, flags, status, attachments, body, null, 0L);
+		return new RpcMessage(requestId, messageType, serializer, flags, status, attachments, body, null, null, 0L);
 	}
 
 	/**
@@ -56,12 +61,21 @@ public final class RpcMessage implements ReferenceCounted {
 	 */
 	public static RpcMessage inbound(long requestId, MessageType messageType, byte serializer, byte flags, Status status,
 			Map<String, String> attachments, ByteBuf body, String malformedAttachments, long receivedNanos) {
-		return new RpcMessage(requestId, messageType, serializer, flags, status, attachments, body, malformedAttachments,
-				receivedNanos);
+		return new RpcMessage(requestId, messageType, serializer, flags, status, attachments, body, null,
+				malformedAttachments, receivedNanos);
 	}
 
 	public static RpcMessage request(long requestId, byte serializer, Map<String, String> attachments, ByteBuf body) {
 		return outbound(requestId, MessageType.REQUEST, serializer, (byte) 0, Status.OK, attachments, body);
+	}
+
+	/**
+	 * 客户端发出的请求：body 只是备好的字节（{@link OutboundBody}），由编码器在事件循环上分配缓冲区写出——
+	 * 调用方线程不碰池化分配器。这样的消息没有引用计数的资源，{@link #release()} 是空操作。
+	 */
+	public static RpcMessage request(long requestId, byte serializer, Map<String, String> attachments, OutboundBody body) {
+		return new RpcMessage(requestId, MessageType.REQUEST, serializer, (byte) 0, Status.OK, attachments, null,
+				Objects.requireNonNull(body, "body"), null, 0L);
 	}
 
 	public static RpcMessage response(long requestId, byte serializer, Status status, Map<String, String> attachments,
@@ -118,9 +132,17 @@ public final class RpcMessage implements ReferenceCounted {
 		return attachments;
 	}
 
-	/** 从不为 null；读取请用 {@code duplicate()} / {@code slice()}，不要移动它的读指针以外的状态。 */
+	/**
+	 * 从不为 null；读取请用 {@code duplicate()} / {@code slice()}，不要移动它的读指针以外的状态。
+	 * 携带 {@link #outboundBody()} 的出站请求，这里是空缓冲区。
+	 */
 	public ByteBuf body() {
 		return body;
+	}
+
+	/** 由编码器在事件循环上写出的 body（见 {@link OutboundBody}）；其它消息为 null。 */
+	public OutboundBody outboundBody() {
+		return outboundBody;
 	}
 
 	/** attachments 段解码失败的原因；正常为 null。 */
@@ -174,6 +196,7 @@ public final class RpcMessage implements ReferenceCounted {
 	@Override
 	public String toString() {
 		return "RpcMessage{" + messageType + ", id=" + requestId + ", status=" + status + ", serializer=" + serializer
-				+ ", attachments=" + attachments.size() + ", body=" + body.readableBytes() + "B}";
+				+ ", attachments=" + attachments.size() + ", body="
+				+ (outboundBody != null ? outboundBody.length() : body.readableBytes()) + "B}";
 	}
 }

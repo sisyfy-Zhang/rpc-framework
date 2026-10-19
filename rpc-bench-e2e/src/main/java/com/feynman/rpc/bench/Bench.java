@@ -30,7 +30,7 @@ import io.micrometer.core.instrument.MeterRegistry;
  *          [--http-port &lt;p&gt;]
  *   run    --profile &lt;file.yaml&gt; (--registry zk://host:port | --direct host:port[,host:port]) [--out &lt;dir&gt;] [--label &lt;text&gt;]
  *          [--metrics-port &lt;p&gt;]       （transport: http 的卡不带 --registry / --direct：目标是卡上的 target.http.url）
- *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]
+ *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总）
  *   crossval --harness &lt;result.json&gt; --tool wrk|wrk2 --tool-output &lt;file&gt; [--tool-command &lt;text&gt;] --out &lt;dir&gt;
  * </pre>
  * 退出码：0 成功；1 用法错误、口径卡不合法或运行异常；2 实验判定未通过（断言失败或有无效轮次）。
@@ -239,6 +239,7 @@ public final class Bench {
 			throw new UsageException("--in does not exist: " + in);
 		}
 		Map<String, List<Map.Entry<String, Map<?, ?>>>> byProfile = new TreeMap<>();
+		List<Map.Entry<String, Map<?, ?>>> crossval = new ArrayList<>();
 		int skipped = 0;
 		for (Path file : files) {
 			Object parsed;
@@ -249,6 +250,11 @@ public final class Bench {
 				skipped++;
 				continue;
 			}
+			if (parsed instanceof Map<?, ?> cv && cv.get("schema") instanceof String schema && schema.startsWith("crossval/")) {
+				// 交叉验证结果（crossval 子命令写出）：汇总进"交叉验证判定"一节，作为该 sha 下 harness 可信度的证据
+				crossval.add(Map.entry(file.getFileName().toString(), cv));
+				continue;
+			}
 			if (!(parsed instanceof Map<?, ?> json) || !Integer.valueOf(BenchRunner.SCHEMA_VERSION).equals(json.get("schema_version"))) {
 				err.println("skip " + file + ": not a schema_version " + BenchRunner.SCHEMA_VERSION + " bench result");
 				skipped++;
@@ -257,12 +263,13 @@ public final class Bench {
 			String id = String.valueOf(MarkdownReport.path(json, "profile", "id"));
 			byProfile.computeIfAbsent(id, k -> new ArrayList<>()).add(Map.entry(file.getFileName().toString(), json));
 		}
-		if (byProfile.isEmpty()) {
+		if (byProfile.isEmpty() && crossval.isEmpty()) {
 			throw new UsageException("no bench result JSON found under " + in);
 		}
 		byProfile.values().forEach(runs -> runs.sort(Comparator.comparing(
 				(Map.Entry<String, Map<?, ?>> e) -> String.valueOf(MarkdownReport.path(e.getValue(), "environment", "started_at")))));
-		String markdown = MarkdownReport.renderSummary(new LinkedHashMap<>(byProfile));
+		crossval.sort(Comparator.comparing((Map.Entry<String, Map<?, ?>> e) -> String.valueOf(e.getValue().get("created_at"))));
+		String markdown = MarkdownReport.renderSummary(new LinkedHashMap<>(byProfile), crossval);
 		String target = options.value("out", null);
 		if (target == null) {
 			out.print(markdown);
@@ -273,7 +280,7 @@ public final class Bench {
 			}
 			Files.writeString(outFile, markdown, StandardCharsets.UTF_8);
 			out.println("report: " + outFile.toAbsolutePath().normalize() + " (" + byProfile.size() + " profile(s), "
-					+ files.size() + " file(s), " + skipped + " skipped)");
+					+ crossval.size() + " crossval result(s), " + files.size() + " file(s), " + skipped + " skipped)");
 		}
 		return OK;
 	}

@@ -415,3 +415,62 @@ harness 的服务时间（从实际执行）p50 0.22ms，发出滞后 p99 只有
 - 拿第三方工具做参照之前，先确认它的时间分辨率比被测量小一个数量级以上；"业界标准工具"不等于在任何量级上都是标准。
 - 修正 coordinated omission 的延迟 = 服务时间 + 发送滞后，两项要能分开看：只比合计值，分不清是被测系统慢还是发压端自己晚发。
 - 结论对不上时先拆分量再下判断：这里一个 `-U` 就把"harness 有问题"变成了"参照工具在这个量级不适用"。
+
+## 32. 虚拟线程直接用 Netty 池化分配器：没有线程缓存、在 arena 锁上排队，扩容时钉住载体线程，万级并发下整个客户端卡死
+
+**现象**：两件看起来无关的事。
+- WSL2 上开环 10000 req/s（`loopback-latency-v1`，客户端每个请求一个虚拟线程）偶发整轮卡死：线程转储里 2753 个虚拟线程停在
+  `ReferenceProxy.invoke` 的 `join`，5 个载体线程（ForkJoinPool-1-worker-1..5，压测端绑 5 个核）各自"Carrying"一个虚拟线程，
+  这 5 个全部是 `VirtualThread.parkOnCarrierThread` ← `ReentrantLock.lock` ← `PoolArena.lock` ← `PoolArena.reallocate` ←
+  `AbstractByteBuf.writeBytes` ← `EnvelopeCodec.writeRequest` ← `NettyClient.write`；另有 2 个已卸载的虚拟线程在 `PoolArena.freeChunk`
+  里等同一把锁。进程不再前进，只能 kill。用缩短到 20s 的同一张卡复现：修复前 2 次运行 2 次卡死（第 1 轮内），
+  `-Djdk.tracePinnedThreads=full` 打出 `PoolArena.reallocate(PoolArena.java:317) <== monitors:1`（等 `PoolArena.lock` 与 `PoolSubpage.lock` 两种栈）。
+- CI 的 paranoid 泄漏作业（run 39183249559）报 `LEAK: ByteBuf.release() was not called`：构建日志里 10 份报告（检查步骤又把它们 grep
+  回显一遍，共 20 行），全部是同一条路径——Created at `RpcClient.attempt` 的 writer lambda 里 `alloc.buffer()`（调用方虚拟线程上），
+  最后一条访问记录是 `EnvelopeCodec.writeValue` 里的 `writeBytes`，**之后再没有任何记录**。报告行前的线程名（`rpc-server-worker`、
+  `rpc-server-biz`、`rpc-client-io`）只是"之后哪个线程分配时顺手报告了它"，不是泄漏发生处——服务端没有泄漏。本机复现率：
+  `BenchEndToEndTest` paranoid 3 次中 2 次有 LEAK，另 1 次测试 JVM 因本机内存不足崩溃。
+
+**根因**：
+1. **虚拟线程不该碰池化分配器**。`PooledByteBufAllocator` 的线程缓存（`PoolThreadCache`）只给 `FastThreadLocalThread` 与事件循环线程
+   （`io.netty.allocator.useCacheForAllThreads` 缺省 false），其它线程拿到的是容量为 0 的缓存：每次分配、扩容、释放都直接去 arena 抢锁；
+   每个新虚拟线程第一次分配还要进一次 `synchronized` 的 `PoolThreadLocalCache.initialValue()`。开环每请求一个新虚拟线程，几千个线程同时在
+   arena 锁上排队。
+2. **扩容钉住载体**。请求 body 从缺省 256 字节写起，1KB 的参数写到一半要扩容，`PoolArena.reallocate` 在 `synchronized (buf)` 里调
+   `allocate` 去取 arena / subpage 的 `ReentrantLock`（Netty 4.1.136 源码第 300 行起，注释自称"临界区短、对 Loom 不是问题"）。JDK 21 的虚拟线程
+   在 monitor 内 park 会钉住载体（`parkOnCarrierThread`）。锁释放时交给队首等待者，而队首恰好是一个已卸载、需要载体才能继续的虚拟线程；
+   5 个载体此刻全被钉住等同一把锁——锁的下一任持有者永远拿不到载体，死锁。
+3. **调用方线程上已分配、还没交给 Netty 的缓冲区，遇到 Error 就丢**。`it-must-fail` 场景（1MiB 回显、1ms 超时、16 并发）里请求超时后仍在
+   出站缓冲区排队写出，直接内存很快耗尽，扩容时抛 `OutOfMemoryError: Cannot reserve 4194304 bytes of direct buffer memory`。writer 只
+   `catch (RuntimeException)` 释放 body，Error 穿过去；它又是在 `connections.acquire(...).whenComplete(...)` 的回调里抛出的——
+   CompletableFuture 把回调异常装进一个没人看的 future，**静默吞掉**，请求挂到超时，body 随之泄漏。加诊断复跑：3 次共 99 次逃逸，全部是这个 OOM；
+   服务端回包的 `toReply` / `errorReply` / `frameworkError` 有同样的 `catch (RuntimeException)` 漏洞（本机日志里有一条 "produced no reply" + OOM）。
+   CI 日志里没有 OOM 字样，因为客户端这条路径的 Error 被吞了；泄漏签名（最后访问是扩容那次 `writeBytes`，之后连 `writeAndFlush` 的 touch 记录都没有）
+   与本机复现完全一致。
+
+**修法**：
+- **调用方线程不碰池化分配器**（设计原则）：`RequestWriter` 只做序列化，返回不持 ByteBuf 的 `OutboundBody`（`EnvelopeCodec.request(...)`：
+  路由字段 + 参数 byte[] + 预先算好的确切长度）；`RpcEncoder` 在事件循环上用 `ctx.alloc()` 按确切长度一次分配，写头 + attachments + 信封 + 参数，
+  单个缓冲区、不扩容、不再 composite/retain。整帧超限检查按 `OutboundBody.length()` 在调用方线程上做（判定与编码器相同，仍以
+  `RpcSerializationException` 进不重试通道）。线上字节逐字节不变（`RpcCodecTest` 对比新旧两种写法）。`writeStr` 改用
+  `reserveAndWriteUtf8` 按确切字节数预留（`writeUtf8` 按每字符 3 字节预留，放不进按确切长度分配的缓冲区）。
+- 发送路径上任何 `Throwable` 都让请求立即失败：writer 抛 Error 以 `RpcSerializationException` 失败，`whenComplete` 回调外层再兜一层；
+  写出改为提交到连接的事件循环执行，排队期间已超时的请求不再编码写出（过载时不再把内存越堆越高）。
+- 服务端回包编码的三处改为 `catch (Throwable)` 先释放 body 再抛出。
+- 护栏：`CoreArchitectureTest` 规定调用方一侧（core 根包、client / cluster / filter / loadbalance 包里非 ChannelHandler 的类）不得调用
+  `ByteBufAllocator` 的任何方法、`Channel.alloc()`、`ChannelHandlerContext.alloc()`；bench 模块同一条规则。`CallerThreadAllocationTest`
+  给连接注入记录分配线程的分配器，200 个虚拟线程 × 10 次 4KB 回显后断言所有分配都在 `rpc-client-io-*` 上。泄漏回归测试用测试包
+  `io.netty.buffer` 里的 `ByteBufLeakProbe`（给 `AbstractByteBuf.leakDetector` 挂 `LeakListener`、反复 GC，在测试内同步断言）。
+
+修复后（同一台 WSL2、同一张 20s 冒烟卡、服务端绑 0-4、压测端绑 5-9）：开环 3 次 9 轮全部跑完、0 错误，`tracePinnedThreads` 0 条；
+`BenchEndToEndTest` paranoid 连跑 5 次 0 LEAK、0 OOM。第 1 轮的在途峰值仍有 4171–11009，那是冷启动（第 1 秒只完成 1093–9176 个请求，
+修复前同样如此），稳态轮 52–457。
+
+**教训**：
+- 虚拟线程上"不阻塞"的代码不等于安全：第三方库内部的 `synchronized` + 锁（这里是 Netty 的 `PoolArena.reallocate`）在 JDK 21 上会钉住载体，
+  而钉住只在高并发时才变成死锁。`-Djdk.tracePinnedThreads=full` 应该是虚拟线程压测的默认参数之一。
+- 池化分配器是给少量长寿命线程设计的。成千上万的短命调用方线程只做与分配器无关的工作（序列化成 byte[]），缓冲区留给事件循环分配。
+- 在 CompletableFuture 回调里干活的代码，必须自己兜住 `Throwable`：回调抛出的异常（尤其是 Error）不会传播到任何地方。
+- "已分配、还没交出所有权"的缓冲区只 `catch (RuntimeException)` 释放是不够的；能不在这个窗口里持有缓冲区更好。
+- 泄漏报告行前的线程名是报告者，不是泄漏者；看 Created at 与最后一条访问记录，再对照"正常路径上下一条应该出现的记录"（这里是
+  `writeAndFlush` 的 touch）推断它断在哪里。

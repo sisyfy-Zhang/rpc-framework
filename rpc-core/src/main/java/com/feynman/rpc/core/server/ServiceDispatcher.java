@@ -306,6 +306,10 @@ public final class ServiceDispatcher {
 			body.release();
 			log.error("Failed to serialize result of {} (request {})", invocation, request.requestId(), e);
 			return errorReply(alloc, request, Status.SERIALIZATION_ERROR, e, false, replyAttachments);
+		} catch (Throwable e) {
+			// Error（直接内存耗尽、对象图过深等）：先释放已分配的 body 再抛出，否则它随异常一起丢失、泄漏
+			body.release();
+			throw e;
 		}
 		return RpcMessage.response(request.requestId(), serializer.code(), Status.OK, replyAttachments, body);
 	}
@@ -380,7 +384,8 @@ public final class ServiceDispatcher {
 			} else {
 				EnvelopeCodec.writeError(body, "", String.valueOf(failure.getMessage()), "");
 			}
-		} catch (RuntimeException e) {
+		} catch (Throwable e) {
+			// 包括 Error：已分配的 body 不随异常丢失
 			body.release();
 			throw e;
 		}
@@ -391,7 +396,8 @@ public final class ServiceDispatcher {
 		ByteBuf body = alloc.buffer();
 		try {
 			EnvelopeCodec.writeError(body, "", message, "");
-		} catch (RuntimeException e) {
+		} catch (Throwable e) {
+			// 包括 Error：已分配的 body 不随异常丢失
 			body.release();
 			throw e;
 		}

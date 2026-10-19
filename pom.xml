@@ -46,6 +46,11 @@
     <!-- rpc-metrics-micrometer：与 Spring Boot 4.1 管理的 Micrometer 同一条 1.17 线（starter 的 optional Actuator 也走它），
          避免同一个 classpath 上 Boot 的指标自动配置与本模块各拿一个 Micrometer 小版本 -->
     <micrometer.version>1.17.1</micrometer.version>
+    <!-- -DskipTests 时 JaCoCo 全部跳过（prepare-agent / report / check）：没有跑测试就没有 exec，check 只会误报或白跑。
+         写成 jacoco.skip 的默认值而不是插件的 <skip>${skipTests}</skip>：后者会覆盖插件对 jacoco.skip 的绑定，
+         让 CI 与 paranoid 命令里的 -Djacoco.skip=true 失效；命令行的 -Djacoco.skip=... 仍然优先。 -->
+    <skipTests>false</skipTests>
+    <jacoco.skip>${skipTests}</jacoco.skip>
     <!-- A0-9：rpc-core 行覆盖率下限（core 自身单元测试、以及全部模块测试的聚合结果各检查一次） -->
     <rpc.core.minLineCoverage>0.70</rpc.core.minLineCoverage>
     <!-- surefire 的 JVM 参数：jacoco:prepare-agent 把探针 agent 写进这个属性；默认空值让跳过 JaCoCo 时 @{argLine} 也能解析。

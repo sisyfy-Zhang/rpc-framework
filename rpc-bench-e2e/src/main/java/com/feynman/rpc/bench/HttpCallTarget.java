@@ -101,6 +101,12 @@ final class HttpCallTarget implements CallTarget {
 	private final EventLoopGroup group;
 	private final Bootstrap bootstrap;
 	private final byte[] payload;
+	/**
+	 * 请求体：包装 {@link #payload} 的堆缓冲区，构造时建一次，每次请求用 {@code retainedDuplicate()}（独立读写指针，
+	 * 编码器写完释放的是这份复制）。调用方是虚拟线程：这里不碰 Netty 的池化分配器（docs/pitfalls.md 第 32 条），
+	 * HTTP 头的缓冲区由编码器在事件循环上分配。
+	 */
+	private final ByteBuf payloadContent;
 	private final long timeoutNanos;
 	private final boolean open;
 	private final int poolSize;
@@ -120,6 +126,7 @@ final class HttpCallTarget implements CallTarget {
 		this.path = uri.getRawQuery() == null ? uri.getRawPath() : uri.getRawPath() + "?" + uri.getRawQuery();
 		this.hostHeader = uri.getPort() > 0 ? host + ":" + port : host;
 		this.payload = Payloads.bytes(profile.target().payloadSize());
+		this.payloadContent = Unpooled.wrappedBuffer(payload);
 		this.timeoutNanos = profile.load().timeout().toNanos();
 		this.open = !profile.load().closed();
 		this.poolSize = open ? profile.target().httpConnections() : profile.load().concurrency();
@@ -331,6 +338,7 @@ final class HttpCallTarget implements CallTarget {
 			connection.closeChannel();
 		}
 		group.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+		// payloadContent 是包装 byte[] 的堆缓冲区（不来自池、不受泄漏检测跟踪），随对象回收，不需要 release
 	}
 
 	/** 在一个 IO 线程上周期运行：超过截止时间仍未完成的在途请求以 {@link TimeoutException} 结束。 */
@@ -383,7 +391,9 @@ final class HttpCallTarget implements CallTarget {
 			}
 			CompletableFuture<Response> future = new CompletableFuture<>();
 			pending = new Pending(future, System.nanoTime() + timeout, timeout, captureBody);
-			ByteBuf content = body == null ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body);
+			// 压测热路径的请求体是同一份 payload：复用构造时建好的包装缓冲区，不在虚拟线程上分配
+			ByteBuf content = body == null ? Unpooled.EMPTY_BUFFER
+					: body == payload ? payloadContent.retainedDuplicate() : Unpooled.wrappedBuffer(body);
 			FullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, requestPath, content);
 			request.headers().set(HttpHeaderNames.HOST, hostHeader);
 			if (body != null) {

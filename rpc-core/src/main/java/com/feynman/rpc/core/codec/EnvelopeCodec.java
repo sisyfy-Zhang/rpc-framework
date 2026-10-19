@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import com.feynman.rpc.core.protocol.OutboundBody;
 import com.feynman.rpc.core.protocol.ProtocolException;
 
 import io.netty.buffer.ByteBuf;
@@ -67,6 +68,79 @@ public final class EnvelopeCodec {
 		for (byte[] arg : args) {
 			writeValue(out, arg);
 		}
+	}
+
+	/**
+	 * 备好一个请求信封（不分配缓冲区）：校验并算出编码后的确切长度，字节在编码器里（事件循环上）才写入缓冲区。
+	 * 线上格式与 {@link #writeRequest} 相同。
+	 *
+	 * @param args 每个参数序列化后的字节；元素为 null 表示参数为 null。列表与数组之后不得再修改
+	 * @throws IllegalArgumentException 参数超过 255 个、路由字段超过 65535 字节
+	 */
+	public static OutboundRequest request(String service, String version, String group, String method, String paramSig,
+			List<byte[]> args) {
+		if (args.size() > MAX_ARGS) {
+			throw new IllegalArgumentException("too many arguments: " + args.size() + " > " + MAX_ARGS);
+		}
+		long length = strLength(service) + strLength(version) + strLength(group) + strLength(method) + strLength(paramSig) + 1L;
+		for (byte[] arg : args) {
+			length += arg == null ? 1 : 1 + 4 + (long) arg.length;
+		}
+		if (length > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException("request envelope too large: " + length + " bytes");
+		}
+		return new OutboundRequest(service, version, group, method, paramSig, args, (int) length);
+	}
+
+	/** {@link #request} 的结果：路由字段 + 已序列化的参数 + 编码后的长度。不持有缓冲区。 */
+	public static final class OutboundRequest implements OutboundBody {
+		private final String service;
+		private final String version;
+		private final String group;
+		private final String method;
+		private final String paramSig;
+		private final List<byte[]> args;
+		private final int length;
+
+		private OutboundRequest(String service, String version, String group, String method, String paramSig,
+				List<byte[]> args, int length) {
+			this.service = service;
+			this.version = version;
+			this.group = group;
+			this.method = method;
+			this.paramSig = paramSig;
+			this.args = args;
+			this.length = length;
+		}
+
+		@Override
+		public int length() {
+			return length;
+		}
+
+		@Override
+		public void writeTo(ByteBuf out) {
+			int start = out.writerIndex();
+			writeRequest(out, service, version, group, method, paramSig, args);
+			int written = out.writerIndex() - start;
+			if (written != length) {
+				throw new IllegalStateException("request envelope wrote " + written + " bytes, expected " + length);
+			}
+		}
+
+		@Override
+		public String toString() {
+			return "OutboundRequest{" + service + "#" + method + "(" + paramSig + "), " + length + "B}";
+		}
+	}
+
+	/** {@code str} 单元编码后的字节数（2 字节长度 + UTF-8）。 */
+	private static int strLength(String s) {
+		int bytes = ByteBufUtil.utf8Bytes(s == null ? "" : s);
+		if (bytes > MAX_U16) {
+			throw new IllegalArgumentException("string field longer than 65535 UTF-8 bytes");
+		}
+		return 2 + bytes;
 	}
 
 	public static RequestEnvelope readRequest(ByteBuf in) {
@@ -138,7 +212,8 @@ public final class EnvelopeCodec {
 		}
 		int lengthIndex = out.writerIndex();
 		out.writeShort(0);
-		int written = ByteBufUtil.writeUtf8(out, value);
+		// 只预留确切的字节数：writeUtf8 会按最坏情况（每字符 3 字节）预留，在按确切长度分配的缓冲区里放不下、在其它缓冲区里白白扩容
+		int written = ByteBufUtil.reserveAndWriteUtf8(out, value, bytes);
 		out.setShort(lengthIndex, written);
 	}
 

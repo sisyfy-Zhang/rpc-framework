@@ -42,6 +42,50 @@ class CoreArchitectureRulesSelfTest {
 		A, B
 	}
 
+	/** 旧 NettyClient.write 的写法：在调用方线程上用 channel.alloc() 分配请求 body。 */
+	static class CallerAllocatesFromChannel {
+		static io.netty.buffer.ByteBuf body(io.netty.channel.Channel channel) {
+			return channel.alloc().buffer();
+		}
+	}
+
+	static class CallerUsesDefaultAllocator {
+		static io.netty.buffer.ByteBuf body() {
+			return io.netty.buffer.ByteBufAllocator.DEFAULT.directBuffer(16);
+		}
+	}
+
+	/** 事件循环上的处理器可以分配。 */
+	static class EncoderOnEventLoop extends io.netty.channel.ChannelOutboundHandlerAdapter {
+		io.netty.buffer.ByteBuf frame(io.netty.channel.ChannelHandlerContext ctx) {
+			return ctx.alloc().buffer();
+		}
+	}
+
+	/** 只用 Unpooled 包装现成的数组（不经过池化分配器）不算。 */
+	static class CallerWrapsArray {
+		static io.netty.buffer.ByteBuf wrap(byte[] bytes) {
+			return io.netty.buffer.Unpooled.wrappedBuffer(bytes);
+		}
+	}
+
+	private static final ArchRule CALLER_SIDE_ALLOC = CoreArchitectureRules.callerSideMustNotTouchNettyAllocator(
+			com.tngtech.archunit.base.DescribedPredicate.describe("fixtures that are not ChannelHandlers",
+					c -> c.getName().startsWith(CoreArchitectureRulesSelfTest.class.getName())
+							&& !c.isAssignableTo("io.netty.channel.ChannelHandler")))
+			.allowEmptyShould(true);
+
+	@Test
+	void callerSideAllocationIsRejected() {
+		JavaClasses classes = new ClassFileImporter().importClasses(CallerAllocatesFromChannel.class, CallerUsesDefaultAllocator.class,
+				EncoderOnEventLoop.class, CallerWrapsArray.class);
+		var result = CALLER_SIDE_ALLOC.evaluate(classes);
+		assertTrue(result.hasViolation());
+		String report = result.getFailureReport().toString();
+		assertTrue(report.contains("CallerAllocatesFromChannel") && report.contains("CallerUsesDefaultAllocator"), report);
+		assertFalse(report.contains("EncoderOnEventLoop") || report.contains("CallerWrapsArray"), report);
+	}
+
 	private static final ArchRule STATIC_MUST_BE_FINAL = fields()
 			.that().areDeclaredInClassesThat().resideInAPackage("com.feynman.rpc.core..")
 			.and().areStatic()

@@ -9,7 +9,11 @@ import com.feynman.rpc.core.extension.ExtensionLoader;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaField;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.lang.ArchRule;
+
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
  * "无可变静态状态"规则的谓词与白名单。
@@ -49,7 +53,48 @@ final class CoreArchitectureRules {
 					|| type.isAssignableTo("io.netty.channel.EventLoopGroup")
 					|| type.isAssignableTo("io.netty.bootstrap.AbstractBootstrap"));
 
+	/**
+	 * 调用方一侧的代码：RpcClient / ReferenceProxy 所在的根包与 client、cluster、filter、loadbalance 包里，不是 Netty
+	 * ChannelHandler 的类——它们运行在调用方线程（常是虚拟线程）上。ChannelHandler（ClientHandler、编解码器）运行在事件循环上。
+	 */
+	static final DescribedPredicate<JavaClass> CALLER_SIDE = DescribedPredicate.describe(
+			"run on caller threads (core root, client, cluster, filter, loadbalance packages; not a Netty ChannelHandler)",
+			clazz -> isCallerSidePackage(clazz.getPackageName())
+					&& !clazz.isAssignableTo("io.netty.channel.ChannelHandler"));
+
+	/** 取得或使用 Netty 的 ByteBufAllocator：调用分配器的任何方法、{@code Channel.alloc()}、{@code ChannelHandlerContext.alloc()}、{@code ChannelConfig.getAllocator()}。 */
+	static final DescribedPredicate<JavaMethodCall> TOUCHES_NETTY_ALLOCATOR = DescribedPredicate.describe(
+			"obtain or use a Netty ByteBufAllocator",
+			call -> {
+				JavaClass owner = call.getTargetOwner();
+				String name = call.getName();
+				return owner.isAssignableTo("io.netty.buffer.ByteBufAllocator")
+						|| ("alloc".equals(name) && (owner.isAssignableTo("io.netty.channel.Channel")
+								|| owner.isAssignableTo("io.netty.channel.ChannelHandlerContext")))
+						|| ("getAllocator".equals(name) && owner.isAssignableTo("io.netty.channel.ChannelConfig"));
+			});
+
+	/**
+	 * 调用方线程不碰池化分配器（docs/pitfalls.md 第 32 条）：虚拟线程没有分配器的线程缓存、在 PoolArena 上竞争锁，
+	 * {@code PoolArena.reallocate} 还会在 synchronized 内取锁、钉住载体线程。请求只在调用方线程上序列化，
+	 * 帧缓冲区由编码器在事件循环上分配。
+	 */
+	static ArchRule callerSideMustNotTouchNettyAllocator(DescribedPredicate<JavaClass> callerSide) {
+		return noClasses().that(callerSide)
+				.should().callMethodWhere(TOUCHES_NETTY_ALLOCATOR)
+				.because("caller threads (often virtual threads) must not allocate from Netty's pooled allocator; "
+						+ "the encoder allocates the frame on the event loop (see OutboundBody, docs/pitfalls.md #32)");
+	}
+
 	private CoreArchitectureRules() {
+	}
+
+	private static boolean isCallerSidePackage(String pkg) {
+		return pkg.equals("com.feynman.rpc.core")
+				|| pkg.equals("com.feynman.rpc.core.client")
+				|| pkg.equals("com.feynman.rpc.core.cluster")
+				|| pkg.equals("com.feynman.rpc.core.filter")
+				|| pkg.equals("com.feynman.rpc.core.loadbalance");
 	}
 
 	private static boolean isWhitelisted(JavaClass clazz) {

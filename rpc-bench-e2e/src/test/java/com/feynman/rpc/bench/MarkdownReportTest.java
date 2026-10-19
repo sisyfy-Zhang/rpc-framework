@@ -108,4 +108,37 @@ class MarkdownReportTest {
 		String errors = err.toString(StandardCharsets.UTF_8);
 		assertTrue(errors.contains("other.json") && errors.contains("broken.json"), errors);
 	}
+
+	@Test
+	void reportCommandAddsTheCrossValidationVerdicts(@TempDir Path dir) throws Exception {
+		Files.copy(FIXTURE, dir.resolve("a.json"));
+		Files.writeString(dir.resolve("crossval-open-20261019-115413.json"), """
+				{"schema": "crossval/2", "mode": "open", "kind": "measurement", "created_at": "2026-10-19T11:54:13+11:00",
+				 "question": "fixture crossval question",
+				 "harness": {"file": "crossval-http-open-v1-x.json", "git_sha": "77d04f2abcdef", "git_dirty": false},
+				 "tool": {"name": "wrk2", "command": "wrk2 -R 5000 -U"},
+				 "checks": [
+				   {"group": "a. 达成吞吐", "criterion": "harness 相对目标 rate 偏差 ≤ 2%", "measured": "5000 vs 5000 req/s",
+				    "rel_dev_pct": 0.0, "passed": true},
+				   {"group": "b. 测量一致性", "criterion": "p99 a|b", "measured": "0.534 vs 0.367 ms", "rel_dev_pct": 45.504,
+				    "passed": false}
+				 ],
+				 "verdict": "FAIL"}
+				""");
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Path target = dir.resolve("summary.md");
+		int code = Bench.execute(new String[] { "report", "--in", dir.toString(), "--out", target.toString() },
+				new PrintStream(out, true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8));
+		assertEquals(Bench.OK, code, err.toString(StandardCharsets.UTF_8));
+		String md = Files.readString(target, StandardCharsets.UTF_8);
+		assertTrue(md.contains("| [fixture-open-v1](#fixture-open-v1) | 1 |"), "bench results are still summarized:\n" + md);
+		assertTrue(md.contains("\n## 交叉验证判定\n"), md);
+		assertTrue(md.contains("| [crossval-open-20261019-115413.json](#crossval-open-20261019-115413json) | open (measurement) | wrk2 | "
+				+ "crossval-http-open-v1-x.json | **FAIL** |"), md);
+		assertTrue(md.contains("| b. 测量一致性 | p99 a\\|b | 0.534 vs 0.367 ms | 45.5% | **未通过** |"), md);
+		assertTrue(md.contains("| a. 达成吞吐 | harness 相对目标 rate 偏差 ≤ 2% | 5000 vs 5000 req/s | 0.0% | 通过 |"), md);
+		assertFalse(err.toString(StandardCharsets.UTF_8).contains("crossval-open"), "crossval results are not skipped");
+		assertTrue(out.toString(StandardCharsets.UTF_8).contains("1 crossval result(s)"));
+	}
 }

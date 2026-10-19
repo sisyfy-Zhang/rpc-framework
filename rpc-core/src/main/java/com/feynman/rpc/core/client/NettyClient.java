@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import com.feynman.rpc.core.RpcException;
@@ -15,6 +16,7 @@ import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
 import com.feynman.rpc.core.loadbalance.LoadStats;
+import com.feynman.rpc.core.protocol.OutboundBody;
 import com.feynman.rpc.core.protocol.ProtocolConstants;
 import com.feynman.rpc.core.protocol.RpcMessage;
 import com.feynman.rpc.core.registry.ServiceInstance;
@@ -22,10 +24,11 @@ import com.feynman.rpc.core.serialize.Serializer;
 import com.feynman.rpc.core.serialize.Serializers;
 
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
@@ -55,6 +58,11 @@ public final class NettyClient implements AutoCloseable {
 	 * @param loadStats 所属客户端的每地址在途统计：下线节点的连接据此判断何时排空（见 ConnectionManager）
 	 */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats) {
+		this(serializers, connectionsPerNode, loadStats, null);
+	}
+
+	/** @param allocator 非 null 时作为连接的 {@link ChannelOption#ALLOCATOR}（测试用它记录分配发生在哪些线程上） */
+	NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, ByteBufAllocator allocator) {
 		this.serializers = serializers;
 		byte[] supportedCodes = serializers.codesByPriority();
 
@@ -63,19 +71,22 @@ public final class NettyClient implements AutoCloseable {
 				.group(ioGroup)
 				.channel(NioSocketChannel.class)
 				.option(ChannelOption.SO_KEEPALIVE, true)
-				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS)
-				.handler(new ChannelInitializer<SocketChannel>() {
-					@Override
-					protected void initChannel(SocketChannel ch) {
-						ch.pipeline().addLast(new RpcFrameDecoder());
-						ch.pipeline().addLast(new RpcMessageDecoder());
-						// 40s 没收到任何东西（服务端每 20s 会主动 ping 一次）就认为连接可能已经死了，关闭它
-						// 交给 ConnectionPool 的重连逻辑去处理；20s 没写过东西就主动发一次心跳。
-						ch.pipeline().addLast(new IdleStateHandler(40, 20, 0, TimeUnit.SECONDS));
-						ch.pipeline().addLast(new RpcEncoder());
-						ch.pipeline().addLast(new ClientHandler(pending, supportedCodes));
-					}
-				});
+				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS);
+		if (allocator != null) {
+			bootstrap.option(ChannelOption.ALLOCATOR, allocator);
+		}
+		bootstrap.handler(new ChannelInitializer<SocketChannel>() {
+			@Override
+			protected void initChannel(SocketChannel ch) {
+				ch.pipeline().addLast(new RpcFrameDecoder());
+				ch.pipeline().addLast(new RpcMessageDecoder());
+				// 40s 没收到任何东西（服务端每 20s 会主动 ping 一次）就认为连接可能已经死了，关闭它
+				// 交给 ConnectionPool 的重连逻辑去处理；20s 没写过东西就主动发一次心跳。
+				ch.pipeline().addLast(new IdleStateHandler(40, 20, 0, TimeUnit.SECONDS));
+				ch.pipeline().addLast(new RpcEncoder());
+				ch.pipeline().addLast(new ClientHandler(pending, supportedCodes));
+			}
+		});
 		this.connections = new ConnectionManager(bootstrap, connectionsPerNode, loadStats);
 	}
 
@@ -93,13 +104,17 @@ public final class NettyClient implements AutoCloseable {
 	 * 向 {@code address} 发送一次请求。
 	 *
 	 * <p>请求一开始就登记进在途表，{@code timeoutNanos}（本次调用 deadline 的剩余时间）是它唯一的定时器，
-	 * 覆盖等连接、写出、等响应的全过程。等连接期间已超时的请求不会再被写出。
+	 * 覆盖等连接、写出、等响应的全过程。等连接期间、或在事件循环上排队等写出期间已超时的请求不会再被写出。
+	 *
+	 * <p><b>调用方线程不碰池化分配器</b>：{@code writer} 在调用方线程上只做序列化，帧的缓冲区由编码器在事件循环上分配
+	 * （见 {@link OutboundBody}）。这里也因此没有"已分配、还没交给 Netty"的缓冲区——中途任何异常（包括 Error）都不会泄漏，
+	 * 并且都让本次请求立即失败，而不是被 CompletableFuture 回调吞掉、挂到超时。
 	 *
 	 * <p>编码后整帧超过 {@link ProtocolConstants#MAX_FRAME_LENGTH} 的请求不写出，以 {@link RpcSerializationException}
 	 * 失败：这是确定性失败（换节点同样发不出去），RpcClient 把它放进结果通道、不重试；若交给编码器去拒绝，
-	 * 它会表现为写失败，被 Cluster 当作传输失败换节点重试。
+	 * 它会表现为写失败，被 Cluster 当作传输失败换节点重试。帧长按备好的字节数在调用方线程上算，与编码器同一判定。
 	 *
-	 * @param writer 拿到连接后按该连接协商出的序列化器编码 body；抛出的异常以 {@link RpcSerializationException} 让本次请求失败
+	 * @param writer 拿到连接后按该连接协商出的序列化器备好 body；抛出的异常以 {@link RpcSerializationException} 让本次请求失败
 	 * @return 收到响应帧时完成（调用方负责 release 该消息）；传输失败或超时时异常完成
 	 */
 	public CompletableFuture<RpcMessage> send(String address, RequestWriter writer, Map<String, String> attachments,
@@ -110,7 +125,12 @@ public final class NettyClient implements AutoCloseable {
 			if (error != null) {
 				pending.fail(requestId, error);
 			} else if (pending.isWaiting(requestId)) {
-				write(channel, requestId, response, writer, attachments);
+				try {
+					write(channel, requestId, response, writer, attachments);
+				} catch (Throwable t) {
+					// 这个回调里抛出的异常会被 CompletableFuture 吞掉：必须在这里让请求失败，否则它只能挂到超时
+					pending.fail(requestId, new RpcException("Failed to send request to " + channel.remoteAddress() + ": " + t, t));
+				}
 			}
 		});
 		return response;
@@ -125,17 +145,17 @@ public final class NettyClient implements AutoCloseable {
 		if (serializer == null) {
 			serializer = serializers.preferred();
 		}
-		ByteBuf body;
+		OutboundBody body;
 		try {
-			body = writer.write(channel.alloc(), serializer);
-		} catch (RuntimeException e) {
+			body = writer.write(serializer);
+		} catch (Throwable e) {
+			// 包括 Error（如对象图过深的 StackOverflowError）：序列化失败是确定性的，进结果通道、不重试
 			pending.fail(requestId, e instanceof RpcException ? e
 					: new RpcSerializationException("Failed to serialize request with " + serializer.name() + ": " + e, e));
 			return;
 		}
-		RpcException tooLarge = checkFrameLength(attachments, body.readableBytes(), channel);
+		RpcException tooLarge = checkFrameLength(attachments, body.length(), channel);
 		if (tooLarge != null) {
-			body.release();
 			pending.fail(requestId, tooLarge);
 			return;
 		}
@@ -144,16 +164,38 @@ public final class NettyClient implements AutoCloseable {
 		Set<Long> onChannel = ChannelRequests.of(channel);
 		onChannel.add(requestId);
 		response.whenComplete((r, e) -> onChannel.remove(requestId));
+		EventLoop loop = channel.eventLoop();
+		if (loop.inEventLoop()) {
+			writeOnEventLoop(channel, requestId, message, onChannel);
+			return;
+		}
+		try {
+			loop.execute(() -> writeOnEventLoop(channel, requestId, message, onChannel));
+		} catch (RejectedExecutionException e) {
+			// 事件循环已关闭（客户端正在关闭）
+			onChannel.remove(requestId);
+			pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent", e));
+		}
+	}
+
+	/**
+	 * 在连接的事件循环上写出：编码器（同一线程）分配帧缓冲区。排队期间已超时 / 已失败的请求不再写出——
+	 * 超时的调用方早已放弃，再编码、再占发送缓冲区只会在过载时把内存越堆越高。
+	 */
+	private void writeOnEventLoop(Channel channel, long requestId, RpcMessage message, Set<Long> onChannel) {
+		if (!pending.isWaiting(requestId)) {
+			onChannel.remove(requestId);
+			return;
+		}
 		if (!channel.isActive()) {
 			// 拿到连接与写出之间连接已断：channelInactive 可能已经跑过，不会再替我们失败这个请求
 			onChannel.remove(requestId);
-			message.release();
 			pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent"));
 			return;
 		}
 		channel.writeAndFlush(message).addListener(f -> {
 			if (!f.isSuccess()) {
-				// 写失败立即让这次请求失败，而不是挂到超时
+				// 写失败（含编码失败）立即让这次请求失败，而不是挂到超时
 				pending.fail(requestId, new RpcException("Failed to send request to " + channel.remoteAddress(), f.cause()));
 			}
 		});

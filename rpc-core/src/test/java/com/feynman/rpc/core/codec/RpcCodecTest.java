@@ -199,4 +199,41 @@ class RpcCodecTest {
 		assertNull(envelope.args().get(1));
 		body.release();
 	}
+
+	/**
+	 * 客户端请求改为"调用方只备字节、编码器在事件循环上一次写整帧"后，线上字节必须与原来"调用方写 body 缓冲区、
+	 * 编码器挂在头后面"的两段写法逐字节相同（协议格式不变）；含多字节 UTF-8、代理对、孤立代理、null 参数与 attachments。
+	 */
+	@Test
+	void deferredRequestBodyEncodesToTheSameBytesAsABufferBody() {
+		Map<String, String> attachments = new LinkedHashMap<>();
+		attachments.put("rpc.timeout", "1500");
+		attachments.put("trace", "库存-😀");
+		String service = "com.x.库存Service";
+		String lone = "m\uD800x"; // 孤立代理：Netty 写成 '?'
+		List<byte[]> args = java.util.Arrays.asList(new byte[] { 1, 2, 3 }, null, new byte[0], new byte[300]);
+
+		ByteBuf body = Unpooled.buffer();
+		EnvelopeCodec.writeRequest(body, service, "1.0", "灰度", lone, "byte[],java.lang.String", args);
+		ByteBuf viaBuffer = encode(RpcMessage.request(77, (byte) 3, attachments, body));
+
+		EnvelopeCodec.OutboundRequest deferred = EnvelopeCodec.request(service, "1.0", "灰度", lone, "byte[],java.lang.String", args);
+		ByteBuf viaDeferred = encode(RpcMessage.request(77, (byte) 3, attachments, deferred));
+		try {
+			assertEquals(ByteBufUtil.hexDump(viaBuffer), ByteBufUtil.hexDump(viaDeferred));
+			int attachmentsLength = AttachmentsCodec.encodedLength(attachments, ProtocolConstants.DEFAULT_MAX_ATTACHMENTS_LENGTH);
+			assertEquals(ProtocolConstants.HEADER_LENGTH + attachmentsLength + deferred.length(), viaDeferred.readableBytes(),
+					"the precomputed envelope length is exact");
+		} finally {
+			viaBuffer.release();
+			viaDeferred.release();
+		}
+	}
+
+	@Test
+	void deferredRequestValidatesLikeWriteRequest() {
+		assertThrows(IllegalArgumentException.class,
+				() -> EnvelopeCodec.request("s", "", "", "m", "", java.util.Collections.nCopies(256, (byte[]) null)));
+		assertThrows(IllegalArgumentException.class, () -> EnvelopeCodec.request("x".repeat(65536), "", "", "m", "", List.of()));
+	}
 }

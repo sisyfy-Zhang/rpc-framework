@@ -27,6 +27,15 @@ final class MarkdownReport {
 	 * @param runsByProfile 卡片 id → 该卡的运行（JSON 与文件名），已按开始时间排序
 	 */
 	static String renderSummary(Map<String, List<Map.Entry<String, Map<?, ?>>>> runsByProfile) {
+		return renderSummary(runsByProfile, List.of());
+	}
+
+	/**
+	 * @param crossval 交叉验证结果（{@code crossval} 子命令写出的 JSON，按创建时间排序）：在汇总末尾加"交叉验证判定"一节——
+	 *        每份结果的 PASS/FAIL 与逐项判定，作为同一 sha 下 harness 可信度的证据
+	 */
+	static String renderSummary(Map<String, List<Map.Entry<String, Map<?, ?>>>> runsByProfile,
+			List<Map.Entry<String, Map<?, ?>>> crossval) {
 		StringBuilder md = new StringBuilder();
 		md.append("# 压测报告汇总\n\n");
 		md.append("由 `rpc-bench-e2e report` 从 JSON 结果文件生成；每个数字都可在对应 JSON 中找到。\n\n");
@@ -48,7 +57,50 @@ final class MarkdownReport {
 				}
 			}
 		});
+		if (!crossval.isEmpty()) {
+			crossvalSection(md, crossval);
+		}
 		return md.toString();
+	}
+
+	private static void crossvalSection(StringBuilder md, List<Map.Entry<String, Map<?, ?>>> results) {
+		md.append("## 交叉验证判定\n\n");
+		md.append("harness 与 wrk / wrk2 打同一个 HTTP 目标的比较结果（`crossval` 子命令），口径见 docs/benchmarking.md「交叉验证」。\n\n");
+		md.append("| 结果文件 | 模式 | 工具 | harness 结果 | 判定 |\n|---|---|---|---|---|\n");
+		for (Map.Entry<String, Map<?, ?>> e : results) {
+			Map<?, ?> json = e.getValue();
+			md.append("| [").append(e.getKey()).append("](#").append(anchor(e.getKey())).append(") | ")
+					.append(str(json.get("mode"))).append(" (").append(str(json.get("kind"))).append(") | ")
+					.append(str(path(json, "tool", "name"))).append(" | ").append(str(path(json, "harness", "file"))).append(" | **")
+					.append(str(json.get("verdict"))).append("** |\n");
+		}
+		md.append('\n');
+		for (Map.Entry<String, Map<?, ?>> e : results) {
+			Map<?, ?> json = e.getValue();
+			md.append("### ").append(e.getKey()).append("\n\n");
+			md.append("> 判定：**").append(str(json.get("verdict"))).append("** · 创建于 ").append(str(json.get("created_at")))
+					.append(" · harness：`").append(str(path(json, "harness", "file"))).append("`（git ")
+					.append(shortSha(path(json, "harness", "git_sha"))).append(dirty(path(json, "harness", "git_dirty")))
+					.append("）· 工具命令：").append(code(blankAsDash(path(json, "tool", "command")))).append("\n\n");
+			if (json.get("question") != null) {
+				md.append("**问题**：").append(str(json.get("question"))).append("\n\n");
+			}
+			md.append("| 组 | 判据 | 实测 | 相对偏差 | 结果 |\n|---|---|---|---|---|\n");
+			for (Object item : list(json.get("checks"))) {
+				Map<?, ?> check = map(item);
+				md.append("| ").append(cell(check.get("group"))).append(" | ").append(cell(check.get("criterion"))).append(" | ")
+						.append(cell(check.get("measured"))).append(" | ")
+						.append(check.get("rel_dev_pct") instanceof Number ? num(check.get("rel_dev_pct"), 1) + "%" : "—").append(" | ")
+						.append(Boolean.TRUE.equals(check.get("passed")) ? "通过" : Boolean.FALSE.equals(check.get("passed")) ? "**未通过**" : "—")
+						.append(" |\n");
+			}
+			md.append('\n');
+		}
+	}
+
+	/** 表格单元格：竖线转义、换行压成空格。 */
+	private static String cell(Object value) {
+		return str(value).replace("|", "\\|").replace('\n', ' ');
 	}
 
 	private static void section(StringBuilder md, Map<?, ?> json, String fileName, int level, String titleOverride) {

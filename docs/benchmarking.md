@@ -27,6 +27,8 @@
 mvn -pl rpc-bench-e2e -am package -DskipTests
 ```
 
+`-DskipTests` 同时跳过 JaCoCo（根 pom 里 `jacoco.skip` 缺省取 `skipTests`），`install` / `verify` 也不需要再加 `-Djacoco.skip=true`。
+
 产物是 `rpc-bench-e2e/target/classes` 与 `rpc-bench-e2e/target/lib/*`（`maven-dependency-plugin` 在 package 阶段复制运行时依赖，不打 fat jar），
 `bench/bin/*.sh` 用这两者拼 classpath。脚本开头 `export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"`，从仓库根目录运行。
 
@@ -155,7 +157,9 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file> [--tool-co
   `bench-server ready port=... pid=...`；收到 SIGTERM / Ctrl-C 后按框架的优雅停机顺序关闭。`--host` 是注册时公布的地址（同机压测用 `127.0.0.1`）。
 - **run**：读卡 → 校验 → 连目标 → 取服务端环境（`environment()`，单独 30s 超时，失败记 `unknown` 不中止）→ 开压前做一次完整回显校验 → 跑 `rounds` 轮 → 写 `<out>/<profile>-<yyyyMMdd-HHmmss>.json`，再从**读回的** JSON
   生成同名 `.md`。`--out` 缺省为归档目录 `bench/reports/<yyyyMMdd>-<sha7>/`（相对仓库根）。`--label` 原样写进报告（冒烟写 `smoke`）。
-- **report**：读目录下（递归）全部 `schema_version: 1` 的结果 JSON，按卡片分节汇总成一份 Markdown；不传 `--out` 时打印到标准输出。读不了或版本不对的文件跳过并在标准错误里列出。
+- **report**：读目录下（递归）全部 `schema_version: 1` 的结果 JSON，按卡片分节汇总成一份 Markdown；目录里的交叉验证结果（`crossval-*.json`，
+  `schema: crossval/*`）汇总到末尾的"交叉验证判定"一节（每份结果的 PASS/FAIL 与逐项判定）。不传 `--out` 时打印到标准输出。
+  读不了或版本不对的文件跳过并在标准错误里列出。
 - **`server --http-port <p>`**（缺省关闭）：在同一进程、独立端口起 HTTP/1.1 对照端点（Netty `HttpServerCodec` + `HttpObjectAggregator`
   8MiB，keep-alive，业务在 IO 线程上完成）：`POST /echo` 原样返回请求体（`application/octet-stream`），`GET /ping` 返回 `ok`，
   `GET /environment` 返回服务端环境 JSON；其它路径 404、方法不对 405。ready 行末尾多一个 `http_port=<p>`。
@@ -315,13 +319,17 @@ bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
 mvn -q -pl rpc-bench-e2e -am package -DskipTests
 bash bench/bin/crossval.sh --mode open      # 测量校验：crossval-http-open-v1 vs wrk2 -R 5000 -U
 bash bench/bin/crossval.sh --mode closed    # 容量标定：crossval-http-closed-capacity-v1 vs wrk
+# 归档：输出到该 sha 的归档目录，与同一 sha 的压测结果放在一起（--label 缺省 crossval）
+bash bench/bin/crossval.sh --mode open --out bench/reports/<yyyyMMdd>-<sha7>
 ```
 
 `crossval.sh` 起 `bench server --port 19100 --http-port 19180 --no-registry`（`BENCH_SERVER_CPUS`，缺省 0-4）→ harness 跑对应的卡
-（`BENCH_CLIENT_CPUS`，缺省 5-9，`--label crossval`；每轮统计窗口自带 CPU 采样）→ 停 harness 后用工具打同一 URL（`taskset -c 5-9`）：先预热 20s
+（`BENCH_CLIENT_CPUS`，缺省 5-9，`--label` 透传，缺省 `crossval`；每轮统计窗口自带 CPU 采样）→ 停 harness 后用工具打同一 URL（`taskset -c 5-9`）：先预热 20s
 跑一次丢弃，再测 40s（与卡片的统计窗口等长），测量运行中段采样一次 `/proc/stat`。wrk：`-t 4 -c 64 -d 40s --latency -s bench/bin/post-1k.lua`；
 wrk2 另加 `-R 5000 -U`（`-U` 让同一次运行同时输出修正后与未修正分布）。`post-1k.lua` POST 固定的 1024 字节请求体。最后调用 `crossval`
-子命令写 `crossval-<mode>-<时间>.json` / `.md`，缺省输出到 `target/crossval/`（被 .gitignore 忽略）。**交叉验证报告不进 `bench/reports`**。
+子命令写 `crossval-<mode>-<时间>.json` / `.md`（`--out`，缺省 `target/crossval/`，被 .gitignore 忽略）。**正式的交叉验证结果进该 sha 的归档目录**
+`bench/reports/<yyyyMMdd>-<sha7>/`（`--out` 指向它），作为该 sha 下 harness 可信度的证据：`bench-report.sh` 汇总时在"交叉验证判定"一节列出
+每份结果的判定与逐项数字。调试脚本时的试跑留在缺省的 `target/crossval/`。
 
 ### 开环判定（测量校验）
 
