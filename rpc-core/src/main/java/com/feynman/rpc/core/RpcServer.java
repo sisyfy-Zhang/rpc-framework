@@ -364,6 +364,14 @@ public final class RpcServer implements AutoCloseable {
 	}
 
 	/**
+	 * 当前已接受、尚未关闭的入站连接数。只读，用于观测（指标的连接数 Gauge）与测试；未启动或已关闭时为 0。
+	 */
+	public int activeConnections() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.activeConnections();
+	}
+
+	/**
 	 * 正在业务执行器线程上运行的任务数（不含排队中的、不含业务方法已返回 future 正在等待完成的）。
 	 * 服务端异步到底的可观测证据：业务返回未完成的 future 后它应立即回落。
 	 */

@@ -22,8 +22,9 @@ import com.tngtech.archunit.lang.ArchRule;
 
 /**
  * A0-8 的扩展：把 rpc-core 的"无 static 非 final 字段 / 无可变静态容器"两条规则扩展到两个注册中心模块
- * （rpc-registry-zookeeper、rpc-registry-nacos）与两个序列化模块（rpc-serialize-protobuf、rpc-serialize-fastjson2，
- * 含放在 {@code io.protostuff.runtime} 包里的 AllowlistIdStrategy 副本）。为什么在这里统一挂：本模块依赖了全部实现模块，
+ * （rpc-registry-zookeeper、rpc-registry-nacos）、两个序列化模块（rpc-serialize-protobuf、rpc-serialize-fastjson2，
+ * 含放在 {@code io.protostuff.runtime} 包里的 AllowlistIdStrategy 副本）与指标模块（rpc-metrics-micrometer，
+ * {@code com.feynman.rpc.metrics}）。为什么在这里统一挂：本模块依赖了全部实现模块，
  * 不需要给每个模块单独加 ArchUnit 依赖；规则与 core 的同义（谓词在本类重新声明——core 的规则类在 core 的 test 源码里，
  * 不随 jar 发布）。
  *
@@ -36,7 +37,7 @@ import com.tngtech.archunit.lang.ArchRule;
  * </ul>
  * {@code ExtensionModuleArchitectureRuleSelfTest} 证明这两条规则对这些包里的违规代码确实会失败、白名单只放行那一个字段。
  */
-@AnalyzeClasses(packages = { "com.feynman.rpc.registry", "com.feynman.rpc.serialize", "io.protostuff.runtime" },
+@AnalyzeClasses(packages = { "com.feynman.rpc.registry", "com.feynman.rpc.serialize", "com.feynman.rpc.metrics", "io.protostuff.runtime" },
 		importOptions = ImportOption.DoNotIncludeTests.class)
 class ExtensionModuleArchitectureTest {
 
@@ -44,9 +45,10 @@ class ExtensionModuleArchitectureTest {
 
 	/** 被检查的类：两个注册中心模块、两个序列化模块，以及 io.protostuff.runtime 里我们自己的那个副本（不含 Protostuff 库本身）。 */
 	static final DescribedPredicate<JavaClass> IN_EXTENSION_MODULES = DescribedPredicate.describe(
-			"belong to rpc-registry-zookeeper / rpc-registry-nacos / rpc-serialize-protobuf / rpc-serialize-fastjson2",
+			"belong to rpc-registry-zookeeper / rpc-registry-nacos / rpc-serialize-protobuf / rpc-serialize-fastjson2 / rpc-metrics-micrometer",
 			clazz -> clazz.getName().startsWith("com.feynman.rpc.registry.")
 					|| clazz.getName().startsWith("com.feynman.rpc.serialize.")
+					|| clazz.getName().startsWith("com.feynman.rpc.metrics.")
 					|| clazz.getName().equals("io.protostuff.runtime.AllowlistIdStrategy")
 					|| clazz.getName().startsWith("io.protostuff.runtime.AllowlistIdStrategy$"));
 
@@ -96,6 +98,8 @@ class ExtensionModuleArchitectureTest {
 				"com.feynman.rpc.serialize.protobuf.ProtobufSerializer",
 				"com.feynman.rpc.serialize.protobuf.TypeSchemas",
 				"com.feynman.rpc.serialize.fastjson2.Fastjson2Serializer",
+				"com.feynman.rpc.metrics.micrometer.MicrometerServerFilter",
+				"com.feynman.rpc.metrics.micrometer.PrometheusEndpoint",
 				"io.protostuff.runtime.AllowlistIdStrategy")) {
 			assertTrue(classes.contain(name), "production class not imported: " + name);
 		}

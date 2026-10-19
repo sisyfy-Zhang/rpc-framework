@@ -52,6 +52,9 @@ java -cp "$CP" com.feynman.rpc.examples.plain.PlainProvider
 java -cp "$CP" com.feynman.rpc.examples.plain.PlainConsumer
 ```
 
+`PlainProvider` 可选 `--metrics-port <p>`（如 `PlainProvider localhost:2181 9100 --metrics-port 9466`）：记录调用指标并在
+`http://localhost:<p>/metrics` 暴露 Prometheus 抓取端点，`docker/` 里的 Prometheus 已预置抓取 9466（见 [docs/observability.md](../docs/observability.md)）。
+
 预期：provider 打印 `Registered com.feynman.rpc.examples.api.UserFacade::default at <本机地址>:9000`；
 consumer 打印 `Remote saveUser returned User{id=1, name=zzz}` 后退出；provider 同时打印
 `UserServiceImpl.save called with User{id=1, name=zzz}`。纯 Java consumer 输出三行：剩余库存、购买者列表、库存不足异常。

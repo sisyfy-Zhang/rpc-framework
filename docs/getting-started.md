@@ -14,7 +14,7 @@
 4. [定义接口与 DTO（以及要遵守的约束）](#4-定义接口与-dto)
 5. [provider：实现并暴露服务](#5-provider)
 6. [consumer：注入并调用](#6-consumer)
-7. [验证调用](#7-验证调用)
+7. [验证调用](#7-验证调用)（[7.1 指标](#71-指标)）
 8. [上线前再看一眼](#8-上线前再看一眼)
 9. [常见错误对照表](#9-常见错误对照表)
 
@@ -497,7 +497,24 @@ logging:
 
 `@RpcReference` 的属性：`version`、`group`（与 `@RpcService` 对应）、`timeout`（毫秒，整次调用含重试的总预算，0 = 用
 `rpc.client.default-timeout`）、`retries`（缺省 0；只对传输失败重试，只给幂等方法开）、`inheritDeadline`（缺省 true：
-在服务端业务里发起的下游调用自动取上游剩余时间与自身超时的较小者）。
+在服务端业务里发起的下游调用自动取上游剩余时间与自身超时的较小者）、`awaitProvidersMs`（缺省 0，见下一小节）。
+
+### 6.1 启动时等待提供者出现（awaitProvidersMs）
+
+provider 的"注册完成"不等于 consumer 的"已经看到它"：consumer 若比 provider 先启动、先订阅，新节点要靠注册中心推送才进入
+它的提供者列表，推送可能晚于启动后的第一次调用，那次调用就以 `No available provider` 失败（背景见
+[踩坑档案第 29 条](pitfalls.md#29-registered--discovered提供者注册完成不等于消费者已经看到它)）。缺省行为不变：注入立即完成，
+没有提供者的调用快速失败，由调用方自己决定重试与降级。
+
+需要"启动完成即可用"时，给引用加上等待上限：
+
+- Boot：`@RpcReference(timeout = 3000, awaitProvidersMs = 10000)`——注入时阻塞到该服务至少有一个提供者，最多 10 秒；
+  超时抛 `RpcException`（消息含服务名与等待时长），bean 创建失败、应用启动失败。容器 refresh 会因此最多多等这么久。
+- 纯 Java：`client.reference(UserFacade.class, ReferenceOptions.defaults().awaitProviders(Duration.ofSeconds(10)))`，
+  语义相同；超时后 `RpcClient` 照常可用、可 `close()`，订阅保留，之后的推送照常生效。
+
+等待由注册中心推送唤醒，不轮询；提供者已经可见时立即返回。它只保证"返回时至少看到一个提供者"，不保证之后一直有——
+提供者全部下线时调用仍按原样快速失败。
 
 ## 7. 验证调用
 
@@ -527,6 +544,60 @@ INFO  [main] com.feynman.rpc.core.RpcClient : RpcClient closed in 123ms (all in-
 
 ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`，节点数据是
 `weight=1&proto=2&ts=...&pid=...` 形式的元数据。停掉 provider（Ctrl+C）后节点立即消失。
+
+### 7.1 指标
+
+可选。`rpc-metrics-micrometer` 把每次调用记成 Micrometer Timer（`rpc.client.calls` / `rpc.server.calls`，tag 为 `service`、`method`、`status`），
+在途与连接数记成 Gauge；指标名、tag 取值与 PromQL 见 [observability.md](observability.md)。
+
+**Boot 应用**：加下面三个依赖，再在配置里暴露 Prometheus 端点（`management.endpoints.web.exposure.include` 加上 `prometheus`）。
+容器里有 `MeterRegistry`（Actuator 提供）时 starter 自动注册两个指标 Filter 并绑定 Gauge，不用写代码；`rpc.metrics.enabled: false` 关闭。
+
+```xml
+<dependency>
+  <groupId>com.feynman.rpc</groupId>
+  <artifactId>rpc-metrics-micrometer</artifactId>
+  <version>${rpc.version}</version>
+</dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+<dependency>
+  <groupId>io.micrometer</groupId>
+  <artifactId>micrometer-registry-prometheus</artifactId>
+</dependency>
+```
+
+抓取地址是 `http://<host>:<management 端口>/actuator/prometheus`。
+
+**纯 Java**：Filter 在 builder 上加，Gauge 用 `RpcServerMetrics.bind` / `RpcClientMetrics.bind` 绑定。下面是 `PlainProvider` 的写法
+（`--metrics-port 9466` 运行它，就能被 [docker/](../docker/README.md) 里预置的 Prometheus 抓到）：
+
+```java
+	public static RpcServer startWithMetrics(String zookeeper, String host, int port, MeterRegistry registry) {
+		RpcServer server = RpcServer.builder()
+				.port(port)
+				.host(host)
+				.registry(RegistryConfig.zookeeper(zookeeper))
+				.serializer("protobuf")
+				.shutdownTimeout(Duration.ofSeconds(10))
+				.serverFilter(new MicrometerServerFilter(registry))   // 每次调用记 Timer rpc.server.calls
+				.build();
+		RpcServerMetrics.bind(server, registry);                   // Gauge rpc.server.inflight / rpc.server.connections
+		server.export(InventoryService.class, new InventoryServiceImpl());
+		server.start();
+		return server;
+	}
+```
+
+没有 Web 框架的进程用 `PrometheusEndpoint`（JDK 自带的 HttpServer）暴露 `/metrics`，需要额外带上 `micrometer-registry-prometheus`：
+
+```java
+		MeterRegistry registry = PrometheusEndpoint.newRegistry();      // 需要 micrometer-registry-prometheus
+		RpcServer server = startWithMetrics(zookeeper(rest), null, port(rest), registry);
+		PrometheusEndpoint endpoint = new PrometheusEndpoint(metricsPort, registry);   // http://<本机>:<metricsPort>/metrics
+```
 
 ## 8. 上线前再看一眼
 

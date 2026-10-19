@@ -1,0 +1,494 @@
+package com.feynman.rpc.bench;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.error.YAMLException;
+
+import com.feynman.rpc.core.extension.ExtensionLoader;
+import com.feynman.rpc.core.serialize.Serializer;
+
+/**
+ * 口径卡 YAML → {@link Profile}。SnakeYAML 只用 {@link SafeConstructor} 加载成 Map / List / 标量（不反序列化到 Bean，
+ * 卡片里的 {@code !!java...} 标签会被拒绝），再逐字段手工映射与校验。
+ *
+ * <p>校验一次收集全部问题，每条带字段路径（{@code load.steady_window[1]: ...}），而不是遇到第一个错就停：
+ * 改卡片的人一次就能看到所有要改的地方。未知字段一律拒绝——拼错的 {@code warm_up} 被静默忽略，
+ * 比直接报错危险得多（卡片以为有预热，实际没有）。
+ */
+final class ProfileLoader {
+
+	private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9._-]*");
+	static final Set<String> REPORT_ITEMS = new LinkedHashSet<>(
+			List.of("throughput", "mean", "p50", "p90", "p95", "p99", "p999", "max", "errors_by_status"));
+	private static final Set<String> SERVICES = Set.of("BenchService#echo", "BenchService#echoOrder");
+	private static final Set<String> PROCESS_KINDS = Set.of("separate_jvm", "same_jvm");
+	/** bytes 负载上限：协议帧上限是 8MiB（请求帧还要装信封与参数），4MiB 以上的回显必然撞线，此处直接拒绝。 */
+	private static final int MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+
+	private ProfileLoader() {
+	}
+
+	/** 读文件并校验；卡片的 {@code profile} 必须等于文件名去掉扩展名。 */
+	static Profile load(Path file) throws IOException {
+		String yaml = Files.readString(file, StandardCharsets.UTF_8);
+		String name = file.getFileName().toString();
+		int dot = name.lastIndexOf('.');
+		String stem = dot > 0 ? name.substring(0, dot) : name;
+		return parse(yaml, stem, file.toString());
+	}
+
+	/**
+	 * @param expectedId 文件名（去扩展名）；null 表示不校验一致性（只用于测试解析本身）
+	 */
+	static Profile parse(String yaml, String expectedId, String source) {
+		List<String> problems = new ArrayList<>();
+		Object root;
+		try {
+			LoaderOptions options = new LoaderOptions();
+			options.setAllowDuplicateKeys(false);
+			options.setMaxAliasesForCollections(10);
+			options.setAllowRecursiveKeys(false);
+			root = new Yaml(new SafeConstructor(options)).load(yaml);
+		} catch (YAMLException e) {
+			throw new ProfileException(source, List.of("(yaml): " + e.getMessage().replace('\n', ' ')));
+		}
+		if (!(root instanceof Map<?, ?>)) {
+			throw new ProfileException(source, List.of("(root): expected a mapping, got " + typeName(root)));
+		}
+		Section top = new Section("", (Map<?, ?>) root, problems);
+		top.allowOnly("profile", "question", "target", "load", "isolation", "measure", "assert");
+
+		String id = top.string("profile", true);
+		if (id != null && !ID.matcher(id).matches()) {
+			problems.add("profile: \"" + id + "\" must match " + ID.pattern());
+		}
+		if (id != null && expectedId != null && !id.equals(expectedId)) {
+			problems.add("profile: \"" + id + "\" must equal the file name without extension (\"" + expectedId + "\")");
+		}
+		String question = top.string("question", true);
+
+		Profile.Target target = target(top.section("target", true), problems);
+		Profile.Load load = load(top.section("load", true), problems);
+		Profile.Isolation isolation = isolation(top.section("isolation", true), problems);
+		Profile.Measure measure = measure(top.section("measure", true), problems, load);
+		List<Profile.Assertion> assertions = assertions(top.section("assert", false), problems);
+
+		if (!problems.isEmpty()) {
+			throw new ProfileException(source, problems);
+		}
+		return new Profile(id, question, target, load, isolation, measure, assertions, yaml);
+	}
+
+	private static Profile.Target target(Section s, List<String> problems) {
+		if (s == null) {
+			return null;
+		}
+		s.allowOnly("transport", "service", "payload", "serializer", "providers", "http");
+		String transport = s.oneOf("transport", true, Set.of(Profile.TRANSPORT_RPC, Profile.TRANSPORT_HTTP));
+		boolean http = Profile.TRANSPORT_HTTP.equals(transport);
+		String service = s.oneOf("service", true, SERVICES);
+		String method = service == null ? null : service.substring(service.indexOf('#') + 1);
+		Section payload = s.section("payload", true);
+		String kind = null;
+		int size = 0;
+		if (payload != null) {
+			payload.allowOnly("kind", "size");
+			kind = payload.oneOf("kind", true, Set.of("bytes", "order"));
+			if ("bytes".equals(kind)) {
+				Integer n = payload.integer("size", true, 1, MAX_PAYLOAD_BYTES);
+				size = n == null ? 0 : n;
+			} else if ("order".equals(kind) && payload.has("size")) {
+				problems.add("target.payload.size: only applies to kind = bytes (the order fixture has a fixed shape)");
+			}
+			if ("echo".equals(method) && "order".equals(kind) || "echoOrder".equals(method) && "bytes".equals(kind)) {
+				problems.add("target.payload.kind: \"" + kind + "\" does not match target.service " + service
+						+ " (echo takes bytes, echoOrder takes order)");
+			}
+			if (http && "order".equals(kind)) {
+				problems.add("target.payload.kind: transport = http only takes bytes (the HTTP body is the raw payload, "
+						+ "there is no serializer to encode an order)");
+			}
+		}
+		if (http) {
+			return httpTarget(s, problems, transport, service, method, kind, size);
+		}
+		if (s.has("http")) {
+			problems.add("target.http: only applies to transport = http (an rpc card is addressed with --direct / --registry)");
+		}
+		Set<String> serializers = ExtensionLoader.getExtensionLoader(Serializer.class).getSupportedExtensions();
+		String serializer = s.oneOf("serializer", true, serializers);
+		Integer providers = s.integer("providers", true, 1, 1024);
+		return new Profile.Target(transport, service, method, kind, size, serializer, providers == null ? 0 : providers, null, 0);
+	}
+
+	/**
+	 * {@code transport = http}：目标是 {@code target.http.url}（{@code bench server --http-port} 的 {@code POST /echo}，
+	 * 或任何原样回显请求体的 HTTP/1.1 端点）。没有序列化器、只有一个 URL，所以 {@code serializer} / {@code providers}
+	 * 不适用、写了就拒绝（卡片上不该出现不起作用的字段）。
+	 */
+	private static Profile.Target httpTarget(Section s, List<String> problems, String transport, String service, String method,
+			String kind, int size) {
+		if (s.has("serializer")) {
+			problems.add("target.serializer: does not apply to transport = http (the body is the raw payload bytes)");
+		}
+		if (s.has("providers")) {
+			problems.add("target.providers: does not apply to transport = http (the target is a single URL)");
+		}
+		Section http = s.section("http", false);
+		if (http == null) {
+			if (!s.has("http")) {
+				problems.add("target.http: required when transport = http ({ url: http://host:port/echo, connections: 64 })");
+			}
+			return new Profile.Target(transport, service, method, kind, size, null, 1, null, Profile.DEFAULT_HTTP_CONNECTIONS);
+		}
+		http.allowOnly("url", "connections");
+		String url = http.string("url", true);
+		if (url != null) {
+			String problem = httpUrlProblem(url);
+			if (problem != null) {
+				problems.add("target.http.url: " + problem);
+				url = null;
+			}
+		}
+		Integer connections = http.has("connections") ? http.integer("connections", false, 1, 100_000) : null;
+		return new Profile.Target(transport, service, method, kind, size, null, 1, url,
+				connections == null ? Profile.DEFAULT_HTTP_CONNECTIONS : connections);
+	}
+
+	/** null = 合法：{@code http://host[:port]/path}，不支持 https（压的是明文 HTTP/1.1，与 wrk 对照）。 */
+	static String httpUrlProblem(String url) {
+		java.net.URI uri;
+		try {
+			uri = new java.net.URI(url);
+		} catch (java.net.URISyntaxException e) {
+			return "\"" + url + "\" is not a valid URI (" + e.getReason() + ")";
+		}
+		if (!"http".equalsIgnoreCase(uri.getScheme())) {
+			return "\"" + url + "\" must start with http:// (plain HTTP/1.1 only)";
+		}
+		if (uri.getHost() == null || uri.getHost().isBlank()) {
+			return "\"" + url + "\" has no host";
+		}
+		if (uri.getRawPath() == null || uri.getRawPath().isEmpty()) {
+			return "\"" + url + "\" has no path (e.g. /echo)";
+		}
+		return null;
+	}
+
+	private static Profile.Load load(Section s, List<String> problems) {
+		if (s == null) {
+			return null;
+		}
+		s.allowOnly("model", "concurrency", "rate", "duration", "warmup", "steady_window", "rounds", "timeout");
+		String model = s.oneOf("model", true, Set.of(Profile.MODEL_CLOSED, Profile.MODEL_OPEN));
+		// 另一种模型的字段可以出现（例如卡片同时写了 concurrency 与 rate），只记录不使用
+		Integer concurrency = s.integer("concurrency", false, 1, 100_000);
+		if (Profile.MODEL_CLOSED.equals(model) && s.raw("concurrency") == null) {
+			problems.add("load.concurrency: required when load.model = closed");
+		}
+		Integer rate = s.integer("rate", false, 1, 10_000_000);
+		if (Profile.MODEL_OPEN.equals(model) && s.raw("rate") == null) {
+			problems.add("load.rate: required when load.model = open");
+		}
+		Duration duration = s.duration("duration", true);
+		Duration warmup = s.durationAllowZero("warmup", true);
+		Duration windowStart = null;
+		Duration windowEnd = null;
+		Object window = s.raw("steady_window");
+		if (window == null) {
+			problems.add("load.steady_window: required ([start, end] relative to the round start)");
+		} else if (!(window instanceof List<?> list) || list.size() != 2) {
+			problems.add("load.steady_window: expected a list of two durations [start, end], got " + describe(window));
+		} else {
+			windowStart = s.durationValue("steady_window[0]", list.get(0), true);
+			windowEnd = s.durationValue("steady_window[1]", list.get(1), false);
+		}
+		Integer rounds = s.integer("rounds", true, 1, 100);
+		Duration timeout = s.duration("timeout", true);
+
+		if (duration != null && warmup != null && warmup.compareTo(duration) >= 0) {
+			problems.add("load.warmup: " + Durations.format(warmup) + " must be shorter than load.duration " + Durations.format(duration));
+		}
+		if (windowStart != null && windowEnd != null) {
+			if (windowStart.compareTo(windowEnd) >= 0) {
+				problems.add("load.steady_window: start " + Durations.format(windowStart) + " must be before end " + Durations.format(windowEnd));
+			}
+			if (warmup != null && windowStart.compareTo(warmup) < 0) {
+				problems.add("load.steady_window[0]: " + Durations.format(windowStart) + " starts inside the warmup (" + Durations.format(warmup)
+						+ "); the window must begin at or after load.warmup");
+			}
+			if (duration != null && windowEnd.compareTo(duration) > 0) {
+				problems.add("load.steady_window[1]: " + Durations.format(windowEnd) + " ends after load.duration " + Durations.format(duration));
+			}
+		}
+		if (rate != null && timeout != null && Profile.MODEL_OPEN.equals(model)) {
+			double cap = (double) rate * timeout.toNanos() / 1e9 * 2;
+			if (cap > 5_000_000) {
+				problems.add("load: rate x timeout x 2 = " + (long) cap + " in-flight calls would be allowed; lower rate or timeout");
+			}
+		}
+		return new Profile.Load(model, concurrency, rate, duration, warmup, windowStart, windowEnd, rounds == null ? 0 : rounds, timeout);
+	}
+
+	private static Profile.Isolation isolation(Section s, List<String> problems) {
+		if (s == null) {
+			return null;
+		}
+		s.allowOnly("client_process", "server_process", "same_host", "registry");
+		String client = s.oneOf("client_process", true, PROCESS_KINDS);
+		String server = s.oneOf("server_process", true, PROCESS_KINDS);
+		Boolean sameHost = s.bool("same_host", true);
+		String registry = s.string("registry", true);
+		return new Profile.Isolation(client, server, Boolean.TRUE.equals(sameHost), registry);
+	}
+
+	private static Profile.Measure measure(Section s, List<String> problems, Profile.Load load) {
+		if (s == null) {
+			return null;
+		}
+		s.allowOnly("histogram", "report");
+		Section histogram = s.section("histogram", true);
+		Integer digits = null;
+		Duration max = null;
+		if (histogram != null) {
+			histogram.allowOnly("significant_digits", "max");
+			digits = histogram.integer("significant_digits", true, 1, 5);
+			max = histogram.duration("max", true);
+			if (max != null && load != null && load.timeout() != null && max.compareTo(load.timeout()) <= 0) {
+				problems.add("measure.histogram.max: " + Durations.format(max) + " must exceed load.timeout " + Durations.format(load.timeout())
+						+ " (a call can take up to the timeout)");
+			}
+		}
+		List<String> report = new ArrayList<>();
+		Object raw = s.raw("report");
+		if (raw == null) {
+			problems.add("measure.report: required (subset of " + REPORT_ITEMS + ")");
+		} else if (!(raw instanceof List<?> list) || list.isEmpty()) {
+			problems.add("measure.report: expected a non-empty list, got " + describe(raw));
+		} else {
+			for (int i = 0; i < list.size(); i++) {
+				Object item = list.get(i);
+				if (!(item instanceof String name) || !REPORT_ITEMS.contains(name)) {
+					problems.add("measure.report[" + i + "]: " + describe(item) + " is not one of " + REPORT_ITEMS);
+				} else if (report.contains(name)) {
+					problems.add("measure.report[" + i + "]: duplicate \"" + name + "\"");
+				} else {
+					report.add(name);
+				}
+			}
+		}
+		return new Profile.Measure(digits == null ? 0 : digits, max, List.copyOf(report));
+	}
+
+	private static List<Profile.Assertion> assertions(Section s, List<String> problems) {
+		List<Profile.Assertion> result = new ArrayList<>();
+		if (s == null) {
+			return result;
+		}
+		s.allowOnly("errors_max", "throughput_min", "p50_max", "p95_max", "p99_max", "p999_max", "max_max");
+		for (Object rawKey : s.map.keySet()) {
+			String key = String.valueOf(rawKey);
+			switch (key) {
+				case "errors_max" -> {
+					Integer n = s.integer(key, true, 0, Integer.MAX_VALUE);
+					if (n != null) {
+						result.add(new Profile.Assertion(key, "errors", true, n, String.valueOf(n)));
+					}
+				}
+				case "throughput_min" -> {
+					Integer n = s.integer(key, true, 0, Integer.MAX_VALUE);
+					if (n != null) {
+						result.add(new Profile.Assertion(key, "throughput", false, n, n + " req/s"));
+					}
+				}
+				case "p50_max", "p95_max", "p99_max", "p999_max", "max_max" -> {
+					Duration d = s.duration(key, true);
+					if (d != null) {
+						result.add(new Profile.Assertion(key, key.substring(0, key.length() - 4), true, Durations.millis(d),
+								Durations.format(d)));
+					}
+				}
+				default -> {
+					// allowOnly 已报告
+				}
+			}
+		}
+		return result;
+	}
+
+	static String describe(Object value) {
+		return value == null ? "nothing" : typeName(value) + " " + value;
+	}
+
+	private static String typeName(Object value) {
+		if (value == null) {
+			return "null";
+		}
+		if (value instanceof Map<?, ?>) {
+			return "mapping";
+		}
+		if (value instanceof List<?>) {
+			return "list";
+		}
+		if (value instanceof String) {
+			return "string";
+		}
+		if (value instanceof Number) {
+			return "number";
+		}
+		if (value instanceof Boolean) {
+			return "boolean";
+		}
+		return value.getClass().getSimpleName();
+	}
+
+	/** 一个 mapping 节点 + 它的路径前缀；取值时类型 / 范围不对就记一条问题并返回 null。 */
+	private static final class Section {
+		final String path;
+		final Map<?, ?> map;
+		final List<String> problems;
+
+		Section(String path, Map<?, ?> map, List<String> problems) {
+			this.path = path;
+			this.map = map;
+			this.problems = problems;
+		}
+
+		String at(String key) {
+			return path.isEmpty() ? key : path + "." + key;
+		}
+
+		boolean has(String key) {
+			return map.containsKey(key);
+		}
+
+		Object raw(String key) {
+			return map.get(key);
+		}
+
+		void allowOnly(String... keys) {
+			Set<String> allowed = Set.of(keys);
+			for (Object key : map.keySet()) {
+				if (!(key instanceof String k) || !allowed.contains(k)) {
+					problems.add(at(String.valueOf(key)) + ": unknown field (allowed: " + String.join(", ", keys) + ")");
+				}
+			}
+		}
+
+		private boolean missing(String key, boolean required) {
+			if (map.get(key) != null) {
+				return false;
+			}
+			if (required) {
+				problems.add(at(key) + ": required");
+			}
+			return true;
+		}
+
+		Section section(String key, boolean required) {
+			if (missing(key, required)) {
+				return null;
+			}
+			Object value = map.get(key);
+			if (!(value instanceof Map<?, ?> m)) {
+				problems.add(at(key) + ": expected a mapping, got " + describe(value));
+				return null;
+			}
+			return new Section(at(key), m, problems);
+		}
+
+		String string(String key, boolean required) {
+			if (missing(key, required)) {
+				return null;
+			}
+			Object value = map.get(key);
+			if (!(value instanceof String s) || s.isBlank()) {
+				problems.add(at(key) + ": expected a non-blank string, got " + describe(value));
+				return null;
+			}
+			return s.trim();
+		}
+
+		String oneOf(String key, boolean required, Set<String> allowed) {
+			String value = string(key, required);
+			if (value != null && !allowed.contains(value)) {
+				problems.add(at(key) + ": \"" + value + "\" is not one of " + new java.util.TreeSet<>(allowed));
+				return null;
+			}
+			return value;
+		}
+
+		Integer integer(String key, boolean required, int min, int max) {
+			if (missing(key, required)) {
+				return null;
+			}
+			Object value = map.get(key);
+			if (!(value instanceof Integer n)) {
+				problems.add(at(key) + ": expected an integer, got " + describe(value));
+				return null;
+			}
+			if (n < min || n > max) {
+				problems.add(at(key) + ": " + n + " is out of range [" + min + ", " + max + "]");
+				return null;
+			}
+			return n;
+		}
+
+		Boolean bool(String key, boolean required) {
+			if (missing(key, required)) {
+				return null;
+			}
+			Object value = map.get(key);
+			if (!(value instanceof Boolean b)) {
+				problems.add(at(key) + ": expected true or false, got " + describe(value));
+				return null;
+			}
+			return b;
+		}
+
+		Duration duration(String key, boolean required) {
+			if (missing(key, required)) {
+				return null;
+			}
+			return durationValue(key, map.get(key), false);
+		}
+
+		Duration durationAllowZero(String key, boolean required) {
+			if (missing(key, required)) {
+				return null;
+			}
+			return durationValue(key, map.get(key), true);
+		}
+
+		Duration durationValue(String key, Object value, boolean allowZero) {
+			if (!(value instanceof String text)) {
+				problems.add(at(key) + ": expected a duration with a unit (e.g. 500ms, 20s, 1m), got " + describe(value));
+				return null;
+			}
+			try {
+				Duration d = Durations.parse(text);
+				if (d.isZero() && !allowZero) {
+					problems.add(at(key) + ": must be greater than zero");
+					return null;
+				}
+				return d;
+			} catch (IllegalArgumentException e) {
+				problems.add(at(key) + ": " + e.getMessage());
+				return null;
+			}
+		}
+	}
+}

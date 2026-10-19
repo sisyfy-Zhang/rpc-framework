@@ -29,6 +29,15 @@
       <groupId>com.feynman.rpc</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
     </dependency>
+    <!-- PlainProvider 的可选 metrics-port 选项：服务端指标 Filter / Gauge 与内嵌 Prometheus 抓取端点 -->
+    <dependency>
+      <groupId>com.feynman.rpc</groupId>
+      <artifactId>rpc-metrics-micrometer</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
     <!-- 仅供 EmbeddedZooKeeper（本机试跑示例时代替真实 ZooKeeper）；optional：不会传递给依赖本模块的工程 -->
     <dependency>
       <groupId>org.apache.curator</groupId>

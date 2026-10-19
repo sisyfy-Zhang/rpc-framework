@@ -1,0 +1,28 @@
+# 口径卡（harness 校验卡）：不是框架的性能卡。同一个 HTTP 目标（bench server --http-port 的 POST /echo）分别用 harness 与
+# wrk 打，做闭环发压容量标定：两边各自的吞吐上限与瓶颈侧（CPU 采样判别），见 docs/benchmarking.md「交叉验证」。
+# 由 bench/bin/crossval.sh --mode closed 驱动；改动口径请复制成新 id（-v2），不要原地改。
+profile: crossval-http-closed-capacity-v1
+question: 标定 harness 闭环发压上限与服务端上限（64 连接、1KB）
+target:
+  transport: http
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  http: { url: "http://127.0.0.1:19180/echo", connections: 64 }
+load:
+  model: closed
+  concurrency: 64
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 60s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (direct HTTP URL)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

@@ -358,3 +358,60 @@ java.lang.NoSuchFieldError: Class com.fasterxml.jackson.annotation.JsonFormat$Fe
 **教训**：
 - "部分 shade"的库最危险：被 shade 的部分自带版本，没 shade 的部分仍参与 classpath 仲裁，冲突只在走到那条代码路径时才出现；引入这类库后用 `dependency:tree -Dverbose` 看一眼它的未 shade 依赖有没有被 "omitted for conflict"。
 - 按环境门控跳过的测试在本机等于没跑；CI 门禁断言"必须实跑"才能把这类问题拦下，本机能开 Docker 时也应至少实跑一次。
+
+## 29. registered ≠ discovered：提供者"注册完成"不等于消费者"已经看到它"
+
+**现象**：CI 的 paranoid-leak 作业（`-Dio.netty.leakDetection.level=paranoid`，整体变慢）里，`DeadlinePropagationTest` 在 `@BeforeAll` 的预热调用上偶发失败：`RpcException: No available provider for: ...`。本机与普通 CI 作业一直全绿；测试在发调用前已经 `server.registered().get(...)` 等到注册完成。
+
+**根因**：`RpcServer.registered()` 只覆盖提供者一侧——节点已写进 ZooKeeper。消费者若在提供者注册**之前**就已订阅（测试里 A → B → C 三个服务，B 的构造器里就 `reference` 了 C），它看到新节点要靠 ZK watch 推送，推送经过 Curator 的事件线程到达 `ServiceDirectory` 需要时间；`registered()` 完成与"消费者目录非空"是两个独立事件，中间没有任何先后保证。paranoid 模式把推送拖慢约 10ms，紧随其后的预热调用就撞上了空目录。`reference()` 本身按 Registry 契约不阻塞，空目录的调用按设计快速失败。
+
+**修法**：
+- 测试侧：`rpc-integration-tests` 新增 `it/support/Discovery.awaitProviders(client, itf)`，用 Awaitility 等到 `client.providers(key)` 非空再发第一次调用；`DeadlinePropagationTest` 预热前对每个消费者调用它（提交 18bda15，不改任何断言与产品代码）。
+- 框架侧（D-015）：`ReferenceOptions.awaitProviders(Duration)`（starter 为 `@RpcReference(awaitProvidersMs = ...)`），默认 null 不等待；设置后 `RpcClient.reference()` 在订阅之后阻塞到该服务的提供者视图非空，由 `ServiceDirectory` 的更新路径通过条件变量唤醒（不轮询），超时抛 `RpcException`（消息含 serviceKey 与等待时长）。`RpcClientAwaitProvidersTest`（进程内注册中心）与 `AwaitProvidersTest`（真实 ZK，先订阅后注册）覆盖它。
+
+**教训**：
+- "注册完成"和"被发现"是两个事件，分别发生在提供者与消费者两侧；任何"等 A 完成再做 B"的同步，都要确认 A 与 B 观察的是同一个状态，而不是两个碰巧通常先后发生的状态。
+- 只在慢环境（paranoid、CI 共享机器）暴露的失败多半是竞态，不是环境问题；修法是等正确的条件，而不是加 sleep 或放宽超时。
+- 测试工具先行、框架能力随后：测试里反复出现的"等某个条件"，往往也是使用方会遇到的问题，值得变成正式 API。
+
+## 30. WSL2 墙钟会回跳，gettimeofday 计时的工具会出现负延迟或假超时
+
+**现象**：在 WSL2 上做 harness 交叉验证时，wrk2 跑到一半 abort：`wrk2: src/hdr_histogram.c:54: counts_index: Assertion 'bucket_index < h->bucket_count' failed.`，
+时有时无（同样的命令 15s 一次成功、10s 一次失败）。wrk 闭环一次 10s 运行报 `Socket errors: ... timeout 40`，而它自己的最大延迟只有 108ms，
+远小于 2s 的超时。harness 同时段的数字没有异常。
+
+**根因**：wrk 与 wrk2 的 `time_us()` 都用 `gettimeofday`（墙上时钟，CLOCK_REALTIME）。WSL2 虚拟机会与宿主同步时间，墙上时钟偶尔被
+往回拨几毫秒——本机用一个 45s 的探测循环（比较 `time.time()` 与 `time.monotonic()`）观测到 2 次回拨。回拨那一刻在途的请求算出来的
+"响应时刻 − 发出时刻"是负数：wrk2 把负数交给 HdrHistogram，`bucket_index` 越界触发断言；wrk 的 `now - c->start` 是无符号数，
+下溢成巨大的值，`stats_record` 因超过上限返回 0，被当成 timeout 计数。harness 全程用 `System.nanoTime()`（单调时钟），不受影响。
+
+**修法**：wrk 与 wrk2 的 `time_us()` 改为 `clock_gettime(CLOCK_MONOTONIC)`（只换计时源，不改测量逻辑），补丁存为
+`bench/tools/wrk-monotonic-clock.patch` 与 `bench/tools/wrk2-build-and-clock.patch`，编译步骤见 `bench/tools/README.md`。打补丁后
+wrk2 不再 abort，wrk 的假 timeout 归零。
+
+**教训**：
+- 压测工具链里任何用墙上时钟算时间差的地方都要排查：虚拟机、容器、NTP 校时都会让墙上时钟跳变，出来的不是"偶发的大延迟"，
+  而是负数、溢出、假超时这类说不通的数。时间差一律用单调时钟（Java 的 `nanoTime`，C 的 `CLOCK_MONOTONIC`）。
+- 同一个问题也会出现在容器内依赖 `currentTimeMillis` 的心跳 / 会话超时判断上：时钟回拨可能让超时晚判，前跳可能让健康的连接被误判超时。
+- 第三方工具的"错误"计数不要直接信：先看它与其它指标是否自洽（40 个 timeout 却最大延迟 108ms 就不自洽）。
+
+## 31. wrk2 的发送节拍是毫秒粒度，不能做亚毫秒级开环延迟的参照
+
+**现象**：harness 与 wrk2 以开环 5000 req/s 打同一个本机 HTTP 回显端点（1KB，64 连接），达成吞吐两边都在目标 rate 的 0.1% 以内，
+但延迟差了几倍：harness（从计划时刻计时）p50 0.25ms、p99 0.45ms，wrk2（修正后）p50 0.96ms、p99 1.93ms。按"p50 / p99 相对偏差 ≤ 15%
+或绝对差 ≤ 100µs"判定，交叉验证 FAIL。
+
+**根因**：wrk2 推迟发送时把等待时间向上取整到整毫秒——`src/wrk.c` 第 604 行 `int msec_to_wait = round((time_usec_to_wait / 1000.0L) + 0.5);`，
+再用 `aeCreateTimeEvent(thread->loop, msec_to_wait, ...)` 交给 ae 定时器，而 ae 的定时器本身按毫秒计（`src/ae.c` 的 `aeGetTime`）。
+每个请求都比自己的计划时刻晚发零点几到一毫秒多，wrk2 的"修正后"延迟从计划时刻算，这段自身发送滞后全部计入。用 `-U` 同时输出
+"未修正"分布（从实际发出计时）即可拆开：同一次运行里修正后 p50 0.96ms、未修正 p50 0.148ms，约 0.82ms 是 wrk2 自己的节拍误差；
+harness 的服务时间（从实际执行）p50 0.22ms，发出滞后 p99 只有约 10µs（调度线程最后一段自旋对齐）。
+
+**修法**：开环交叉验证换对比基准（不改阈值）：测量一致性比较 harness 的服务时间与 wrk2 的未修正延迟（两边起点定义一致），节拍质量单独
+约束 harness 的发出滞后 p99 ≤ 100µs，wrk2 的修正后延迟只作信息项并排、注明出处。`crossval.sh` 的 wrk2 测量运行默认带 `-U`。
+口径见 docs/benchmarking.md「交叉验证」。
+
+**教训**：
+- 拿第三方工具做参照之前，先确认它的时间分辨率比被测量小一个数量级以上；"业界标准工具"不等于在任何量级上都是标准。
+- 修正 coordinated omission 的延迟 = 服务时间 + 发送滞后，两项要能分开看：只比合计值，分不清是被测系统慢还是发压端自己晚发。
+- 结论对不上时先拆分量再下判断：这里一个 `-U` 就把"harness 有问题"变成了"参照工具在这个量级不适用"。

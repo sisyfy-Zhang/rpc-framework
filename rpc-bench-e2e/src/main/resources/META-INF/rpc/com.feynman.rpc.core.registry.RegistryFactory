@@ -1,0 +1,2 @@
+# --direct 直连模式：不经注册中心，把命令行给出的 host:port 当作该服务的全部提供者（只读、只支持订阅）
+direct=com.feynman.rpc.bench.DirectRegistryFactory

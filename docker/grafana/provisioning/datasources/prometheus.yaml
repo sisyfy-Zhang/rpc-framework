@@ -1,0 +1,13 @@
+# 预置数据源：面板 JSON 按固定 uid 引用它，换机器、重建容器都不需要重新选数据源。
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: rpc-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

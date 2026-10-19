@@ -1,0 +1,108 @@
+# 证据基础设施：一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy（仅供本机开发与压测取证）。
+#   docker compose -f docker/compose.yaml up -d --wait     # 或 bash docker/verify.sh（起完逐个探测健康端点）
+#   docker compose -f docker/compose.yaml down -v          # 或 bash docker/down.sh
+# 端口与访问方式见 docker/README.md。镜像全部钉具体版本，不用 latest。
+name: rpc-evidence
+
+services:
+  zookeeper:
+    image: zookeeper:3.9.4
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_4LW_COMMANDS_WHITELIST: "srvr,ruok,stat,mntr"
+      ZOO_STANDALONE_ENABLED: "true"
+    healthcheck:
+      # 4lw srvr：服务端真正在服务时输出含 "Mode:" 的状态（standalone / leader / follower）
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q 'Mode:'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    ports:
+      - "8848:8848"   # HTTP / 控制台
+      - "9848:9848"   # gRPC（Nacos 2.x 客户端固定用 HTTP 端口 + 1000，两者必须同偏移映射）
+    environment:
+      MODE: standalone
+      PREFER_HOST_MODE: hostname
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      JVM_XMN: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8848/nacos/v1/console/health/readiness > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Docker Desktop 自带 host.docker.internal；Linux 引擎需要这一行把它指到宿主机网关
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  grafana:
+    image: grafana/grafana:12.4.13
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      # 仅本机使用的口令：不要把这套 compose 暴露到公网或共享网络
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: rpc-local-only
+      # 匿名只读：免登录直接看面板
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/rpc-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    ports:
+      - "8474:8474"                  # 管理 API
+      - "20000-20010:20000-20010"    # 代理监听端口段（场景脚本在这里建代理，见 docker/toxiproxy/）
+    healthcheck:
+      # 镜像只有 toxiproxy / toxiproxy-cli 两个二进制（没有 shell 与 curl）：用 CLI 调一次 API（GET /proxies）判定就绪；
+      # /version 由 verify.sh 从宿主机探测
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 3s
+
+volumes:
+  prometheus-data:
+  grafana-data:

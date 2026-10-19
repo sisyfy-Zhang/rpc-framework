@@ -1,0 +1,28 @@
+# 口径卡（harness 校验卡）：不是框架的性能卡。同一个 HTTP 目标（bench server --http-port 的 POST /echo）分别用 harness 与
+# wrk2 -U 打，校验 harness 的开环发压与测量：达成吞吐、服务时间 vs 未修正延迟、发出滞后（docs/benchmarking.md「交叉验证」）。
+# 由 bench/bin/crossval.sh --mode open 驱动；改动口径请复制成新 id（-v2），不要原地改。
+profile: crossval-http-open-v1
+question: 校验 harness 开环的达成吞吐、服务时间与节拍质量
+target:
+  transport: http
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  http: { url: "http://127.0.0.1:19180/echo", connections: 64 }
+load:
+  model: open
+  rate: 5000
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 60s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (direct HTTP URL)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

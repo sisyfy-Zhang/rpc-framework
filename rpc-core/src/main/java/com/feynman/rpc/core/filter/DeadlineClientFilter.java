@@ -15,7 +15,9 @@ import com.feynman.rpc.core.protocol.AttachmentKeys;
  * 截止时间本身随 Invocation 创建而确定（发起时刻 + 引用超时），Cluster 的重试共享这一份预算；
  * 每次实际发送时 RpcClient 会用那一刻的剩余时间刷新 {@code rpc.timeout}。
  *
- * <p>位置：客户端内置顺序 Tracing(-3000) → Deadline(-2000) → Metrics(-1000) → 用户 Filter(0) → Cluster。
+ * <p>位置：客户端链从外到内 Tracing(-6000，预留) → Metrics(-5000，rpc-metrics-micrometer 已实现) → Deadline(-2000)
+ * → 用户 Filter(0) → Cluster。Metrics 在最外层，计时覆盖整条链、任何 Filter 的拒绝都被计入；Tracing 预留在 Metrics 之外，
+ * 将来需要 exemplar 时，记录指标的那一刻已有 trace 上下文。
  */
 public final class DeadlineClientFilter implements ClientFilter {
 

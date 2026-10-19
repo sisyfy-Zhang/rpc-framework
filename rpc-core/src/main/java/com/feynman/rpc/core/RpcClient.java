@@ -155,6 +155,12 @@ public final class RpcClient implements AutoCloseable {
 	 * <p>注册中心不可达时（Registry 契约，rpc-registry-tck 约束）：subscribe 不抛异常，最多阻塞实现声明的等待上限
 	 * （ZooKeeper / Nacos 的 {@code connect-wait-ms}）后返回代理；此时提供者列表为空，调用以 "No available provider"
 	 * 快速失败（不是挂到超时）；后端连上之后订阅补推首次列表，调用自动恢复，无需重新 reference。
+	 *
+	 * <p>{@link ReferenceOptions#awaitProviders()} 非 null 时，订阅之后阻塞到该服务的提供者视图非空（由注册中心推送唤醒，
+	 * 不轮询），最多等这么久；超时抛 {@link RpcException}（订阅保留，之后的推送照常生效，客户端照常可 close）。
+	 * 默认 null：不等待，行为同上。
+	 *
+	 * @throws RpcException 设置了 awaitProviders 且超时仍没有提供者，或等待中被中断（中断标志保留）
 	 */
 	public <T> T reference(Class<T> itf, ReferenceOptions options) {
 		ensureOpen();
@@ -163,12 +169,29 @@ public final class RpcClient implements AutoCloseable {
 		}
 		ServiceKey key = ServiceKey.of(itf, options.version(), options.group());
 		ServiceDirectory directory = directoryFor(key);
+		if (options.awaitProviders() != null) {
+			awaitProviders(directory, options.awaitProviders());
+		}
 		Duration timeout = options.timeout() != null ? options.timeout() : config.defaultTimeout();
 		int retries = options.retries();
 		Invoker chain = FilterChain.build(filters, invocation -> invokeCluster(directory, invocation, retries));
 		Object proxy = Proxy.newProxyInstance(itf.getClassLoader(), new Class<?>[] { itf },
 				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate));
 		return itf.cast(proxy);
+	}
+
+	private void awaitProviders(ServiceDirectory directory, Duration wait) {
+		boolean found;
+		try {
+			found = directory.awaitProviders(wait);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RpcException("Interrupted while waiting for providers of " + directory.key(), e);
+		}
+		if (!found) {
+			throw new RpcException("No provider of " + directory.key() + " discovered within " + wait.toMillis()
+					+ "ms (ReferenceOptions.awaitProviders)");
+		}
 	}
 
 	/** 经代理发起、尚未完成的调用数（含重试中的）。close() 等它归零；也可作为泄漏断言。 */
@@ -179,6 +202,14 @@ public final class RpcClient implements AutoCloseable {
 	/** 到某个提供者地址（host:port）当前已激活的连接数，含下线后仍在排空的连接。用于观测与测试。 */
 	public int activeConnections(String address) {
 		return transport.activeConnections(address);
+	}
+
+	/**
+	 * 到全部提供者当前已激活的连接总数，含下线后仍在排空的连接（与 {@link #activeConnections(String)} 同一口径）。
+	 * 只读，用于观测（指标的连接数 Gauge）与测试；close 之后为 0。
+	 */
+	public int activeConnections() {
+		return transport.activeConnections();
 	}
 
 	/** 某服务当前已知的提供者（经过推空保护之后的视图），用于观测与测试。 */

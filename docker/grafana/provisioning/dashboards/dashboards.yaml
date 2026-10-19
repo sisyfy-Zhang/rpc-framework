@@ -1,0 +1,14 @@
+# 从 /etc/grafana/dashboards（compose 挂载的 docker/grafana/dashboards）加载面板 JSON。
+apiVersion: 1
+
+providers:
+  - name: rpc
+    orgId: 1
+    folder: RPC
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

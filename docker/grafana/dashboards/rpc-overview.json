@@ -1,0 +1,673 @@
+{
+  "uid": "rpc-overview",
+  "title": "RPC Overview",
+  "description": "rpc-metrics-micrometer 的调用指标：QPS、错误率、p50/p95/p99、在途、连接数、错误码分布。指标说明见 docs/observability.md。",
+  "tags": [
+    "rpc"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "schemaVersion": 41,
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "label": "job",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "rpc-prometheus"
+        },
+        "definition": "label_values(up{job=~\"rpc-.*\"}, job)",
+        "query": {
+          "query": "label_values(up{job=~\"rpc-.*\"}, job)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery",
+          "qryType": 1
+        },
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "rpc-.*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "sort": 1,
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "吞吐与错误率（服务端视角）",
+      "id": 1,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "QPS（服务端，按 status）",
+      "description": "每秒完成的服务端调用，按 status 分组：sum by (status) (rate(rpc_server_calls_seconds_count[30s]))；虚线为客户端总 QPS。",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "client total"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (status) (rate(rpc_server_calls_seconds_count{job=~\"$job\"}[30s]))",
+          "legendFormat": "server {{status}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum(rate(rpc_client_calls_seconds_count{job=~\"$job\"}[30s]))",
+          "legendFormat": "client total",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "错误率",
+      "description": "status != OK 的调用占比（30s 窗口）。服务端看到的是进入 Filter 链的请求；客户端另含 TIMEOUT / TRANSPORT_FAILURE。",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum(rate(rpc_server_calls_seconds_count{job=~\"$job\",status!=\"OK\"}[30s])) / sum(rate(rpc_server_calls_seconds_count{job=~\"$job\"}[30s]))",
+          "legendFormat": "server",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum(rate(rpc_client_calls_seconds_count{job=~\"$job\",status!=\"OK\"}[30s])) / sum(rate(rpc_client_calls_seconds_count{job=~\"$job\"}[30s]))",
+          "legendFormat": "client",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "延迟",
+      "id": 4,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "服务端延迟 p50 / p95 / p99",
+      "description": "histogram_quantile over rpc_server_calls_seconds_bucket（30s 窗口，全部 status）。分位数由桶插值得到，精度受桶边界限制；压测报告里的分位数以 HdrHistogram 为准。",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(rpc_server_calls_seconds_bucket{job=~\"$job\"}[30s])))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rpc_server_calls_seconds_bucket{job=~\"$job\"}[30s])))",
+          "legendFormat": "p95",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(rpc_server_calls_seconds_bucket{job=~\"$job\"}[30s])))",
+          "legendFormat": "p99",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "客户端延迟 p99",
+      "description": "histogram_quantile(0.99) over rpc_client_calls_seconds_bucket：调用方看到的完整往返（含网络与服务端排队）。",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(rpc_client_calls_seconds_bucket{job=~\"$job\"}[30s])))",
+          "legendFormat": "client p99",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(rpc_client_calls_seconds_bucket{job=~\"$job\"}[30s])))",
+          "legendFormat": "client p50",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "在途与连接",
+      "id": 7,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "在途调用",
+      "description": "rpc_server_inflight：已进入服务端未回包（含排队）；rpc_client_inflight：经代理发起未完成（含重试）。",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (job) (rpc_server_inflight{job=~\"$job\"})",
+          "legendFormat": "server {{job}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (job) (rpc_client_inflight{job=~\"$job\"})",
+          "legendFormat": "client {{job}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "连接数",
+      "description": "rpc_server_connections：已接受的入站连接；rpc_client_connections：到全部提供者的已激活连接（含排空中的）。",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (job) (rpc_server_connections{job=~\"$job\"})",
+          "legendFormat": "server {{job}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (job) (rpc_client_connections{job=~\"$job\"})",
+          "legendFormat": "client {{job}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "错误码分布",
+      "id": 10,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "服务端错误码（所选时间范围）",
+      "description": "sum by (status) (increase(rpc_server_calls_seconds_count{status!=\"OK\"}[$__range]))",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "noValue": "所选时间范围内没有错误",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (status) (increase(rpc_server_calls_seconds_count{job=~\"$job\",status!=\"OK\"}[$__range]))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "客户端错误码（所选时间范围）",
+      "description": "sum by (status) (increase(rpc_client_calls_seconds_count{status!=\"OK\"}[$__range]))；TIMEOUT / TRANSPORT_FAILURE 只在客户端出现。",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "rpc-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "noValue": "所选时间范围内没有错误",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "rpc-prometheus"
+          },
+          "expr": "sum by (status) (increase(rpc_client_calls_seconds_count{job=~\"$job\",status!=\"OK\"}[$__range]))",
+          "legendFormat": "{{status}}",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,7 @@ class NoSystemPropertiesArchTest {
 				"com.feynman.rpc.serialize.fastjson2.Fastjson2Serializer",
 				"com.feynman.rpc.serialize.protobuf.ProtobufSerializer",
 				"com.feynman.rpc.starter.RpcAutoConfiguration",
+				"com.feynman.rpc.metrics.micrometer.MicrometerClientFilter",
 				"com.feynman.rpc.examples.provider.ProviderApplication")) {
 			assertTrue(classes.contain(name), "production class not imported: " + name);
 		}

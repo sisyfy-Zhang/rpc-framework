@@ -34,4 +34,12 @@ public @interface RpcReference {
 	 * 长超时等下去只是浪费资源。只有确实要脱离上游生命周期的调用（例如上游超时后仍须完成的补偿写）才设为 false。
 	 */
 	boolean inheritDeadline() default true;
+
+	/**
+	 * 注入时等待提供者出现的上限（毫秒），默认 0 = 不等待。大于 0 时注入（即 {@code RpcClient.reference}）阻塞到该服务的
+	 * 提供者视图非空，超时以 {@code RpcException} 让 bean 创建失败——应用宁可起不来，也不要带着"第一批调用必然
+	 * No available provider"的引用对外服务。注意它会让容器 refresh 等待这么久；registered ≠ discovered 的背景见
+	 * docs/pitfalls.md 第 29 条。
+	 */
+	long awaitProvidersMs() default 0;
 }

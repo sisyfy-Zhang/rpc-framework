@@ -1,0 +1,37 @@
+# 抓取本机（宿主机）上的 RPC 进程。容器里的 Prometheus 经 host.docker.internal 访问宿主机：
+# Docker Desktop 自带该名字，Linux 引擎由 compose 的 extra_hosts: host-gateway 提供。
+# 端口约定（docker/README.md 有同一张表）：
+#   9464 rpc-bench-server      bench server --metrics-port 9464
+#   9465 rpc-bench-client      bench run    --metrics-port 9465
+#   9466 rpc-example-provider  PlainProvider --metrics-port 9466
+#   9467 rpc-example-consumer  预留
+# 进程没起来时对应 target 为 down，属正常；面板按 job 变量筛选。
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  - job_name: rpc-bench-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9464"]
+
+  - job_name: rpc-bench-client
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9465"]
+
+  - job_name: rpc-example-provider
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9466"]
+
+  - job_name: rpc-example-consumer
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9467"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

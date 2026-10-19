@@ -1,0 +1,29 @@
+# 口径卡：同机 loopback、1KB、单提供者，闭环 64 并发——回答"吞吐的量级"。
+# 字段含义见 docs/benchmarking.md。改动口径（并发、负载、时长、窗口……）请复制成新 id（-v2），不要原地改：
+# 报告里的数字以卡片 id 为准，同一个 id 必须始终代表同一个口径。
+profile: loopback-throughput-v1
+question: 同机 loopback、1KB、单提供者，闭环 64 并发下的吞吐与延迟量级
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+load:
+  model: closed
+  concurrency: 64
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: docker-compose/zookeeper
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

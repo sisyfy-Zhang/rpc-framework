@@ -1,0 +1,37 @@
+diff --git a/Makefile b/Makefile
+index a537a68..e01e7b1 100644
+--- a/Makefile
++++ b/Makefile
+@@ -49,10 +49,14 @@ $(OBJ): config.h Makefile $(LDIR)/libluajit.a | $(ODIR)
+ $(ODIR):
+ 	@mkdir -p $@
+ 
+-$(ODIR)/bytecode.o: src/wrk.lua
++$(ODIR)/bytecode.c: src/wrk.lua
+ 	@echo LUAJIT $<
+ 	@$(SHELL) -c 'cd $(LDIR) && ./luajit -b $(CURDIR)/$< $(CURDIR)/$@'
+ 
++$(ODIR)/bytecode.o: $(ODIR)/bytecode.c
++	@echo CC $<
++	@$(CC) $(CFLAGS) -c -o $@ $<
++
+ $(ODIR)/%.o : %.c
+ 	@echo CC $<
+ 	@$(CC) $(CFLAGS) -c -o $@ $<
+diff --git a/src/wrk.c b/src/wrk.c
+index 1049f0b..c8dd291 100644
+--- a/src/wrk.c
++++ b/src/wrk.c
+@@ -673,9 +673,9 @@ static void socket_readable(aeEventLoop *loop, int fd, void *data, int mask) {
+ }
+ 
+ static uint64_t time_us() {
+-    struct timeval t;
+-    gettimeofday(&t, NULL);
+-    return (t.tv_sec * 1000000) + t.tv_usec;
++    struct timespec t;
++    clock_gettime(CLOCK_MONOTONIC, &t);
++    return (t.tv_sec * 1000000) + t.tv_nsec / 1000;
+ }
+ 
+ static char *copy_url_part(char *url, struct http_parser_url *parts, enum http_parser_url_fields field) {

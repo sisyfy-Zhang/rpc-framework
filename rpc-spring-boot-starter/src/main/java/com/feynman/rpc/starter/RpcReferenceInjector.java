@@ -63,7 +63,8 @@ public class RpcReferenceInjector implements BeanPostProcessor {
 				.group(annotation.group())
 				.timeout(annotation.timeout() > 0 ? Duration.ofMillis(annotation.timeout()) : null)
 				.retries(annotation.retries())
-				.inheritDeadline(annotation.inheritDeadline());
+				.inheritDeadline(annotation.inheritDeadline())
+				.awaitProviders(annotation.awaitProvidersMs() > 0 ? Duration.ofMillis(annotation.awaitProvidersMs()) : null);
 	}
 
 	private record ReferenceKey(Class<?> itf, ReferenceOptions options) {

@@ -4,7 +4,7 @@
 核心是纯 Java（不依赖任何容器），同一个 JVM 里可以 new 出多个客户端与服务端；Spring Boot 只是在它外面包了一层。
 
 > 当前状态：**阶段 0（可用性修复）已完成**，尚未发布到 Maven 仓库，需要先在本地 `mvn install`。
-> 还没有指标、链路追踪与压测数据（见[路线图](#路线图)）。使用前请先读[已知边界](#已知边界)。
+> 还没有链路追踪与压测数据（见[路线图](#路线图)）；调用指标见 [docs/observability.md](docs/observability.md)。使用前请先读[已知边界](#已知边界)。
 
 ## 目录
 
@@ -78,10 +78,12 @@
 | `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
 | `rpc-serialize-fastjson2` | fastjson2 序列化器（SPI 名 `fastjson2`），可读、便于调试 | 至少一个 |
 | `rpc-spring-boot-starter` | Spring Boot 4 自动配置 | Boot 应用 |
+| `rpc-metrics-micrometer` | Micrometer 指标：客户端 / 服务端调用 Timer（service / method / status）、在途与连接数 Gauge、可内嵌的 Prometheus `/metrics` 端点；不依赖 Spring | 要指标时 |
 | `rpc-registry-tck` | Registry 契约测试（14 条），第三方注册中心实现可直接继承 | 实现注册中心时 |
 | `rpc-examples` | 可运行示例：Boot provider / consumer、纯 Java provider / consumer、本机试用的嵌入式 ZooKeeper | 参考 |
 | `rpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
 | `rpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
+| `rpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
 
 ## 环境要求
 
@@ -328,7 +330,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 - **ZooKeeper 不可达时，下线节点会残留到会话超时**：进程退出但无法连上 ZK 摘注册时，临时节点要等服务端判定会话过期（缺省请求 30s，实际值取决于 ZK 的 tickTime 协商）才消失，期间消费端可能仍选到它（会以连接失败的形式出现）。
 - **连接重置后，`retries > 0` 可能重发已经执行过的请求**：请求写出后连接断开，客户端无法知道服务端是否已执行，会按传输失败处理并重试。只对幂等方法设置 `retries`，或在业务侧用 `rpc.idempotency-key` attachment 自行去重（框架不内置去重）。
 - **返回 `CompletableFuture` 的方法，用户回调在 Netty IO 线程上执行**：在 `thenApply` / `whenComplete` 里做阻塞操作会卡住该连接上的所有请求；需要阻塞时用 `thenApplyAsync(fn, yourExecutor)`。
-- **还没有指标、链路追踪与压测数据**：attachments 已预留 W3C `traceparent` 等键，但 Micrometer 指标与 OpenTelemetry 集成、吞吐 / 延迟数据都在[路线图](#路线图)里，本 README 不给出任何性能数字。
+- **还没有链路追踪与压测数据**：attachments 已预留 W3C `traceparent` 等键，但 OpenTelemetry 集成、吞吐 / 延迟数据都在[路线图](#路线图)里，本 README 不给出任何性能数字。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](docs/observability.md)）。
 - **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。
 - **服务端 Filter 运行在业务线程上**：IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
 
@@ -357,6 +359,7 @@ CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用
 ## 路线图
 
 - **阶段 1 · 证据基础设施**：`docker compose up` 一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy；Micrometer 指标 Filter 与 Grafana 面板（QPS、p99、在途、连接数、错误码）；压测 CLI 输出带环境与口径的 JSON / Markdown 报告；用 wrk / k6 交叉验证自研压测客户端（偏差 < 15%）。
+  - 压测 harness 已就位：口径卡、子命令、WSL2 标准流程、报告字段与 harness 交叉验证见 [docs/benchmarking.md](docs/benchmarking.md)；README 中的压测数字只引用它生成的报告文件。
 - **阶段 2 · 跑数据**：同机吞吐与 p50 / p99（对照 gRPC-Java、Dubbo triple）；慢节点下 RoundRobin 与 P2C 的 p99；杀一个提供者的错误数与恢复时间；流量突增 3 倍时过载保护的效果；每组 3 轮，附环境说明与"不可外推"声明。
 - **阶段 3 · 发布**：CI 全绿；坐标发布到 Maven Central 或 GitHub Packages；空白 Boot 4 工程按接入文档 15 分钟跑通。
 - **阶段 4 · 可选（每项自带对比实验）**：自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
@@ -366,6 +369,8 @@ CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用
 - [docs/getting-started.md](docs/getting-started.md)：15 分钟接入指南（空白 Boot 4 工程 → provider + consumer），含常见错误对照表
 - [docs/protocol.md](docs/protocol.md)：协议 v2 规格（帧头、attachments、信封、状态码、协商、连接关闭规则）
 - [docs/pitfalls.md](docs/pitfalls.md)：开发中踩过的坑（现象 / 根因 / 修法 / 教训）
+- [docs/benchmarking.md](docs/benchmarking.md)：端到端压测：口径卡字段、`server` / `run` / `report` / `crossval` 子命令、WSL2 标准流程、报告字段、harness 交叉验证
+- [docs/observability.md](docs/observability.md)：指标：指标名与 tag、status 取值、计时口径、PromQL 示例、Grafana 面板、纯 Java 内嵌 `/metrics`；中间件与面板的一键环境见 [docker/README.md](docker/README.md)
 - [docs/probes/protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
 - [rpc-examples/README.md](rpc-examples/README.md)：示例的运行方式
 

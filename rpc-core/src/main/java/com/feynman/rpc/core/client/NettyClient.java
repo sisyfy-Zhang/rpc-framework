@@ -193,6 +193,11 @@ public final class NettyClient implements AutoCloseable {
 		return channels.size();
 	}
 
+	/** 全部地址已激活的连接总数（含排空中的）。 */
+	public int activeConnections() {
+		return connections.activeConnectionCount();
+	}
+
 	/** 让所有尚未收到响应的请求以 {@code cause} 失败。 */
 	public void failPending(Throwable cause) {
 		pending.failAll(cause);

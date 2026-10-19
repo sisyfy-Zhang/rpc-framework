@@ -228,6 +228,8 @@ class RpcAutoConfigurationTest {
 		Greeter defaults;
 		@RpcReference(version = "2.0", group = "g", timeout = 1500, retries = 2, inheritDeadline = false)
 		Greeter everything;
+		@RpcReference(awaitProvidersMs = 2500)
+		Greeter awaiting;
 	}
 
 	@Test
@@ -240,6 +242,18 @@ class RpcAutoConfigurationTest {
 		ReferenceOptions everything = RpcReferenceInjector.optionsOf(
 				AnnotatedFields.class.getDeclaredField("everything").getAnnotation(RpcReference.class));
 		assertEquals(new ReferenceOptions("2.0", "g", Duration.ofMillis(1500), 2, false), everything);
+	}
+
+	@Test
+	void awaitProvidersMsMapsToReferenceOptionsAndDefaultsToNoWait() throws Exception {
+		ReferenceOptions defaults = RpcReferenceInjector.optionsOf(
+				AnnotatedFields.class.getDeclaredField("defaults").getAnnotation(RpcReference.class));
+		assertEquals(null, defaults.awaitProviders(), "awaitProvidersMs = 0 (default) must not wait");
+
+		ReferenceOptions awaiting = RpcReferenceInjector.optionsOf(
+				AnnotatedFields.class.getDeclaredField("awaiting").getAnnotation(RpcReference.class));
+		assertEquals(Duration.ofMillis(2500), awaiting.awaitProviders());
+		assertEquals(ReferenceOptions.defaults().version("").group("").awaitProviders(Duration.ofMillis(2500)), awaiting);
 	}
 
 	@Test

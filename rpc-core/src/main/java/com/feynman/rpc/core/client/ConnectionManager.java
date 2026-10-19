@@ -156,6 +156,18 @@ final class ConnectionManager {
 		return channels;
 	}
 
+	/** 全部已激活的连接数（在用 + 排空中），与逐地址的 {@link #activeChannels} 同一口径。供观测（指标的连接数 Gauge）。 */
+	int activeConnectionCount() {
+		int total = 0;
+		for (ConnectionPool pool : pools.values()) {
+			total += pool.activeChannels().size();
+		}
+		for (ConnectionPool pool : draining.values()) {
+			total += pool.activeChannels().size();
+		}
+		return total;
+	}
+
 	/** 在用的地址集合（不含排空中的）。 */
 	Set<String> addresses() {
 		return Set.copyOf(pools.keySet());

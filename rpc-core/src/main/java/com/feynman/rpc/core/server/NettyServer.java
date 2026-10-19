@@ -124,6 +124,11 @@ public final class NettyServer implements AutoCloseable {
 		return bizExecutor.running();
 	}
 
+	/** 当前已接受且未关闭的客户端连接数（关闭的连接由 ChannelGroup 自动移除）。 */
+	public int activeConnections() {
+		return connections.size();
+	}
+
 	/** 排队中的任务数。 */
 	public int queuedBusinessTasks() {
 		return bizExecutor.queued();

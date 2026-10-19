@@ -11,10 +11,12 @@
   	<module>rpc-registry-nacos</module>
   	<module>rpc-serialize-fastjson2</module>
   	<module>rpc-serialize-protobuf</module>
+  	<module>rpc-metrics-micrometer</module>
   	<module>rpc-spring-boot-starter</module>
   	<module>rpc-examples</module>
   	<module>rpc-integration-tests</module>
   	<module>rpc-benchmark</module>
+  	<module>rpc-bench-e2e</module>
   </modules>
 
   <properties>
@@ -38,6 +40,12 @@
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <testcontainers.version>2.0.5</testcontainers.version>
     <jacoco.version>0.8.14</jacoco.version>
+    <!-- rpc-bench-e2e：延迟直方图与口径卡解析（只用 SafeConstructor 加载成 Map，不反序列化到 Bean） -->
+    <hdrhistogram.version>2.2.2</hdrhistogram.version>
+    <snakeyaml.version>2.7</snakeyaml.version>
+    <!-- rpc-metrics-micrometer：与 Spring Boot 4.1 管理的 Micrometer 同一条 1.17 线（starter 的 optional Actuator 也走它），
+         避免同一个 classpath 上 Boot 的指标自动配置与本模块各拿一个 Micrometer 小版本 -->
+    <micrometer.version>1.17.1</micrometer.version>
     <!-- A0-9：rpc-core 行覆盖率下限（core 自身单元测试、以及全部模块测试的聚合结果各检查一次） -->
     <rpc.core.minLineCoverage>0.70</rpc.core.minLineCoverage>
     <!-- surefire 的 JVM 参数：jacoco:prepare-agent 把探针 agent 写进这个属性；默认空值让跳过 JaCoCo 时 @{argLine} 也能解析。
@@ -58,6 +66,15 @@
         <groupId>com.fasterxml.jackson</groupId>
         <artifactId>jackson-bom</artifactId>
         <version>${jackson-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- micrometer-core / micrometer-registry-prometheus 等同一版本线 -->
+      <dependency>
+        <groupId>io.micrometer</groupId>
+        <artifactId>micrometer-bom</artifactId>
+        <version>${micrometer.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -220,6 +237,18 @@
         <scope>test</scope>
       </dependency>
 
+      <!-- 端到端压测 harness（rpc-bench-e2e）专用 -->
+      <dependency>
+        <groupId>org.hdrhistogram</groupId>
+        <artifactId>HdrHistogram</artifactId>
+        <version>${hdrhistogram.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.yaml</groupId>
+        <artifactId>snakeyaml</artifactId>
+        <version>${snakeyaml.version}</version>
+      </dependency>
+
       <!-- 本项目自己的模块，方便子模块间互相依赖时不用重复写 version -->
       <dependency>
         <groupId>com.feynman.rpc</groupId>
@@ -249,6 +278,11 @@
       <dependency>
         <groupId>com.feynman.rpc</groupId>
         <artifactId>rpc-serialize-protobuf</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-metrics-micrometer</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
