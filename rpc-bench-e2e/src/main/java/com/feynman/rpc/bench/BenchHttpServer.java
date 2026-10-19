@@ -40,6 +40,8 @@ import io.netty.util.concurrent.DefaultThreadFactory;
  *   <li>{@code GET /ping}：返回 {@code ok}；</li>
  *   <li>{@code GET /environment}：服务端环境（与 RPC 端点 {@code BenchService.environment()} 同一份采集），JSON 对象、
  *       值全是字符串，供 harness 写进报告的 {@code server_environment}；</li>
+ *   <li>{@code GET /stats}：此刻的累计 GC 次数 / 停顿时间与堆用量（与 RPC 端点 {@code BenchService.stats()} 同一份），
+ *       JSON 对象、值全是字符串，harness 每轮统计窗口起止各取一次，差值进 {@code rounds[].gc.server}；</li>
  *   <li>其它路径 404，方法不对 405。</li>
  * </ul>
  * keep-alive（HTTP/1.1 缺省；请求带 {@code Connection: close} 或 HTTP/1.0 不带 keep-alive 时回包后关闭）；
@@ -52,6 +54,7 @@ final class BenchHttpServer implements AutoCloseable {
 	static final String ECHO_PATH = "/echo";
 	static final String PING_PATH = "/ping";
 	static final String ENVIRONMENT_PATH = "/environment";
+	static final String STATS_PATH = "/stats";
 
 	private final EventLoopGroup boss;
 	private final EventLoopGroup workers;
@@ -144,6 +147,15 @@ final class BenchHttpServer implements AutoCloseable {
 					if (HttpMethod.GET.equals(method)) {
 						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(environmentJson),
 								HttpHeaderValues.APPLICATION_JSON);
+					} else {
+						respond(ctx, request, HttpResponseStatus.METHOD_NOT_ALLOWED, Unpooled.EMPTY_BUFFER, null);
+					}
+				}
+				case STATS_PATH -> {
+					if (HttpMethod.GET.equals(method)) {
+						byte[] stats = Json.write(new LinkedHashMap<String, Object>(GcSampler.snapshot().toStrings()))
+								.getBytes(StandardCharsets.UTF_8);
+						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(stats), HttpHeaderValues.APPLICATION_JSON);
 					} else {
 						respond(ctx, request, HttpResponseStatus.METHOD_NOT_ALLOWED, Unpooled.EMPTY_BUFFER, null);
 					}

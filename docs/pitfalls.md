@@ -456,7 +456,15 @@ harness 的服务时间（从实际执行）p50 0.22ms，发出滞后 p99 只有
   `reserveAndWriteUtf8` 按确切字节数预留（`writeUtf8` 按每字符 3 字节预留，放不进按确切长度分配的缓冲区）。
 - 发送路径上任何 `Throwable` 都让请求立即失败：writer 抛 Error 以 `RpcSerializationException` 失败，`whenComplete` 回调外层再兜一层；
   写出改为提交到连接的事件循环执行，排队期间已超时的请求不再编码写出（过载时不再把内存越堆越高）。
-- 服务端回包编码的三处改为 `catch (Throwable)` 先释放 body 再抛出。
+- 服务端回包编码的三处改为 `catch (Throwable)` 先释放 body 再抛出（随后被下面"响应侧同样处理"取代：业务线程上不再有缓冲区）。
+- **响应侧同样处理**：服务端业务线程（`ExecutorConfig.virtualThreads` 时是虚拟线程）也不碰池化分配器。`ServiceDispatcher` 只把返回值
+  序列化成 byte[]、把错误信封的字段备好并截断（`EnvelopeCodec.value(...)` / `EnvelopeCodec.error(...)`），回包携带 `OutboundBody`，
+  由 `RpcEncoder` 在事件循环上整帧写出，线上字节不变（`RpcCodecTest` 对比 OK 值、带 remoteStack 的错误信封、框架错误的新旧写法）。
+  序列化返回值时抛 Error 改回 `SERIALIZATION_ERROR`，组装回包的其余 Throwable 退回只带类名的 `SERVER_ERROR`——以前这两种都让回包 future
+  异常完成，ServerHandler 只打一行 "produced no reply"，客户端挂到超时。`AttachmentsCodec.writeStr` 同样改为按确切字节数预留：第一次修复
+  只改了信封的 `writeStr`，2 字节字符 / 代理对多的 attachments 后面跟一个很短的 body 时，整帧仍会因预留超出容量而编码失败（请求、回包都会）。
+  护栏：ArchUnit 规则的范围扩到 server 包里非 ChannelHandler 的类（ServiceDispatcher、BusinessExecutor、ServerHandler.DispatchTask）；
+  `ServerThreadAllocationTest` 用虚拟线程执行器跑 200 并发 × 10 次 4KB 回显 + 业务异常，断言所有分配都在 `rpc-server-worker-*` 上。
 - 护栏：`CoreArchitectureTest` 规定调用方一侧（core 根包、client / cluster / filter / loadbalance 包里非 ChannelHandler 的类）不得调用
   `ByteBufAllocator` 的任何方法、`Channel.alloc()`、`ChannelHandlerContext.alloc()`；bench 模块同一条规则。`CallerThreadAllocationTest`
   给连接注入记录分配线程的分配器，200 个虚拟线程 × 10 次 4KB 回显后断言所有分配都在 `rpc-client-io-*` 上。泄漏回归测试用测试包

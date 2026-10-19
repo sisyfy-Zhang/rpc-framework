@@ -36,6 +36,8 @@ final class RpcCallTarget implements CallTarget {
 	private final byte[] payload;
 	private final Order order;
 	private final Map<String, Object> description;
+	/** environment() / stats() 用的代理：超时与压测超时无关（见 {@link #ENVIRONMENT_TIMEOUT}），首次用到时创建。 */
+	private volatile BenchService metadata;
 
 	private RpcCallTarget(RpcClient client, BenchService service, Profile profile, Map<String, Object> description) {
 		this.client = client;
@@ -144,9 +146,21 @@ final class RpcCallTarget implements CallTarget {
 
 	@Override
 	public Map<String, String> serverEnvironment() {
-		BenchService metadata = client.reference(BenchService.class,
-				ReferenceOptions.defaults().timeout(ENVIRONMENT_TIMEOUT).retries(0));
-		return metadata.environment();
+		return metadata().environment();
+	}
+
+	@Override
+	public Map<String, String> serverStats() {
+		return metadata().stats();
+	}
+
+	private BenchService metadata() {
+		BenchService m = metadata;
+		if (m == null) {
+			m = client.reference(BenchService.class, ReferenceOptions.defaults().timeout(ENVIRONMENT_TIMEOUT).retries(0));
+			metadata = m;
+		}
+		return m;
 	}
 
 	@Override

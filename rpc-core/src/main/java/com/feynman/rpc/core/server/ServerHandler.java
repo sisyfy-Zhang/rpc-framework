@@ -79,7 +79,7 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 		if (request.malformedAttachments() != null) {
 			// 帧边界可信、只是 attachments 不合法：带着 requestId 回 BAD_REQUEST，连接继续可用
 			try {
-				reply(ctx, request, dispatcher.badAttachmentsReply(request, ctx.alloc()));
+				reply(ctx, request, dispatcher.badAttachmentsReply(request));
 			} finally {
 				request.release();
 			}
@@ -102,7 +102,7 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 
 	private void rejectNow(ChannelHandlerContext ctx, RpcMessage request, String reason) {
 		try {
-			reply(ctx, request, dispatcher.frameworkErrorReply(request, ctx.alloc(), Status.SERVER_OVERLOADED, reason));
+			reply(ctx, request, dispatcher.frameworkErrorReply(request, Status.SERVER_OVERLOADED, reason));
 		} finally {
 			request.release();
 		}
@@ -123,8 +123,10 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 
 		@Override
 		public void run() {
-			// handle 不抛异常；返回的 future 在业务完成时完成——同步业务就在本线程，异步业务在完成它的线程上
-			dispatcher.handle(request, ctx.alloc()).whenComplete((reply, error) -> {
+			// handle 不抛异常；返回的 future 在业务完成时完成——同步业务就在本线程，异步业务在完成它的线程上。
+			// 回包只携带备好的字节，本线程（业务线程，可能是虚拟线程）不分配缓冲区：writeAndFlush 把写出交给事件循环，
+			// 编码器在那里分配整帧（docs/pitfalls.md 第 32 条）
+			dispatcher.handle(request).whenComplete((reply, error) -> {
 				try {
 					if (reply != null) {
 						reply(ctx, request, reply);
@@ -147,7 +149,7 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 		}
 	}
 
-	/** 单向请求不回包（回包缓冲区直接释放）。 */
+	/** 单向请求不回包（回包直接丢弃；携带 OutboundBody 的回包 release 是空操作）。 */
 	private static void reply(ChannelHandlerContext ctx, RpcMessage request, RpcMessage reply) {
 		if (request.isOneway()) {
 			reply.release();

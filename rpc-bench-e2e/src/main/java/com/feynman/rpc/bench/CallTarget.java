@@ -23,6 +23,14 @@ interface CallTarget extends AutoCloseable {
 	/** 被压服务端的运行环境（进 JSON 的 {@code server_environment}）；取不到时抛异常，由调用方记 unknown。 */
 	Map<String, String> serverEnvironment();
 
+	/**
+	 * 被压服务端此刻的累计 GC 次数 / 时间与堆用量（{@link GcSampler.Snapshot#toStrings()} 的形式），每轮统计窗口起止各取一次。
+	 * 取不到时抛异常，由调用方把 {@code rounds[].gc.server} 记为 unknown；缺省实现（不是 bench server 的目标）直接抛。
+	 */
+	default Map<String, String> serverStats() {
+		throw new UnsupportedOperationException("this target does not expose server stats");
+	}
+
 	/** 进 JSON 的 {@code run.target}：怎么连的、客户端的关键配置。 */
 	Map<String, Object> describe();
 

@@ -160,6 +160,12 @@ class BenchEndToEndTest {
 			} else {
 				assertEquals(EnvironmentProbe.NA, round.get("cpu"));
 			}
+			// 统计窗口的 GC：压测端本进程的 MXBean 差值 + 服务端 stats() 的差值（进程内服务端，同一个 JVM）
+			for (String side : List.of("client", "server")) {
+				assertTrue(path(round, "gc", side, "pause_ms") instanceof Number, "rounds[].gc." + side + ": " + round.get("gc"));
+				assertTrue(path(round, "gc", side, "collections") instanceof Number);
+				assertTrue(path(round, "gc", side, "collectors") instanceof List<?>);
+			}
 			List<?> success = (List<?>) path(round, "timeseries", "success");
 			assertTrue(success.size() >= 3, "per-second series covers the round");
 			assertTrue(number(success.get(0)) > 0 && number(success.get(2)) > 0);
@@ -174,6 +180,7 @@ class BenchEndToEndTest {
 		assertTrue(md.startsWith("# " + id + "\n"));
 		assertTrue(md.contains("（正式）"));
 		assertTrue(md.contains("不可外推"));
+		assertTrue(md.contains("| GC 停顿 客户端/服务端 (ms) |"), md);
 		assertTrue(md.contains("| 服务端 JVM 参数 |") && md.contains("| 服务端 CPU 亲和 |") && md.contains("| CPU 亲和（压测端） |"));
 		int cpus = Runtime.getRuntime().availableProcessors();
 		Object host = path(json, "environment", "host_cpus");

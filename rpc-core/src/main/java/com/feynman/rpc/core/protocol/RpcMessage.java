@@ -11,9 +11,9 @@ import io.netty.util.ReferenceCounted;
  * 一帧协议 v2 消息：定长头的字段 + 已解码的 attachments + 未解码的 body。
  *
  * <p>为什么 body 是 {@link ByteBuf} 而不是 byte[]：入站时 body 是帧缓冲区上的一个 retained slice，
- * IO 线程不拷贝、不反序列化，交给业务线程再解（DESIGN §3.5）；服务端出站的响应 body 由业务线程编码进缓冲区，
- * 编码器把它原样挂到头后面，不再拷贝一次。例外是客户端请求：调用方线程（常是虚拟线程）不碰池化分配器，
- * 请求只携带备好的字节（{@link OutboundBody}），由编码器在事件循环上一次写成整帧。
+ * IO 线程不拷贝、不反序列化，交给业务线程再解（DESIGN §3.5）。框架自己的出站请求与响应不走 ByteBuf body：
+ * 调用方线程与业务线程（常是虚拟线程）都不碰池化分配器，消息只携带备好的字节（{@link OutboundBody}），
+ * 由编码器在事件循环上一次写成整帧。ByteBuf body 的出站消息只剩心跳、协商（在事件循环上构造，用非池化的包装数组）。
  *
  * <p>引用计数委托给 body：谁拿到消息谁负责 {@link #release()}（入站由处理者释放，出站交给 Netty 后由编码器释放）。
  * 没有 body 的消息（心跳）用 {@link Unpooled#EMPTY_BUFFER}，释放是空操作。
@@ -83,6 +83,16 @@ public final class RpcMessage implements ReferenceCounted {
 		return outbound(requestId, MessageType.RESPONSE, serializer, (byte) 0, status, attachments, body);
 	}
 
+	/**
+	 * 服务端回包：body 只是备好的字节（{@link OutboundBody}，OK 的返回值或错误信封），由编码器在事件循环上分配缓冲区写出——
+	 * 业务线程（含虚拟线程执行器）不碰池化分配器。这样的消息没有引用计数的资源，{@link #release()} 是空操作。
+	 */
+	public static RpcMessage response(long requestId, byte serializer, Status status, Map<String, String> attachments,
+			OutboundBody body) {
+		return new RpcMessage(requestId, MessageType.RESPONSE, serializer, (byte) 0, status, attachments, null,
+				Objects.requireNonNull(body, "body"), null, 0L);
+	}
+
 	public static RpcMessage heartbeatPing() {
 		return outbound(0, MessageType.HEARTBEAT_PING, (byte) 0, (byte) 0, Status.OK, Map.of(), Unpooled.EMPTY_BUFFER);
 	}
@@ -134,7 +144,7 @@ public final class RpcMessage implements ReferenceCounted {
 
 	/**
 	 * 从不为 null；读取请用 {@code duplicate()} / {@code slice()}，不要移动它的读指针以外的状态。
-	 * 携带 {@link #outboundBody()} 的出站请求，这里是空缓冲区。
+	 * 携带 {@link #outboundBody()} 的出站请求 / 响应，这里是空缓冲区。
 	 */
 	public ByteBuf body() {
 		return body;

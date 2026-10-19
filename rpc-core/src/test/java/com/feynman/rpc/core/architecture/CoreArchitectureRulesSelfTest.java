@@ -55,6 +55,13 @@ class CoreArchitectureRulesSelfTest {
 		}
 	}
 
+	/** 旧 ServiceDispatcher.toReply 的写法：在业务线程上用传进来的 ctx.alloc() 分配回包 body。 */
+	static class BusinessThreadAllocatesReply {
+		static io.netty.buffer.ByteBuf reply(io.netty.buffer.ByteBufAllocator alloc) {
+			return alloc.buffer();
+		}
+	}
+
 	/** 事件循环上的处理器可以分配。 */
 	static class EncoderOnEventLoop extends io.netty.channel.ChannelOutboundHandlerAdapter {
 		io.netty.buffer.ByteBuf frame(io.netty.channel.ChannelHandlerContext ctx) {
@@ -78,12 +85,31 @@ class CoreArchitectureRulesSelfTest {
 	@Test
 	void callerSideAllocationIsRejected() {
 		JavaClasses classes = new ClassFileImporter().importClasses(CallerAllocatesFromChannel.class, CallerUsesDefaultAllocator.class,
-				EncoderOnEventLoop.class, CallerWrapsArray.class);
+				BusinessThreadAllocatesReply.class, EncoderOnEventLoop.class, CallerWrapsArray.class);
 		var result = CALLER_SIDE_ALLOC.evaluate(classes);
 		assertTrue(result.hasViolation());
 		String report = result.getFailureReport().toString();
-		assertTrue(report.contains("CallerAllocatesFromChannel") && report.contains("CallerUsesDefaultAllocator"), report);
+		assertTrue(report.contains("CallerAllocatesFromChannel") && report.contains("CallerUsesDefaultAllocator")
+				&& report.contains("BusinessThreadAllocatesReply"), report);
 		assertFalse(report.contains("EncoderOnEventLoop") || report.contains("CallerWrapsArray"), report);
+	}
+
+	/** 生产规则的范围：服务端业务线程上的类在内（含 ServerHandler 的内部任务类），事件循环上的处理器不在内。 */
+	@Test
+	void callerSideCoversServerBusinessClassesButNotEventLoopHandlers() throws ClassNotFoundException {
+		JavaClasses classes = new ClassFileImporter().importClasses(
+				Class.forName("com.feynman.rpc.core.server.ServiceDispatcher"),
+				Class.forName("com.feynman.rpc.core.server.BusinessExecutor"),
+				Class.forName("com.feynman.rpc.core.server.ServerHandler$DispatchTask"),
+				Class.forName("com.feynman.rpc.core.server.ServerHandler"),
+				Class.forName("com.feynman.rpc.core.codec.RpcEncoder"),
+				Class.forName("com.feynman.rpc.core.client.NettyClient"));
+		for (String inScope : List.of("com.feynman.rpc.core.server.ServiceDispatcher", "com.feynman.rpc.core.server.BusinessExecutor",
+				"com.feynman.rpc.core.server.ServerHandler$DispatchTask", "com.feynman.rpc.core.client.NettyClient")) {
+			assertTrue(CoreArchitectureRules.CALLER_SIDE.test(classes.get(inScope)), inScope);
+		}
+		assertFalse(CoreArchitectureRules.CALLER_SIDE.test(classes.get("com.feynman.rpc.core.server.ServerHandler")));
+		assertFalse(CoreArchitectureRules.CALLER_SIDE.test(classes.get("com.feynman.rpc.core.codec.RpcEncoder")));
 	}
 
 	private static final ArchRule STATIC_MUST_BE_FINAL = fields()

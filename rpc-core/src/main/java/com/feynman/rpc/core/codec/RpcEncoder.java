@@ -17,10 +17,10 @@ import io.netty.handler.codec.MessageToMessageEncoder;
  *
  * <p>两种 body：
  * <ul>
- *   <li>{@link RpcMessage#outboundBody()}（客户端请求）：字节已备好、还没有缓冲区。这里用 {@code ctx.alloc()}
+ *   <li>{@link RpcMessage#outboundBody()}（客户端请求、服务端响应）：字节已备好、还没有缓冲区。这里用 {@code ctx.alloc()}
  *       按确切长度<b>一次</b>分配，写入头 + attachments + body，单个缓冲区交给下游——分配发生在事件循环上
- *       （有线程缓存、不扩容），调用方线程从不碰池化分配器（理由见 {@link OutboundBody}）。</li>
- *   <li>{@link RpcMessage#body()}（其余出站消息，如服务端响应）：已经是一个 ByteBuf，按"头缓冲区 + body 缓冲区"两段写出，
+ *       （有线程缓存、不扩容），调用方线程与业务线程从不碰池化分配器（理由见 {@link OutboundBody}）。</li>
+ *   <li>{@link RpcMessage#body()}（其余出站消息：心跳、协商）：已经是一个 ByteBuf，按"头缓冲区 + body 缓冲区"两段写出，
  *       不再拷贝一次。消息本身由父类在编码后 release，这里对 body 额外 retain 一次（retainedSlice）交给下游。</li>
  * </ul>
  * 任何失败都先释放本方法已分配的缓冲区再抛出；父类把异常包成 EncoderException 让这次写失败，并释放消息。

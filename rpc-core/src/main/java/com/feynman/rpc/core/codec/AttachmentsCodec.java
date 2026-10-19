@@ -120,7 +120,9 @@ public final class AttachmentsCodec {
 	private static void writeStr(ByteBuf out, String s) {
 		int lengthIndex = out.writerIndex();
 		out.writeShort(0);
-		int written = ByteBufUtil.writeUtf8(out, s);
+		// 只预留确切的字节数：writeUtf8 按最坏情况（每字符 3 字节）预留，在编码器按确切长度分配的整帧里，
+		// 2 字节字符 / 代理对多的 attachments 会因预留超出容量而写失败（后面的 body 不够垫底时）
+		int written = ByteBufUtil.reserveAndWriteUtf8(out, s, ByteBufUtil.utf8Bytes(s));
 		out.setShort(lengthIndex, written);
 	}
 

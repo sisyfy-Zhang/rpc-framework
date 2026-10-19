@@ -27,6 +27,10 @@ import io.netty.buffer.ByteBufUtil;
  * （BAD_REQUEST、DEADLINE_EXCEEDED 等）className 与 remoteStack 为空串，只用 message。null 字符串按空串编码；
  * 错误信封里超过 65535 字节的 message / remoteStack 在字符边界处截断（堆栈很深时不该让回包失败）。
  *
+ * <p>出站有两种写法，线上字节相同：{@code write*} 直接写进调用方给的缓冲区；{@link #request} / {@link #value} /
+ * {@link #error} 只备好字节、算出确切长度，返回不持缓冲区的 {@link OutboundBody}，由编码器在事件循环上写入——
+ * 框架自己的出站路径（客户端请求、服务端回包）都用后者，业务线程 / 调用方线程不碰池化分配器（docs/pitfalls.md 第 32 条）。
+ *
  * <p>解码函数读取 {@code in} 的全部可读字节并要求恰好用完；返回的参数 / 返回值是 {@code in} 上的 slice
  * （不 retain、不拷贝），生命周期跟随 {@code in}。任何越界、多余字节、非法 present 标志都抛 {@link ProtocolException}。
  */
@@ -179,6 +183,40 @@ public final class EnvelopeCodec {
 		out.writeBytes(value);
 	}
 
+	/**
+	 * 备好一个 OK 响应 body（不分配缓冲区），线上格式与 {@link #writeValue} 相同。
+	 *
+	 * @param value 返回值序列化后的字节；null 表示返回 null（或 void）。之后不得再修改
+	 */
+	public static OutboundBody value(byte[] value) {
+		return new OutboundValue(value);
+	}
+
+	/** {@link #value} 的结果。 */
+	private static final class OutboundValue implements OutboundBody {
+		private final byte[] value;
+
+		OutboundValue(byte[] value) {
+			this.value = value;
+		}
+
+		@Override
+		public int length() {
+			// byte[] 最长约 Integer.MAX_VALUE - 8，加 5 字节不溢出
+			return value == null ? 1 : 1 + 4 + value.length;
+		}
+
+		@Override
+		public void writeTo(ByteBuf out) {
+			writeValue(out, value);
+		}
+
+		@Override
+		public String toString() {
+			return "OutboundValue{" + length() + "B}";
+		}
+	}
+
 	/** 解码 OK 响应 body；返回 null 表示 present=0，否则为 {@code in} 上的 slice（可能 0 字节）。 */
 	public static ByteBuf readValue(ByteBuf in) {
 		ByteBuf buf = in.duplicate();
@@ -191,6 +229,51 @@ public final class EnvelopeCodec {
 		writeTruncatedStr(out, className);
 		writeTruncatedStr(out, message);
 		writeTruncatedStr(out, remoteStack);
+	}
+
+	/**
+	 * 备好一个错误信封（不分配缓冲区），线上格式与 {@link #writeError} 相同：超长字段在这里（调用方线程上）就截断好，
+	 * 编码器只按确切长度写入。
+	 */
+	public static OutboundBody error(String className, String message, String remoteStack) {
+		return new OutboundError(truncated(className), truncated(message), truncated(remoteStack));
+	}
+
+	/** {@link #error} 的结果：三个字段已截断到 65535 个 UTF-8 字节以内。 */
+	private static final class OutboundError implements OutboundBody {
+		private final String className;
+		private final String message;
+		private final String remoteStack;
+		private final int length;
+
+		OutboundError(String className, String message, String remoteStack) {
+			this.className = className;
+			this.message = message;
+			this.remoteStack = remoteStack;
+			this.length = strLength(className) + strLength(message) + strLength(remoteStack);
+		}
+
+		@Override
+		public int length() {
+			return length;
+		}
+
+		@Override
+		public void writeTo(ByteBuf out) {
+			int start = out.writerIndex();
+			writeStr(out, className);
+			writeStr(out, message);
+			writeStr(out, remoteStack);
+			int written = out.writerIndex() - start;
+			if (written != length) {
+				throw new IllegalStateException("error envelope wrote " + written + " bytes, expected " + length);
+			}
+		}
+
+		@Override
+		public String toString() {
+			return "OutboundError{" + className + ", " + length + "B}";
+		}
 	}
 
 	public static ErrorEnvelope readError(ByteBuf in) {
@@ -218,11 +301,16 @@ public final class EnvelopeCodec {
 	}
 
 	private static void writeTruncatedStr(ByteBuf out, String s) {
+		writeStr(out, truncated(s));
+	}
+
+	/** null 按空串；超过 65535 个 UTF-8 字节时在字符边界截断。 */
+	private static String truncated(String s) {
 		String value = s == null ? "" : s;
 		if (ByteBufUtil.utf8Bytes(value) > MAX_U16) {
 			value = truncateUtf8(value, MAX_U16);
 		}
-		writeStr(out, value);
+		return value;
 	}
 
 	/** 截到 UTF-8 编码后不超过 {@code maxBytes} 的最长前缀，不切开代理对。 */

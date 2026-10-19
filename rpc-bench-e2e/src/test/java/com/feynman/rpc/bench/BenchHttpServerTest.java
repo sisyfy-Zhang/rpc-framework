@@ -2,6 +2,7 @@ package com.feynman.rpc.bench;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -68,6 +69,17 @@ class BenchHttpServerTest {
 		Map<?, ?> parsed = (Map<?, ?>) Json.parse(env.body());
 		assertEquals("4242", parsed.get("pid"));
 		assertEquals("http", parsed.get("endpoint"));
+
+		HttpResponse<String> stats = client.send(HttpRequest.newBuilder(uri(BenchHttpServer.STATS_PATH)).GET().build(),
+				HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, stats.statusCode());
+		Map<String, String> flat = new java.util.LinkedHashMap<>();
+		((Map<?, ?>) Json.parse(stats.body())).forEach((k, v) -> flat.put(String.valueOf(k), String.valueOf(v)));
+		GcSampler.Snapshot snapshot = GcSampler.Snapshot.fromStrings(flat);
+		assertFalse(snapshot.collectors().isEmpty(), stats.body());
+		assertTrue(snapshot.heapUsedBytes() > 0, stats.body());
+		assertEquals(405, client.send(HttpRequest.newBuilder(uri(BenchHttpServer.STATS_PATH))
+				.POST(HttpRequest.BodyPublishers.ofString("x")).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
 
 		assertEquals(404, client.send(HttpRequest.newBuilder(uri("/nope")).GET().build(), HttpResponse.BodyHandlers.discarding())
 				.statusCode());

@@ -1,5 +1,6 @@
 package com.feynman.rpc.bench;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,45 +31,79 @@ final class LoadDriver {
 	}
 
 	/**
-	 * @param cpu 非 null 时在本轮统计窗口的开始与结束各取一次 {@code /proc/stat} 快照（一个只睡眠的虚拟线程），
-	 *            结果进 {@code rounds[].cpu}；null 时记 n/a（非 Linux 或拿不到核列表）
+	 * @param cpu 非 null 时在本轮统计窗口的开始与结束各取一次 {@code /proc/stat} 快照，结果进 {@code rounds[].cpu}；
+	 *            null 时记 n/a（非 Linux 或拿不到核列表）。GC 不论 cpu 是否为 null 都在同样两个时刻采样
+	 *            （本进程的 GC MXBean + 服务端的 {@link CallTarget#serverStats()}），差值进 {@code rounds[].gc}。
+	 *            采样在一个只睡眠的虚拟线程里做，不占发压线程。
 	 */
 	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu) {
 		// 开环调度器在本轮计时开始之前构造：构造时的 park 校准不占用本轮的时间线
 		OpenLoopScheduler scheduler = profile.load().closed() ? null : new OpenLoopScheduler(profile.load().rate());
 		RoundRecorder recorder = new RoundRecorder(round, profile);
-		Thread sampler = cpu == null ? null : Thread.ofVirtual().name("bench-cpu-sampler").start(() -> sampleWindow(cpu, profile, recorder));
+		Thread sampler = Thread.ofVirtual().name("bench-window-sampler").start(() -> sampleWindow(cpu, target, profile, recorder));
 		if (scheduler == null) {
 			closedLoop(profile, target, recorder);
 		} else {
 			openLoop(profile, target, recorder, scheduler);
 		}
 		recorder.finish();
-		if (sampler != null) {
-			try {
-				// 窗口结束 ≤ duration ≤ 本轮结束，此时采样线程最多还差读一次文件
-				sampler.join(5_000);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
-			sampler.interrupt();
+		try {
+			// 窗口结束 ≤ duration ≤ 本轮结束，此时采样线程最多还差读一次文件、取一次服务端统计
+			sampler.join(5_000);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
+		sampler.interrupt();
 		return recorder;
 	}
 
-	private static void sampleWindow(CpuSampler cpu, Profile profile, RoundRecorder recorder) {
+	/**
+	 * 窗口起止各采一次：先 CPU（读文件，最便宜、对时刻最敏感）、再本进程 GC、再服务端统计（一次 RPC / HTTP 调用）。
+	 * 三者互不影响：任何一项失败只把那一项记为 unknown。
+	 */
+	private static void sampleWindow(CpuSampler cpu, CallTarget target, Profile profile, RoundRecorder recorder) {
+		long windowMs = profile.load().window().toMillis();
 		try {
 			long windowStart = recorder.startNanos + profile.load().windowStart().toNanos();
 			long windowEnd = recorder.startNanos + profile.load().windowEnd().toNanos();
 			sleepUntil(windowStart);
-			var before = CpuSampler.snapshot();
+			Map<Integer, long[]> cpuBefore = cpu == null ? null : cpuSnapshot();
+			GcSampler.Snapshot clientBefore = GcSampler.snapshot();
+			GcSampler.Snapshot serverBefore = serverStats(target);
 			sleepUntil(windowEnd);
-			var after = CpuSampler.snapshot();
-			recorder.cpu(cpu.measure(before, after, profile.load().window().toMillis()));
+			Map<Integer, long[]> cpuAfter = cpu == null ? null : cpuSnapshot();
+			GcSampler.Snapshot clientAfter = GcSampler.snapshot();
+			GcSampler.Snapshot serverAfter = serverBefore == null ? null : serverStats(target);
+			if (cpu != null) {
+				recorder.cpu(cpuBefore == null || cpuAfter == null ? EnvironmentProbe.UNKNOWN : cpu.measure(cpuBefore, cpuAfter, windowMs));
+			}
+			Map<String, Object> gc = new LinkedHashMap<>();
+			gc.put("client", GcSampler.delta(clientBefore, clientAfter, windowMs));
+			gc.put("server", serverAfter == null ? EnvironmentProbe.UNKNOWN : GcSampler.delta(serverBefore, serverAfter, windowMs));
+			recorder.gc(gc);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
+		} catch (RuntimeException e) {
+			if (cpu != null && recorder.cpu() == EnvironmentProbe.NA) {
+				recorder.cpu(EnvironmentProbe.UNKNOWN);
+			}
+		}
+	}
+
+	private static Map<Integer, long[]> cpuSnapshot() {
+		try {
+			return CpuSampler.snapshot();
 		} catch (Exception e) {
-			recorder.cpu(EnvironmentProbe.UNKNOWN);
+			return null;
+		}
+	}
+
+	/** 服务端统计（{@code BenchService.stats()} / {@code GET /stats}）；取不到（旧服务端、外部目标）时 null，记 unknown。 */
+	private static GcSampler.Snapshot serverStats(CallTarget target) {
+		try {
+			return GcSampler.Snapshot.fromStrings(target.serverStats());
+		} catch (Exception e) {
+			return null;
 		}
 	}
 

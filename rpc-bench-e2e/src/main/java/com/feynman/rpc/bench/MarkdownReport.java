@@ -192,6 +192,7 @@ final class MarkdownReport {
 		}
 		header.add("客户端核 CPU");
 		header.add("服务端核 CPU");
+		header.add("GC 停顿 客户端/服务端 (ms)");
 		header.add("有效");
 		md.append("| ").append(String.join(" | ", header)).append(" |\n|");
 		md.append("---|".repeat(header.size())).append('\n');
@@ -217,6 +218,7 @@ final class MarkdownReport {
 			Map<?, ?> cpu = map(round.get("cpu"));
 			cells.add(cpu.isEmpty() ? cpuMissing(round.get("cpu")) : CpuSampler.pct(cpu.get("client_busy_pct")));
 			cells.add(cpu.isEmpty() ? cpuMissing(round.get("cpu")) : CpuSampler.pct(cpu.get("server_busy_pct")));
+			cells.add(round.get("gc") == null ? "—" : gcPause(round, "client") + " / " + gcPause(round, "server"));
 			cells.add(Boolean.TRUE.equals(round.get("valid")) ? "是" : "否：" + String.join("；", strings(round.get("invalid_reasons"))));
 			md.append("| ");
 			for (int i = 0; i < cells.size(); i++) {
@@ -271,6 +273,20 @@ final class MarkdownReport {
 	private static String cores(Map<?, ?> env) {
 		Object available = env.containsKey("available_cpus") ? env.get("available_cpus") : env.get("logical_cpus");
 		return str(available) + " / " + str(env.get("host_cpus"));
+	}
+
+	/**
+	 * 统计窗口内一端的 GC 停顿（ms，整数——MXBean 是毫秒粒度）；取不到记 unknown。没有 {@code gc} 字段的旧结果文件
+	 * 整格记 —（由调用方处理）。
+	 */
+	private static String gcPause(Map<?, ?> round, String side) {
+		Object gc = round.get("gc");
+		Double pause = GcSampler.pauseMs(round, side);
+		if (pause != null) {
+			return num(pause, 0);
+		}
+		Object value = gc instanceof Map<?, ?> m ? m.get(side) : gc;
+		return value == null ? "—" : String.valueOf(value);
 	}
 
 	/** 没有 {@code cpu} 字段（旧结果文件）记 —，否则原样（n/a / unknown）。 */

@@ -22,6 +22,7 @@ import org.HdrHistogram.Histogram;
  *   <li>延迟的起点由驱动决定：闭环 = 调用前的 nanoTime；开环 = 计划发出时刻（修正 coordinated omission），
  *       开环另记"实际发出 → 完成"的服务时间。</li>
  *   <li>每秒成功数 / 错误数的时间序列覆盖全程（含预热），按完成时刻归桶，用来看降频、GC 停顿与抖动。</li>
+ *   <li>统计窗口内两端（压测端 / 服务端）的 GC 次数与停顿时间（{@link GcSampler}），进 {@code gc}。</li>
  *   <li>超出直方图上限（{@code measure.histogram.max}）的值按上限记录并计入 {@code histogram_clamped}。</li>
  * </ul>
  * 写入方是多个虚拟线程：直方图用 {@link ConcurrentHistogram}，计数用 {@link LongAdder}；读取只在本轮所有调用结束之后。
@@ -61,6 +62,11 @@ final class RoundRecorder {
 	private volatile Map<String, Object> schedulerInfo;
 	/** 统计窗口内的 CPU 忙碌率（{@link CpuSampler}）；不采样时为 n/a，采样失败为 unknown。 */
 	private volatile Object cpu = EnvironmentProbe.NA;
+	/**
+	 * 统计窗口内的 GC：{@code {client: {...}, server: {...}}}（{@link GcSampler#delta}）；服务端取不到时 server 为 unknown，
+	 * 采样线程没能完成（例如本轮提前结束）时整项为 unknown。
+	 */
+	private volatile Object gc = EnvironmentProbe.UNKNOWN;
 
 	RoundRecorder(int round, Profile profile) {
 		this.round = round;
@@ -140,6 +146,10 @@ final class RoundRecorder {
 		return cpu;
 	}
 
+	void gc(Object gc) {
+		this.gc = gc;
+	}
+
 	void finish() {
 		this.endNanos = System.nanoTime();
 		this.endedAt = Instant.now();
@@ -210,6 +220,7 @@ final class RoundRecorder {
 		json.put("histogram_clamped", clamped.sum());
 		json.put("scheduler", schedulerInfo);
 		json.put("cpu", cpu);
+		json.put("gc", gc);
 		boolean warmup = warmupCompleted();
 		List<String> reasons = new ArrayList<>();
 		if (!warmup) {

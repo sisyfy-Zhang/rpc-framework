@@ -236,4 +236,92 @@ class RpcCodecTest {
 				() -> EnvelopeCodec.request("s", "", "", "m", "", java.util.Collections.nCopies(256, (byte[]) null)));
 		assertThrows(IllegalArgumentException.class, () -> EnvelopeCodec.request("x".repeat(65536), "", "", "m", "", List.of()));
 	}
+
+	/**
+	 * 服务端回包同样改为"业务线程只备字节、编码器在事件循环上一次写整帧"：OK 返回值（含 null、0 字节、跨默认容量的长值）、
+	 * 带类名与 remoteStack 的错误信封（含多字节 UTF-8、代理对、孤立代理、超过 65535 字节需截断的堆栈）、只带消息的框架错误，
+	 * 线上字节都必须与原来"业务线程写 body 缓冲区、编码器挂在头后面"的两段写法逐字节相同。
+	 */
+	@Test
+	void deferredResponseBodiesEncodeToTheSameBytesAsBufferBodies() {
+		Map<String, String> attachments = new LinkedHashMap<>();
+		attachments.put("trace", "库存-😀");
+		byte[] longValue = new byte[4096];
+		for (int i = 0; i < longValue.length; i++) {
+			longValue[i] = (byte) (i * 31);
+		}
+		for (byte[] value : java.util.Arrays.asList(null, new byte[0], new byte[] { 9 }, longValue)) {
+			ByteBuf body = Unpooled.buffer();
+			EnvelopeCodec.writeValue(body, value);
+			assertSameFrame(RpcMessage.response(41, (byte) 3, Status.OK, attachments, body),
+					RpcMessage.response(41, (byte) 3, Status.OK, attachments, EnvelopeCodec.value(value)), attachments);
+			ByteBuf bare = Unpooled.buffer();
+			EnvelopeCodec.writeValue(bare, value);
+			assertSameFrame(RpcMessage.response(42, (byte) 3, Status.OK, Map.of(), bare),
+					RpcMessage.response(42, (byte) 3, Status.OK, Map.of(), EnvelopeCodec.value(value)), Map.of());
+		}
+
+		String hugeStack = "java.lang.IllegalStateException: 库存不足 😀\n" + "\tat com.x.库存Service.deduct(库存Service.java:42)\n".repeat(3000);
+		String[][] errors = {
+				{ "com.x.库存Exception", "库存不足 😀 lone\uD800!", hugeStack },
+				{ "java.lang.IllegalStateException", null, "" },
+				{ "", "server overloaded: business executor fixed(threads=4, queueCapacity=0) is saturated", "" },
+				{ "x".repeat(70_000), "m".repeat(65_536), "s" },
+		};
+		Status[] statuses = { Status.BIZ_EXCEPTION, Status.SERVER_ERROR, Status.SERVER_OVERLOADED, Status.SERIALIZATION_ERROR };
+		for (int i = 0; i < errors.length; i++) {
+			String[] e = errors[i];
+			ByteBuf body = Unpooled.buffer();
+			EnvelopeCodec.writeError(body, e[0], e[1], e[2]);
+			assertSameFrame(RpcMessage.response(43, (byte) 10, statuses[i], attachments, body),
+					RpcMessage.response(43, (byte) 10, statuses[i], attachments, EnvelopeCodec.error(e[0], e[1], e[2])),
+					attachments);
+		}
+
+		ByteBuf frame = encode(RpcMessage.response(44, (byte) 10, Status.SERVER_ERROR, Map.of(), EnvelopeCodec.error("c", "m", hugeStack)));
+		try {
+			ByteBuf body = frame.slice(ProtocolConstants.HEADER_LENGTH, frame.readableBytes() - ProtocolConstants.HEADER_LENGTH);
+			EnvelopeCodec.ErrorEnvelope decoded = EnvelopeCodec.readError(body);
+			assertEquals("c", decoded.className());
+			assertEquals(EnvelopeCodec.truncateUtf8(hugeStack, 65535), decoded.remoteStack(),
+					"an over-long remoteStack is truncated on a character boundary, as before");
+		} finally {
+			frame.release();
+		}
+	}
+
+	private static void assertSameFrame(RpcMessage viaBuffer, RpcMessage viaDeferred, Map<String, String> attachments) {
+		int deferredLength = viaDeferred.outboundBody().length();
+		ByteBuf expected = encode(viaBuffer);
+		ByteBuf actual = encode(viaDeferred);
+		try {
+			assertEquals(ByteBufUtil.hexDump(expected), ByteBufUtil.hexDump(actual));
+			int attachmentsLength = AttachmentsCodec.encodedLength(attachments, ProtocolConstants.DEFAULT_MAX_ATTACHMENTS_LENGTH);
+			assertEquals(ProtocolConstants.HEADER_LENGTH + attachmentsLength + deferredLength, actual.readableBytes(),
+					"the precomputed body length is exact");
+		} finally {
+			expected.release();
+			actual.release();
+		}
+	}
+
+	/**
+	 * 回归：attachments 按确切字节数写入。整帧按确切长度分配时，若 attachments 仍按"每字符 3 字节"的最坏情况预留，
+	 * 2 字节字符（如西里尔字母）/ 代理对多、后面的 body 又很短的帧会因预留超出容量而编码失败（请求、回包都受影响）。
+	 */
+	@Test
+	void multiByteAttachmentsBeforeATinyBodyEncodeIntoAnExactSizeFrame() {
+		Map<String, String> attachments = new LinkedHashMap<>();
+		attachments.put("note", "привет".repeat(20)); // 120 个 2 字节字符：最坏情况预留 360，实际 240
+		attachments.put("emoji", "😀".repeat(10));
+		ByteBuf body = Unpooled.buffer();
+		EnvelopeCodec.writeRequest(body, "s", "", "", "m", "", List.of());
+		EnvelopeCodec.OutboundRequest deferred = EnvelopeCodec.request("s", "", "", "m", "", List.of());
+		assertSameFrame(RpcMessage.request(5, (byte) 3, attachments, body), RpcMessage.request(5, (byte) 3, attachments, deferred),
+				attachments);
+		ByteBuf reply = Unpooled.buffer();
+		EnvelopeCodec.writeValue(reply, null);
+		assertSameFrame(RpcMessage.response(5, (byte) 3, Status.OK, attachments, reply),
+				RpcMessage.response(5, (byte) 3, Status.OK, attachments, EnvelopeCodec.value(null)), attachments);
+	}
 }

@@ -38,6 +38,9 @@ final class BenchRunner {
 	static final String CLIENT_BOUND_STATEMENT = "本卡吞吐受发压端 CPU 限制（有效轮里客户端核平均忙碌率超过 " + (int) CpuSampler.CLIENT_BOUND_PCT
 			+ "%），是 harness 的发压上限而非服务端上限。";
 
+	/** 有效轮里压测端 GC 停顿占统计窗口的比例超过它（%）时，报告附声明：发压端自己的停顿会抬高尾延迟。 */
+	static final double CLIENT_GC_PAUSE_PCT = 1.0;
+
 	record Outcome(int exitCode, Path json, Path markdown, Map<String, Object> result) {
 	}
 
@@ -231,6 +234,12 @@ final class BenchRunner {
 		if (clientBound) {
 			statements.add(CLIENT_BOUND_STATEMENT);
 		}
+		Map<String, Object> worstClientGc = worstClientGcRound(rounds);
+		validity.put("client_gc_pause_pct_max", worstClientGc == null ? null : GcSampler.pausePct(worstClientGc, "client"));
+		if (worstClientGc != null && GcSampler.pausePct(worstClientGc, "client") > CLIENT_GC_PAUSE_PCT) {
+			statements.add(String.format(Locale.ROOT, "发压端 GC 停顿占窗口 %.1f%%（第 %s 轮，有效轮中最高），可能抬高尾延迟。",
+					GcSampler.pausePct(worstClientGc, "client"), worstClientGc.get("round")));
+		}
 		statements.add("错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。");
 		validity.put("statements", statements);
 		validity.put("topology", topology(profile, target));
@@ -280,6 +289,18 @@ final class BenchRunner {
 		validity.put("asserts_passed", assertsPassed);
 		validity.put("passed", allValid && assertsPassed);
 		return validity;
+	}
+
+	/** 有效轮里压测端 GC 停顿占比最高的那一轮；没有有效轮或都没有 GC 数据时 null。 */
+	private static Map<String, Object> worstClientGcRound(List<Map<String, Object>> rounds) {
+		Map<String, Object> worst = null;
+		for (Map<String, Object> r : rounds) {
+			Double pct = GcSampler.pausePct(r, "client");
+			if (Boolean.TRUE.equals(r.get("valid")) && pct != null && (worst == null || pct > GcSampler.pausePct(worst, "client"))) {
+				worst = r;
+			}
+		}
+		return worst;
 	}
 
 	private static String topology(Profile profile, Map<String, Object> target) {

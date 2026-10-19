@@ -291,7 +291,7 @@ RESPONSE 帧的 body，格式取决于帧头 status。
 | `BIZ_EXCEPTION`、`SERVER_ERROR`（带类型的错误） | 服务端异常的 `Class.getName()` | 异常消息（null 编为空串） | 服务端堆栈文本（`printStackTrace` 的输出）；服务端关闭堆栈回传（`remoteStackTrace(false)`）时为空串 |
 | 其他所有错误状态（`BAD_REQUEST`、`SERVICE_NOT_FOUND`、`DEADLINE_EXCEEDED`、`SERVER_OVERLOADED`、`SERIALIZATION_ERROR`） | 空串 | 原因描述 | 空串 |
 
-例外：服务端内部异常（例如 Filter 链没有产出结果）时可能回 className 为空串的 `SERVER_ERROR`，客户端按 §10 降级处理。
+例外：服务端内部异常（例如 Filter 链没有产出结果、组装回包本身失败）时可能回 className 为空串的 `SERVER_ERROR`，客户端按 §10 降级处理。
 
 **截断规则**
 
@@ -477,6 +477,10 @@ serializer 字节是各实现的稳定标识，一旦分配不再更改。
 | 停机 DRAINING 或过载 | SERVER_OVERLOADED |
 | 回程 attachments 超限或非法（不带 attachments 回包） | SERVER_ERROR |
 | OK 回包整帧超过 8 MiB | SERIALIZATION_ERROR |
+| 序列化返回值时序列化器抛出 `Error`（对象图过深的 `StackOverflowError` 等；message 以 `failed to serialize result:` 开头，含 Error 类名） | SERIALIZATION_ERROR |
+| 组装回包本身失败（例如异常的 `getMessage` 抛出；message 以 `failed to build reply:` 开头，只含类名） | SERVER_ERROR |
+
+回包的 body 由服务端业务线程只备好字节（返回值的序列化结果 / 错误信封的字段），帧缓冲区由编码器在连接的 IO 线程上按确切长度一次分配写出；这不改变线上格式，只决定"谁分配缓冲区"（见 docs/pitfalls.md 第 32 条）。
 
 回程 attachments 非法时，服务端丢弃原结果（包括 OK 的返回值），改回不带 attachments 的 `SERVER_ERROR`：业务方法可能已经执行，调用方却拿不到返回值。因此 Filter 写回程 attachments 时必须保证合法（只用非 null 字符串、单项 ≤ 65535 字节、段总长 ≤ 64 KiB）。
 

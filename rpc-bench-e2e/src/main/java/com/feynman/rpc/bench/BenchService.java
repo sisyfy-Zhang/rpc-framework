@@ -19,4 +19,10 @@ public interface BenchService {
 	 * hostname）。服务端启动时采集一次，这里直接返回：压测端在预热前调用一次，写进报告的 {@code server_environment}。
 	 */
 	Map<String, String> environment();
+
+	/**
+	 * 服务端进程此刻的累计 GC 次数 / 停顿时间（按收集器）与堆用量，值压平成字符串（{@link GcSampler.Snapshot#toStrings()}）。
+	 * 压测端在每轮统计窗口起止各调用一次，差值写进 {@code rounds[].gc.server}。
+	 */
+	Map<String, String> stats();
 }

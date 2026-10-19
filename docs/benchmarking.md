@@ -14,7 +14,7 @@
 - [构建](#构建)
 - [口径卡](#口径卡)：字段说明 · 校验规则
 - [子命令](#子命令)
-- [WSL2 上的标准流程](#wsl2-上的标准流程)：含 CPU 绑核
+- [WSL2 上的标准流程](#wsl2-上的标准流程)：含发压端 GC 选择的对照依据 · CPU 绑核
 - [负载模型与测量](#负载模型与测量)：闭环 · 开环 · 为什么开环按计划时刻计时
 - [判定与正式轮](#判定与正式轮)
 - [报告字段](#报告字段)
@@ -209,6 +209,27 @@ bench/bin/bench-report.sh --in bench/reports/<yyyyMMdd>-<sha7> --out bench/repor
 两端 JVM 参数缺省为 `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`，可用 `BENCH_SERVER_JAVA_OPTS` / `BENCH_CLIENT_JAVA_OPTS` 覆盖；
 压测端的实际参数进报告的 `environment.jvm_args`，服务端的进 `server_environment.jvm_args`。正式数字之前，确认 `git_dirty` 为 false（报告里会写明），电源接通、调频策略记录在案。
 
+`BENCH_GC_LOG=1` 时两个脚本各追加 `-Xlog:gc*:file=<dir>/gc-<client|server>-<yyyyMMdd-HHmmss>.log`：压测端的 `<dir>` 是 `--out` 的值，
+没有 `--out` 时与服务端一样取 `BENCH_GC_LOG_DIR`（缺省 `<仓库>/target/gc-logs`）。GC 日志只用于排查，`*.log` 被 `.gitignore` 忽略，不随归档入库；
+开了它 `jvm_args` 里会多出这一项。
+
+### 发压端 GC 选择的对照依据
+
+压测端缺省保持 G1（`-Xms1g -Xmx1g -XX:+AlwaysPreTouch`）。对照（2026-10-19，WSL2、AMD Ryzen 5 4600H、服务端绑 0-4、压测端绑 5-9，
+`loopback-latency-v1` 经 ZooKeeper，开环 10000 req/s、每次 3 轮，G1 / 分代 ZGC 交替各跑 2 次，每次重启服务端；代码为 eb846f9 + 本次改动的工作区）：
+
+| 压测端 GC | 6 轮 p50 中位 (ms) | 6 轮 p99 范围 (ms) | p99 跨轮极差 (ms) | 6 轮 p99.9 中位 / 最大 (ms) | 压测端 GC 停顿占窗口（最大） | 服务端 GC 停顿占窗口（最大） |
+|---|---|---|---|---|---|---|
+| G1 `-Xms1g -Xmx1g -XX:+AlwaysPreTouch` | 0.433 | 1.868 – 3.777 | 1.909 | 13.28 / 24.33 | 0.051% | 0.029% |
+| 分代 ZGC `-Xms2g -Xmx2g -XX:+UseZGC -XX:+ZGenerational -XX:+AlwaysPreTouch` | 0.436 | 1.629 – 6.566 | 4.937 | 8.99 / 28.54 | 0.003%（停顿亚毫秒，MXBean 记 0–1ms；并发周期 144–501ms/窗口） | 0.020% |
+
+裁定规则（事先定好）：ZGC 下 6 轮 p99 的跨轮极差至少降一半、p99.9 明显更好、且 p50 不劣于 G1 5% 以上，才把压测端缺省改为 ZGC。
+结果：ZGC 的 p99 极差反而是 G1 的 2.6 倍（单轮 p99 6.566ms 是全部 12 轮最高，该轮服务时间 p99 同步升到 5.956ms），p99.9 中位更低但最大值更高，
+不满足——保持 G1。更重要的是两种 GC 下压测端停顿都只占窗口的 0.05% 以内（G1 每窗口 4 次、合计 6–18ms），轮间 p99 的起伏与服务时间 p99 同步，
+与压测端 GC 无关：本机开环卡的尾延迟波动主要不是发压端 GC 造成的。
+
+服务端保持缺省 G1：它是被测对象，GC 选择属于被测配置的一部分，换 GC 就是换了实验对象；需要比较服务端 GC 时另开卡片，不在压测端口径里改。
+
 ### CPU 绑核
 
 同机压测时服务端与压测端抢同一批核，谁被调度器挤占都会混进数字；开环卡的调度线程还会忙等独占一个核（见[已知局限](#已知局限)）。
@@ -266,6 +287,15 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
   没绑核时两组核相同（都是全部核），数字仍如实记录但不能区分两侧。
 - **`client_bound`**：任一有效轮的客户端核平均忙碌率 > 90% 即 `validity.client_bound = true`，声明段加一句"本卡吞吐受发压端 CPU 限制，
   是 harness 的发压上限而非服务端上限"。它不算失败（闭环卡常常如此），只是让读者知道这个吞吐数字的瓶颈在哪一侧。
+- **GC 观测**：每轮统计窗口的开始与结束（与 CPU 采样同一个虚拟线程、同两个时刻）各取一次两端的累计 GC 值做差：压测端读本进程的
+  `GarbageCollectorMXBean`，服务端调 `BenchService.stats()`（HTTP 卡 `GET /stats`），结果进 `rounds[].gc.client` / `rounds[].gc.server`
+  = `{collections, pause_ms, pause_pct, collectors[], heap_used_mb_start, heap_used_mb_end, heap_committed_mb}`。`pause_ms` 只累加停顿类收集器：
+  G1 的 Young / Old / Concurrent GC（后者记 Remark 与 Cleanup 两个停顿）计入；ZGC / Shenandoah 的 `... Cycles` 是**并发周期**的时长（应用线程照常运行），
+  列在 `collectors[]` 里（`kind: concurrent_cycle`）但不计入停顿，停顿看 `... Pauses`。MXBean 时间是毫秒粒度：ZGC 的亚毫秒停顿会记成 0。
+  服务端取不到（目标不是本 harness 的 bench-server）时记 `unknown`。Markdown 轮次表多一列"GC 停顿 客户端/服务端 (ms)"。
+- **发压端 GC 声明**：任一有效轮的压测端 GC 停顿超过窗口时长的 1%，声明段加一句"发压端 GC 停顿占窗口 x%（第 n 轮，有效轮中最高），
+  可能抬高尾延迟"（`validity.client_gc_pause_pct_max` 记录这个最大值）。不算失败：开环按计划时刻计时，发压端停顿期间该发未发的请求会把停顿
+  算进延迟——这本是修正 coordinated omission 的正确做法，但停顿来自压测端而不是被测服务。
 
 ## 判定与正式轮
 
@@ -286,12 +316,12 @@ JSON 顶层（`schema_version: 1`）：
 | `environment` | 压测端：OS、`wsl`、CPU、`available_cpus`（JVM 可用核数 = `availableProcessors`，受 taskset 影响）、`host_cpus`（主机逻辑核数：Linux 数 `/proc/cpuinfo` 的 processor 行、读不到用 `nproc --all`，Windows 读 `NUMBER_OF_PROCESSORS`）、`cpus_allowed`、内存、JDK、`jvm_args`、GC、Netty、`git_sha` / `git_dirty` / `git_dirty_files`、主机名、`power_supply`、`cpu_governor`、开始 / 结束时间、`harness_version`、`pid`、`metrics_enabled`（`--metrics-port` 是否开启）。`available_cpus` 原名 `logical_cpus`，旧结果文件照常渲染 |
 | `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http` |
 | `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
-| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况）、`warmup_completed`、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)） |
+| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况）、`warmup_completed`、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上） |
 | `summary` | `official_round`、`selection_rule`、`official`（正式轮的数字）、`spread`（各指标的 min / max / range / range_pct） |
-| `validity` | `passed`、`warmup_completed`、`backlog_triggered`、`all_rounds_valid`、`client_bound`、`statements`（闭环声明、client_bound 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
+| `validity` | `passed`、`warmup_completed`、`backlog_triggered`、`all_rounds_valid`、`client_bound`、`client_gc_pause_pct_max`（有效轮压测端 GC 停顿占窗口的最大百分比）、`statements`（闭环声明、client_bound 声明、发压端 GC 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
 
 Markdown 由 JSON 读回后生成，分节：标题（卡片 id）与判定 → 问题 → 环境表（含"可用核数 / 主机核数"、压测端 / 服务端的 JVM 参数与 CPU 亲和、
-"指标"一行列出两端的 `metrics_enabled`）→ 口径表 → 轮次表（正式轮加粗，末尾两列是客户端核 / 服务端核的 CPU 忙碌率）→ 断言表 → 声明（"数字来自固定本机，不可外推" + 拓扑一句 + 模型声明）。
+"指标"一行列出两端的 `metrics_enabled`）→ 口径表 → 轮次表（正式轮加粗，末尾是客户端核 / 服务端核的 CPU 忙碌率与两端 GC 停顿）→ 断言表 → 声明（"数字来自固定本机，不可外推" + 拓扑一句 + 模型声明）。
 表格是 GitHub 风格，可以直接嵌进 README。
 
 JSON 用手写的极简写出器生成；读回复用 SnakeYAML（JSON 是 YAML flow 风格的子集），写出器只产出两边语义一致的子集（字符串一律双引号、小数不用指数）。

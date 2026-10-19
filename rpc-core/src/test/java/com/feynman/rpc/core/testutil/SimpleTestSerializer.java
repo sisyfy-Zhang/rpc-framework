@@ -34,6 +34,9 @@ public class SimpleTestSerializer implements Serializer {
 
 	@Override
 	public byte[] serialize(Object value, Type declaredType) {
+		if (value instanceof SerializationBomb bomb) {
+			throw bomb.error();
+		}
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (DataOutputStream out = new DataOutputStream(bytes)) {
 			if (value instanceof String s) {

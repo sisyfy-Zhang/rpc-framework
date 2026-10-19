@@ -300,22 +300,31 @@ final class HttpCallTarget implements CallTarget {
 	 */
 	@Override
 	public Map<String, String> serverEnvironment() {
+		return getStringMap(BenchHttpServer.ENVIRONMENT_PATH);
+	}
+
+	/** {@code GET /stats}：服务端此刻的 GC 统计，同样走一条单独的临时连接；目标不是 {@code bench server} 时抛异常。 */
+	@Override
+	public Map<String, String> serverStats() {
+		return getStringMap(BenchHttpServer.STATS_PATH);
+	}
+
+	private Map<String, String> getStringMap(String requestPath) {
 		Connection connection = new Connection();
 		tracked.add(connection);
 		try {
 			connection.finishConnect(connection.startConnect());
-			Response response = connection.exchange(HttpMethod.GET, BenchHttpServer.ENVIRONMENT_PATH, null,
-					ENVIRONMENT_TIMEOUT.toNanos(), true);
+			Response response = connection.exchange(HttpMethod.GET, requestPath, null, ENVIRONMENT_TIMEOUT.toNanos(), true);
 			if (response.status() != 200) {
-				throw new IllegalStateException("GET " + BenchHttpServer.ENVIRONMENT_PATH + " returned HTTP " + response.status());
+				throw new IllegalStateException("GET " + requestPath + " returned HTTP " + response.status());
 			}
 			Object parsed = Json.parse(new String(response.body(), StandardCharsets.UTF_8));
 			if (!(parsed instanceof Map<?, ?> map)) {
-				throw new IllegalStateException("GET " + BenchHttpServer.ENVIRONMENT_PATH + " did not return a JSON object");
+				throw new IllegalStateException("GET " + requestPath + " did not return a JSON object");
 			}
-			Map<String, String> environment = new LinkedHashMap<>();
-			map.forEach((k, v) -> environment.put(String.valueOf(k), String.valueOf(v)));
-			return environment;
+			Map<String, String> values = new LinkedHashMap<>();
+			map.forEach((k, v) -> values.put(String.valueOf(k), String.valueOf(v)));
+			return values;
 		} catch (RuntimeException e) {
 			throw e;
 		} catch (Exception e) {

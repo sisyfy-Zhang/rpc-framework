@@ -16,6 +16,7 @@ import com.feynman.rpc.core.config.ExecutorConfig;
 import com.feynman.rpc.core.internal.InFlightGate;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -56,10 +57,18 @@ public final class NettyServer implements AutoCloseable {
 	 */
 	private final ChannelGroup connections = new DefaultChannelGroup("rpc-server-connections", GlobalEventExecutor.INSTANCE);
 	private volatile Channel serverChannel;
+	/** 非 null 时作为已接受连接的 {@link ChannelOption#ALLOCATOR}（测试用它记录分配发生在哪些线程上）。 */
+	private final ByteBufAllocator childAllocator;
 
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode) {
+		this(dispatcher, executorConfig, fallbackSerializerCode, null);
+	}
+
+	NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode,
+			ByteBufAllocator childAllocator) {
 		this.dispatcher = dispatcher;
 		this.fallbackSerializerCode = fallbackSerializerCode;
+		this.childAllocator = childAllocator;
 		this.bossGroup = new NioEventLoopGroup(1, new DefaultThreadFactory("rpc-server-boss"));
 		this.workerGroup = new NioEventLoopGroup(0, new DefaultThreadFactory("rpc-server-worker"));
 		this.bizExecutor = new BusinessExecutor(executorConfig);
@@ -71,18 +80,21 @@ public final class NettyServer implements AutoCloseable {
 				.group(bossGroup, workerGroup)
 				.channel(NioServerSocketChannel.class)
 				.option(ChannelOption.SO_BACKLOG, 128)
-				.childOption(ChannelOption.SO_KEEPALIVE, true)
-				.childHandler(new ChannelInitializer<SocketChannel>() {
-					@Override
-					protected void initChannel(SocketChannel ch) {
-						connections.add(ch); // 关闭的连接会被 ChannelGroup 自动移除
-						ch.pipeline().addLast(new RpcFrameDecoder());
-						ch.pipeline().addLast(new RpcMessageDecoder());
-						ch.pipeline().addLast(new IdleStateHandler(30, 20, 0, TimeUnit.SECONDS));
-						ch.pipeline().addLast(new RpcEncoder());
-						ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode));
-					}
-				});
+				.childOption(ChannelOption.SO_KEEPALIVE, true);
+		if (childAllocator != null) {
+			bootstrap.childOption(ChannelOption.ALLOCATOR, childAllocator);
+		}
+		bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
+			@Override
+			protected void initChannel(SocketChannel ch) {
+				connections.add(ch); // 关闭的连接会被 ChannelGroup 自动移除
+				ch.pipeline().addLast(new RpcFrameDecoder());
+				ch.pipeline().addLast(new RpcMessageDecoder());
+				ch.pipeline().addLast(new IdleStateHandler(30, 20, 0, TimeUnit.SECONDS));
+				ch.pipeline().addLast(new RpcEncoder());
+				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode));
+			}
+		});
 		try {
 			Channel channel = bootstrap.bind(port).sync().channel();
 			this.serverChannel = channel;

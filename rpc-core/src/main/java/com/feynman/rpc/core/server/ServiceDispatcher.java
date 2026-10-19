@@ -16,6 +16,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,7 @@ import com.feynman.rpc.core.filter.Invoker;
 import com.feynman.rpc.core.filter.Result;
 import com.feynman.rpc.core.protocol.AttachmentKeys;
 import com.feynman.rpc.core.protocol.MethodSignature;
+import com.feynman.rpc.core.protocol.OutboundBody;
 import com.feynman.rpc.core.protocol.ProtocolConstants;
 import com.feynman.rpc.core.protocol.ProtocolException;
 import com.feynman.rpc.core.protocol.RpcMessage;
@@ -42,7 +44,6 @@ import com.feynman.rpc.core.serialize.Serializer;
 import com.feynman.rpc.core.serialize.Serializers;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBufUtil;
 
 /**
@@ -65,6 +66,13 @@ import io.netty.buffer.ByteBufUtil;
  * </ul>
  * 回包本身发不出去的两种情况也在这里改写，而不是留给编码器写失败（那样客户端只能等到超时）：回程 attachments
  * 超限或含非法值 → 不带 attachments 的 SERVER_ERROR；OK 回包整帧超过 MAX_FRAME_LENGTH → SERIALIZATION_ERROR。
+ * 序列化返回值时抛出 Error（对象图过深的 StackOverflowError 等）同样回 SERIALIZATION_ERROR（与客户端把请求序列化的
+ * Error 当作确定性的序列化失败一致）；组装回包的其余步骤抛出任何 Throwable 都退回一个只带消息的 SERVER_ERROR——
+ * 回包总会产出，客户端不会因此挂到超时。
+ *
+ * <p><b>回包不在业务线程上分配缓冲区</b>：业务线程（可能是虚拟线程，见 {@code ExecutorConfig.virtualThreads}）只把
+ * 返回值序列化成 byte[]、把错误信封的字段备好，回包携带 {@link OutboundBody}，由编码器在连接的事件循环上按确切长度
+ * 一次分配整帧（docs/pitfalls.md 第 32 条）。这里因此也没有"已分配、还没交给 Netty"的缓冲区，Error 路径不会泄漏。
  *
  * <p><b>服务端异步到底</b>：业务方法返回 {@link CompletionStage}（含 CompletableFuture）时不在业务线程上等待：
  * 业务线程在方法返回时立即释放去处理下一个请求，future 完成时在<b>完成它的那个线程</b>上序列化结果并写回响应；
@@ -133,26 +141,26 @@ public final class ServiceDispatcher {
 	 * 业务方法同步返回时，返回的 future 在本方法返回前已完成；业务方法返回未完成的 future 时，本方法立即返回，
 	 * 响应帧在业务 future 完成时（在完成它的线程上）产出。
 	 */
-	public CompletableFuture<RpcMessage> handle(RpcMessage request, ByteBufAllocator alloc) {
+	public CompletableFuture<RpcMessage> handle(RpcMessage request) {
 		ReleaseOnce owner = new ReleaseOnce(request);
 		try {
-			return dispatch(request, alloc, owner);
+			return dispatch(request, owner);
 		} catch (Throwable t) {
 			owner.release();
 			log.error("Unexpected error handling request {}", request.requestId(), t);
-			return done(errorReply(alloc, request, Status.SERVER_ERROR, t, true, Map.of()));
+			return done(replyOrFallback(request, () -> errorReply(request, Status.SERVER_ERROR, t, true, Map.of())));
 		}
 	}
 
-	private CompletableFuture<RpcMessage> dispatch(RpcMessage request, ByteBufAllocator alloc, ReleaseOnce owner) {
+	private CompletableFuture<RpcMessage> dispatch(RpcMessage request, ReleaseOnce owner) {
 		if ((request.flags() & ProtocolConstants.FLAG_COMPRESSED) != 0) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.BAD_REQUEST, "compressed body is not supported"));
+			return done(frameworkError(request, Status.BAD_REQUEST, "compressed body is not supported"));
 		}
 		Serializer serializer = serializers.find(request.serializer());
 		if (serializer == null) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.SERIALIZATION_ERROR,
+			return done(frameworkError(request, Status.SERIALIZATION_ERROR,
 					"unsupported serializer code " + request.serializer()));
 		}
 		RequestEnvelope envelope;
@@ -162,22 +170,22 @@ public final class ServiceDispatcher {
 			key = new ServiceKey(envelope.service(), envelope.version(), envelope.group());
 		} catch (ProtocolException | IllegalArgumentException e) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.BAD_REQUEST, "malformed request envelope: " + e.getMessage()));
+			return done(frameworkError(request, Status.BAD_REQUEST, "malformed request envelope: " + e.getMessage()));
 		}
 		ExportedService service = services.get(key);
 		if (service == null) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.SERVICE_NOT_FOUND, "no such service: " + key));
+			return done(frameworkError(request, Status.SERVICE_NOT_FOUND, "no such service: " + key));
 		}
 		String methodKey = MethodSignature.methodKey(envelope.method(), envelope.paramSig());
 		ProviderMethod providerMethod = service.methods().get(methodKey);
 		if (providerMethod == null) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.SERVICE_NOT_FOUND, "no such method: " + key + "#" + methodKey));
+			return done(frameworkError(request, Status.SERVICE_NOT_FOUND, "no such method: " + key + "#" + methodKey));
 		}
 		if (envelope.args().size() != providerMethod.paramTypes.length) {
 			owner.release();
-			return done(frameworkError(alloc, request, Status.BAD_REQUEST, "argument count mismatch for " + methodKey
+			return done(frameworkError(request, Status.BAD_REQUEST, "argument count mismatch for " + methodKey
 					+ ": expected " + providerMethod.paramTypes.length + ", got " + envelope.args().size()));
 		}
 
@@ -185,7 +193,8 @@ public final class ServiceDispatcher {
 				() -> decodeArgs(envelope.args(), providerMethod, serializer, owner),
 				request.attachments(), timeoutOf(request.attachments()), request.receivedNanos());
 		return service.chain().invoke(invocation)
-				.handle((result, error) -> toReply(alloc, request, serializer, invocation, providerMethod, result, error))
+				.handle((result, error) -> replyOrFallback(request,
+						() -> toReply(request, serializer, invocation, providerMethod, result, error)))
 				.whenComplete((reply, error) -> owner.release());
 	}
 
@@ -193,13 +202,26 @@ public final class ServiceDispatcher {
 	 * 不经过 Filter 链、直接以框架错误回包（过载 / 停机拒绝时用 SERVER_OVERLOADED），避免客户端等到超时。
 	 * 调用方负责释放请求。
 	 */
-	public RpcMessage frameworkErrorReply(RpcMessage request, ByteBufAllocator alloc, Status status, String reason) {
-		return frameworkError(alloc, request, status, reason);
+	public RpcMessage frameworkErrorReply(RpcMessage request, Status status, String reason) {
+		return frameworkError(request, status, reason);
 	}
 
 	/** attachments 段格式错误 / 超限时的回包。调用方负责释放请求。 */
-	public RpcMessage badAttachmentsReply(RpcMessage request, ByteBufAllocator alloc) {
-		return frameworkError(alloc, request, Status.BAD_REQUEST, "malformed attachments: " + request.malformedAttachments());
+	public RpcMessage badAttachmentsReply(RpcMessage request) {
+		return frameworkError(request, Status.BAD_REQUEST, "malformed attachments: " + request.malformedAttachments());
+	}
+
+	/**
+	 * 组装回包的最后一道兜底：任何 Throwable（例如异常的 getMessage / 堆栈打印本身抛出 Error）都退回一个只带类名的
+	 * SERVER_ERROR，而不是让 future 异常完成——那样 ServerHandler 没有可写的回包，客户端只能等到超时。
+	 */
+	private static RpcMessage replyOrFallback(RpcMessage request, Supplier<RpcMessage> reply) {
+		try {
+			return reply.get();
+		} catch (Throwable t) {
+			log.error("Failed to build the reply for request {}; replying SERVER_ERROR", request.requestId(), t);
+			return frameworkError(request, Status.SERVER_ERROR, "failed to build reply: " + t.getClass().getName());
+		}
 	}
 
 	private Object[] decodeArgs(List<ByteBuf> encoded, ProviderMethod providerMethod, Serializer serializer, ReleaseOnce owner) {
@@ -232,7 +254,7 @@ public final class ServiceDispatcher {
 		return args;
 	}
 
-	private RpcMessage toReply(ByteBufAllocator alloc, RpcMessage request, Serializer serializer, Invocation invocation,
+	private RpcMessage toReply(RpcMessage request, Serializer serializer, Invocation invocation,
 			ProviderMethod providerMethod, Result result, Throwable error) {
 		Map<String, String> replyAttachments = result == null ? Map.of() : result.attachments();
 		int attachmentsLength;
@@ -244,7 +266,7 @@ public final class ServiceDispatcher {
 			// 且业务方法可能已执行（SERVER_ERROR 不重试）；原结果随之丢弃，不静默去掉 attachments 假装成功。
 			log.warn("Invalid response attachments for {} (request {}), replying SERVER_ERROR without attachments: {}",
 					invocation, request.requestId(), e.getMessage());
-			return frameworkError(alloc, request, Status.SERVER_ERROR, "invalid response attachments: " + e.getMessage());
+			return frameworkError(request, Status.SERVER_ERROR, "invalid response attachments: " + e.getMessage());
 		}
 		if (error != null) {
 			// Filter / 链尾让 future 失败：框架侧问题（参数解不出来、反射失败、Filter 抛异常）
@@ -255,11 +277,11 @@ public final class ServiceDispatcher {
 			} else {
 				log.warn("Rejected {} (request {}) with {}: {}", invocation, request.requestId(), status, failure.getMessage());
 			}
-			return errorReply(alloc, request, status, failure, isTyped(status), replyAttachments);
+			return errorReply(request, status, failure, isTyped(status), replyAttachments);
 		}
 		if (result == null) {
 			log.error("Filter chain produced no result for {} (request {})", invocation, request.requestId());
-			return frameworkError(alloc, request, Status.SERVER_ERROR, "filter chain produced no result");
+			return frameworkError(request, Status.SERVER_ERROR, "filter chain produced no result");
 		}
 		if (result.hasException()) {
 			Throwable failure = result.exception();
@@ -287,29 +309,31 @@ public final class ServiceDispatcher {
 				default -> log.debug("Rejected {} (request {}) with {}: {}", invocation, request.requestId(), status,
 						failure.getMessage());
 			}
-			return errorReply(alloc, request, status, failure, isTyped(status), replyAttachments);
+			return errorReply(request, status, failure, isTyped(status), replyAttachments);
 		}
-		ByteBuf body = alloc.buffer();
+		OutboundBody body;
 		try {
 			Object value = result.value();
 			byte[] bytes = value == null || providerMethod.voidReturn ? null
 					: serializer.serialize(value, providerMethod.returnValueType);
-			EnvelopeCodec.writeValue(body, bytes);
+			// 只备好字节，不分配缓冲区：整帧由编码器在事件循环上按确切长度写出
+			body = EnvelopeCodec.value(bytes);
 			// 与客户端发送前检查、RpcEncoder 同一判定（23 字节头 + attachments + body ≤ MAX_FRAME_LENGTH）：
 			// 超限时回 SERIALIZATION_ERROR，而不是交给编码器写失败、让客户端等到超时
-			if (ProtocolConstants.exceedsMaxFrame(attachmentsLength, body.readableBytes())) {
+			if (ProtocolConstants.exceedsMaxFrame(attachmentsLength, body.length())) {
 				throw new IllegalStateException("result too large: frame of " + (ProtocolConstants.HEADER_LENGTH
-						+ attachmentsLength + body.readableBytes()) + " bytes exceeds MAX_FRAME_LENGTH "
+						+ (long) attachmentsLength + body.length()) + " bytes exceeds MAX_FRAME_LENGTH "
 						+ ProtocolConstants.MAX_FRAME_LENGTH);
 			}
 		} catch (RuntimeException e) {
-			body.release();
 			log.error("Failed to serialize result of {} (request {})", invocation, request.requestId(), e);
-			return errorReply(alloc, request, Status.SERIALIZATION_ERROR, e, false, replyAttachments);
-		} catch (Throwable e) {
-			// Error（直接内存耗尽、对象图过深等）：先释放已分配的 body 再抛出，否则它随异常一起丢失、泄漏
-			body.release();
-			throw e;
+			return errorReply(request, Status.SERIALIZATION_ERROR, e, false, replyAttachments);
+		} catch (Error e) {
+			// 对象图过深的 StackOverflowError 等：同样是返回值发不出去，回 SERIALIZATION_ERROR（业务方法已执行，不重试），
+			// 而不是让 future 异常完成、客户端挂到超时。消息里带上 Error 的类型——它的 message 常为 null
+			log.error("Error while serializing result of {} (request {})", invocation, request.requestId(), e);
+			return frameworkError(request, Status.SERIALIZATION_ERROR, replyAttachments,
+					"failed to serialize result: " + e.getClass().getName() + ": " + e.getMessage());
 		}
 		return RpcMessage.response(request.requestId(), serializer.code(), Status.OK, replyAttachments, body);
 	}
@@ -374,34 +398,24 @@ public final class ServiceDispatcher {
 	/**
 	 * @param typed true：信封带异常类名与（按配置）堆栈，客户端据此还原类型；false：只带消息（框架错误）
 	 */
-	private RpcMessage errorReply(ByteBufAllocator alloc, RpcMessage request, Status status, Throwable failure,
-			boolean typed, Map<String, String> attachments) {
-		ByteBuf body = alloc.buffer();
-		try {
-			if (typed) {
-				EnvelopeCodec.writeError(body, failure.getClass().getName(), failure.getMessage(),
-						remoteStackTrace ? limit(stackTrace(failure), remoteStackTraceMaxBytes) : "");
-			} else {
-				EnvelopeCodec.writeError(body, "", String.valueOf(failure.getMessage()), "");
-			}
-		} catch (Throwable e) {
-			// 包括 Error：已分配的 body 不随异常丢失
-			body.release();
-			throw e;
-		}
+	/** 错误信封只在这里备好字段（截断、取堆栈），缓冲区由编码器在事件循环上分配。 */
+	private RpcMessage errorReply(RpcMessage request, Status status, Throwable failure, boolean typed,
+			Map<String, String> attachments) {
+		OutboundBody body = typed
+				? EnvelopeCodec.error(failure.getClass().getName(), failure.getMessage(),
+						remoteStackTrace ? limit(stackTrace(failure), remoteStackTraceMaxBytes) : "")
+				: EnvelopeCodec.error("", String.valueOf(failure.getMessage()), "");
 		return RpcMessage.response(request.requestId(), request.serializer(), status, attachments, body);
 	}
 
-	private static RpcMessage frameworkError(ByteBufAllocator alloc, RpcMessage request, Status status, String message) {
-		ByteBuf body = alloc.buffer();
-		try {
-			EnvelopeCodec.writeError(body, "", message, "");
-		} catch (Throwable e) {
-			// 包括 Error：已分配的 body 不随异常丢失
-			body.release();
-			throw e;
-		}
-		return RpcMessage.response(request.requestId(), request.serializer(), status, Map.of(), body);
+	private static RpcMessage frameworkError(RpcMessage request, Status status, String message) {
+		return frameworkError(request, status, Map.of(), message);
+	}
+
+	private static RpcMessage frameworkError(RpcMessage request, Status status, Map<String, String> attachments,
+			String message) {
+		return RpcMessage.response(request.requestId(), request.serializer(), status, attachments,
+				EnvelopeCodec.error("", message, ""));
 	}
 
 	private static CompletableFuture<RpcMessage> done(RpcMessage reply) {
