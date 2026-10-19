@@ -178,6 +178,11 @@ final class MarkdownReport {
 		row(md, "直方图", "HdrHistogram，" + str(histogram.get("significant_digits")) + " 位有效数字，上限 " + str(histogram.get("max"))
 				+ "；只统计完成时刻落在窗口内的成功调用");
 		row(md, "延迟起点", closed ? "调用发出前（闭环）" : "计划发出时刻（开环，修正 coordinated omission）");
+		Map<?, ?> harness = map(run.get("harness_options"));
+		if (!harness.isEmpty()) {
+			row(md, "harness 选项", harnessOptions(harness, closed, list(json.get("rounds"))));
+			row(md, "预热段", preWarmup(run.get("pre_warmup"), harness));
+		}
 		md.append('\n');
 
 		List<String> report = strings(measure.get("report"));
@@ -287,6 +292,44 @@ final class MarkdownReport {
 		}
 		Object value = gc instanceof Map<?, ?> m ? m.get(side) : gc;
 		return value == null ? "—" : String.valueOf(value);
+	}
+
+	/** 口径表"harness 选项"一行：开环执行者、HTTP IO 线程数、调度线程绑核（含第 1 轮读回的实际生效情况）。 */
+	private static String harnessOptions(Map<?, ?> harness, boolean closed, List<Object> rounds) {
+		List<String> parts = new ArrayList<>();
+		if (!closed) {
+			parts.add("开环执行者 " + str(harness.get("open_workers"))
+					+ (harness.get("open_pool_size") == null ? "" : "（" + str(harness.get("open_pool_size")) + (HarnessOptions.WORKERS_POOL_PLATFORM.equals(harness.get("open_workers")) ? " 个平台线程" : " 个虚拟线程") + "工作者，有界 FIFO 队列）"));
+		}
+		Object client = harness.get("http_client");
+		if (client != null && !String.valueOf(client).startsWith("n/a")) {
+			parts.add("HTTP 客户端 " + str(client));
+		}
+		Object io = harness.get("io_threads");
+		if (io != null && !String.valueOf(io).startsWith("n/a")) {
+			Object poll = harness.get("io_busy_poll");
+			parts.add("HTTP IO 线程 " + str(io) + (Boolean.TRUE.equals(poll) ? "（忙轮询）" : ""));
+		} else if (io != null && client == null) {
+			parts.add("HTTP IO 线程 " + str(io)); // 早于 http_client 字段的结果文件
+		}
+		String pin = "调度线程绑核 " + str(harness.get("pin_dispatcher"));
+		if (!closed && !rounds.isEmpty() && path(map(rounds.get(0)), "scheduler", "pin") instanceof Map<?, ?> p) {
+			pin += "（第 1 轮读回：" + str(p.get("status")) + (p.get("others_cpus") == null ? "" : "，其余线程 " + str(p.get("others_cpus")))
+					+ (p.get("reason") == null ? "" : "；" + str(p.get("reason"))) + "）";
+		}
+		parts.add(pin);
+		return String.join(" · ", parts);
+	}
+
+	/** 口径表"预热段"一行：第 1 轮之前、以同样负载跑的一段（不计入任何轮）的时长与摘要。 */
+	private static String preWarmup(Object preWarmup, Map<?, ?> harness) {
+		if (!(preWarmup instanceof Map<?, ?> p)) {
+			return "关闭（" + str(harness.get("pre_warmup_source")) + " = " + str(harness.get("pre_warmup")) + "）";
+		}
+		Object maxInflight = path(p, "scheduler", "max_inflight");
+		return str(harness.get("pre_warmup")) + "（" + str(harness.get("pre_warmup_source")) + "），第 1 轮之前以同样负载跑、不计入任何轮："
+				+ "发出 " + str(p.get("issued")) + "、错误 " + str(p.get("errors")) + "、延迟 p99 " + num(path(p, "latency_ms", "p99"), 3) + "ms"
+				+ (maxInflight == null ? "" : "、最大在途 " + str(maxInflight));
 	}
 
 	/** 没有 {@code cpu} 字段（旧结果文件）记 —，否则原样（n/a / unknown）。 */

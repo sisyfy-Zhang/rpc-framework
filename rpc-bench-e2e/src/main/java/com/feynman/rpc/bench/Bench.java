@@ -30,8 +30,11 @@ import io.micrometer.core.instrument.MeterRegistry;
  *          [--http-port &lt;p&gt;]
  *   run    --profile &lt;file.yaml&gt; (--registry zk://host:port | --direct host:port[,host:port]) [--out &lt;dir&gt;] [--label &lt;text&gt;]
  *          [--metrics-port &lt;p&gt;]       （transport: http 的卡不带 --registry / --direct：目标是卡上的 target.http.url）
+ *          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads &lt;n&gt;] [--io-busy-poll on|off]
+ *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0]
+ *                                       （harness 实现选项，见 {@link HarnessOptions}）
  *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总）
- *   crossval --harness &lt;result.json&gt; --tool wrk|wrk2 --tool-output &lt;file&gt; [--tool-command &lt;text&gt;] --out &lt;dir&gt;
+ *   crossval --harness &lt;result.json&gt; --tool wrk|wrk2 --tool-output &lt;file&gt;[,&lt;file&gt;...] [--tool-command &lt;text&gt;] --out &lt;dir&gt;
  * </pre>
  * 退出码：0 成功；1 用法错误、口径卡不合法或运行异常；2 实验判定未通过（断言失败或有无效轮次）。
  *
@@ -136,7 +139,16 @@ public final class Bench {
 	}
 
 	private static int run(Options options, String[] rawArgs, PrintStream out) throws Exception {
-		options.allowOnly("profile", "out", "registry", "direct", "label", "metrics-port");
+		options.allowOnly("profile", "out", "registry", "direct", "label", "metrics-port", "open-workers", "http-client", "io-threads", "io-busy-poll",
+				"pin-dispatcher", "pre-warmup");
+		HarnessOptions harnessOptions;
+		try {
+			harnessOptions = HarnessOptions.parse(options.value("open-workers", null), options.value("http-client", null),
+					options.value("io-threads", null),
+					options.value("io-busy-poll", null), options.value("pin-dispatcher", null), options.value("pre-warmup", null));
+		} catch (IllegalArgumentException e) {
+			throw new UsageException(e.getMessage());
+		}
 		Integer metricsPort = options.has("metrics-port") ? options.intValue("metrics-port") : null;
 		Path profileFile = Path.of(options.required("profile"));
 		String registry = options.value("registry", null);
@@ -157,6 +169,9 @@ public final class Bench {
 			endpoint = CallTarget.Endpoint.http(profile.target().httpUrl());
 		} else {
 			endpoint = registry != null ? CallTarget.Endpoint.registry(registry) : CallTarget.Endpoint.direct(direct);
+			if (harnessOptions.httpIoOptionsGiven()) {
+				throw new UsageException("--http-client / --io-threads / --io-busy-poll apply to transport: http cards only (RpcClient has no event-loop setting)");
+			}
 		}
 		Path outDir = options.value("out", null) != null ? Path.of(options.value("out", null)) : defaultArchiveDir();
 		List<String> commandLine = new ArrayList<>(List.of("rpc-bench-e2e"));
@@ -169,7 +184,7 @@ public final class Bench {
 				out.println("metrics http://0.0.0.0:" + metricsEndpoint.port() + PrometheusEndpoint.PATH
 						+ " (metrics filter on: say so in --label)");
 			}
-			outcome = BenchRunner.run(profile, endpoint, outDir, options.value("label", null), commandLine, out, metrics);
+			outcome = BenchRunner.run(profile, endpoint, outDir, options.value("label", null), commandLine, out, metrics, harnessOptions);
 		}
 		out.println("json: " + outcome.json().toAbsolutePath().normalize());
 		out.println("markdown: " + outcome.markdown().toAbsolutePath().normalize());
@@ -292,8 +307,10 @@ public final class Bench {
 				         [--metrics-port <p>] [--http-port <p>]
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)
+				         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>]
+				         [--io-busy-poll on|off] [--pin-dispatcher <cpu>|off] [--pre-warmup <duration>|0]
 				  report --in <dir|result.json> [--out <file.md>]
-				  crossval --harness <result.json> --tool wrk|wrk2 --tool-output <file> [--tool-command <text>] --out <dir>
+				  crossval --harness <result.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] --out <dir>
 				exit codes: 0 ok, 1 usage / invalid profile / runtime error, 2 experiment failed (assert or invalid round)""");
 	}
 

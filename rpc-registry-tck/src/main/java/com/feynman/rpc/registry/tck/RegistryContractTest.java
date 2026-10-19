@@ -509,6 +509,53 @@ public abstract class RegistryContractTest {
 				getClass().getSimpleName(), (System.nanoTime() - recoveredAt) / 1_000_000, recorder);
 	}
 
+	/**
+	 * 与上一条同一契约，但后端停机时间超过客户端内部重试的放弃点（{@link #clientRetryHorizon()}）：订阅时发出的后台操作
+	 * 已经"重试放弃"，后端此后才恢复，订阅仍须补推首次列表并收到之后的变化——不能依赖某一次后台操作恰好在停机期间
+	 * 没有耗尽重试。提供者在后端恢复之后才注册。
+	 */
+	@Test
+	void subscribeSurvivesTheClientGivingUpRetriesBeforeTheBackendAppears() throws Exception {
+		Assumptions.assumeTrue(supportsBackendRestart(),
+				getClass().getSimpleName() + ": implementation's test backend cannot be restarted in place, case skipped");
+		ServiceKey key = randomKey();
+		ServiceInstance instance = instance(key, nextPort());
+		PushRecorder recorder = new PushRecorder("consumer");
+		stopBackendForRestart();
+		long downFor;
+		try {
+			Registry consumer = newRegistry();
+			assertDoesNotThrow(() -> consumer.subscribe(key, recorder), "subscribe must not throw while the backend is unreachable");
+			long subscribedAt = System.nanoTime();
+			Thread.sleep(clientRetryHorizon().toMillis());
+			downFor = (System.nanoTime() - subscribedAt) / 1_000_000;
+			assertTrue(recorder.all().stream().noneMatch(List::isEmpty),
+					"'not connected' must not be pushed as 'no providers': " + recorder);
+		} finally {
+			restartBackend();
+		}
+		long recoveredAt = System.nanoTime();
+		Registry provider = newRegistry();
+		await("register after the backend recovered").atMost(pushTimeout()).pollInterval(Duration.ofMillis(100))
+				.ignoreExceptions().until(() -> {
+					provider.register(instance);
+					return true;
+				});
+		recorder.awaitLatest(pushTimeout(), "catches up although the client gave up its retries before the backend appeared",
+				list -> containsAddress(list, instance.address()));
+		System.out.printf("[TCK %s] backend down for %dms after subscribe (retry horizon %dms); subscriber saw the provider %dms after "
+				+ "the backend restarted; pushes: %s%n", getClass().getSimpleName(), downFor, clientRetryHorizon().toMillis(),
+				(System.nanoTime() - recoveredAt) / 1_000_000, recorder);
+	}
+
+	/**
+	 * 客户端内部对单次后台操作的重试在多久之后放弃（后端一直不可达时）。{@code subscribeSurvivesTheClientGivingUpRetries...}
+	 * 让后端停机这么久再恢复。缺省 0：实现没有"放弃"这回事（例如进程内参考实现），停机时长退化为 0。
+	 */
+	protected Duration clientRetryHorizon() {
+		return Duration.ZERO;
+	}
+
 	@Test
 	void registerAgainstAnUnreachableBackendFailsWithRegistryExceptionWithinTheDeclaredBound() {
 		long createStart = System.nanoTime();

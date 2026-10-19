@@ -30,6 +30,14 @@ import org.HdrHistogram.Histogram;
 final class RoundRecorder {
 
 	static final String BACKLOG_DROPPED = "backlog_dropped";
+	/** 无效原因的前缀：开环轮内发出滞后 p99 超过 {@link #DISPATCH_LAG_P99_MAX_NANOS}。 */
+	static final String DISPATCHER_DELAYED = "dispatcher_delayed";
+	/**
+	 * 开环轮内发出滞后（计划时刻 → 调度线程到点）p99 的上限：超过即本轮无效（{@value #DISPATCHER_DELAYED}）。
+	 * 调度线程自己被推迟时，从计划时刻算的延迟里混进了压测端的滞后，这一轮的尾延迟说的是压测端而不是被测服务。
+	 * 1ms 是开环调度器的设计目标（正常时 p99 在几十微秒），交叉验证另有更严的 100µs（c 项）。
+	 */
+	static final long DISPATCH_LAG_P99_MAX_NANOS = 1_000_000;
 
 	final int round;
 	final long startNanos;
@@ -187,6 +195,15 @@ final class RoundRecorder {
 		return successBeforeWindow.sum() > 0;
 	}
 
+	/**
+	 * 开环且轮内发出滞后 p99 超过 {@link #DISPATCH_LAG_P99_MAX_NANOS}。按报告里写出的数（毫秒保留 3 位）比较：
+	 * HdrHistogram 给出的是桶的上沿（恰好 1ms 的样本读回约 1.0005ms），判定与读者看到的数字保持一致。
+	 */
+	boolean dispatcherDelayed() {
+		return dispatchLag != null && dispatchLag.getTotalCount() > 0
+				&& ms(dispatchLag.getValueAtPercentile(99)) > ms(DISPATCH_LAG_P99_MAX_NANOS);
+	}
+
 	double throughput() {
 		return windowSuccess.sum() / ((windowEnd - windowStart) / 1e9);
 	}
@@ -231,6 +248,14 @@ final class RoundRecorder {
 		}
 		if (windowSuccess.sum() == 0) {
 			reasons.add("no successful call completed inside the steady window");
+		}
+		boolean dispatcherDelayed = dispatcherDelayed();
+		if (dispatcherDelayed) {
+			reasons.add(DISPATCHER_DELAYED + ": 轮内发出滞后 p99 " + ms(dispatchLag.getValueAtPercentile(99)) + "ms > "
+					+ ms(DISPATCH_LAG_P99_MAX_NANOS) + "ms，调度线程本身被推迟，本轮不参与正式轮选取");
+		}
+		if (open) {
+			json.put("dispatcher_delayed", dispatcherDelayed);
 		}
 		json.put("warmup_completed", warmup);
 		json.put("valid", reasons.isEmpty());

@@ -123,8 +123,15 @@ target:
 `connections` 决定的是突发时排队的长短。注意 harness 的"服务时间"从发压虚拟线程开始执行算起，排队等连接的时间也在其中（无排队时
 等同于"实际发出 → 完成"）。（早期实现曾在没有空闲连接时直接丢弃，WSL2 上 12.8ms 级的停顿就让开环轮次无效，已改为排队。）
 
-客户端实现要点（`HttpCallTarget`）：Netty `HttpClientCodec` + `HttpObjectAggregator`（8MiB），每次调用在发压的虚拟线程上写出、等响应
-（与 RPC 的同步代理同一种调用方式）；IO 线程数 = 可用核数，Linux 用 epoll 原生传输（netty-all 自带），其它平台 NIO；超时由每个目标
+http 开环卡缺省用阻塞客户端（`BlockingHttpCallTarget`，`--http-client blocking`）：每条连接一个阻塞 `java.net.Socket`（TCP_NODELAY），
+平台线程工作者自己写出预先拼好的整个请求、阻塞在 read 上等响应，只解析状态行与 `content-length`；超时用 `SO_TIMEOUT`（= 本次调用剩余的
+`load.timeout`），超时或出错就关掉这条连接、下次重连；连接池、排队与在途语义与下面的 netty 客户端相同。它只用于交叉验证：
+**HTTP 对照端只验证 harness 的计时 / 调度 / 直方图**（调度线程、工作者池、记录器、两个计时点）；RPC 卡的路径仍是 `RpcClient`
+（Netty 客户端）+ 虚拟线程工作者池，客户端里的线程交接是被测框架的一部分，照常计入。
+
+netty 客户端实现要点（`HttpCallTarget`，http 闭环卡的缺省）：Netty `HttpClientCodec` + `HttpObjectAggregator`（8MiB），每次调用在发压的虚拟线程上写出、等响应
+（与 RPC 的同步代理同一种调用方式）；IO 线程数与是否忙轮询见 [harness 实现选项](#harness-实现选项)（开环卡缺省 1 个忙轮询的事件循环，
+闭环卡缺省 = 可用核数、不忙轮询），Linux 用 epoll 原生传输（netty-all 自带），其它平台 NIO；超时由每个目标
 一个的扫描任务（每 10ms）判定，不用限时等待（虚拟线程上的限时 park 每次都要登记 / 撤销一个定时任务，闭环高并发下开销可观）；
 超时的连接直接关闭、下次使用时重连。建连后、第一轮之前每条连接串行做 200 次回显预热 JIT（不计入任何一轮，次数写进
 `run.target.pre_warmup_calls_per_connection`）：冷 JVM 第一秒的慢调用会把 64 条连接占满、后面的请求排队，测的是 JIT 而不是目标。服务端环境经 `GET /environment` 取回（与 RPC 端点的 `environment()` 同一份采集）。
@@ -147,9 +154,11 @@ YAML 只用 SnakeYAML 的 `SafeConstructor` 加载成 Map（`!!java...` 这类�
 ```text
 server   --port <p> [--host <公布地址>] (--registry zk://host:port | --no-registry) [--serializer protobuf] [--metrics-port <p>] [--http-port <p>]
 run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>] [--metrics-port <p>]
-         （transport: http 的卡不带 --registry / --direct）
+         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--io-threads <n>] [--io-busy-poll on|off]
+         [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0]
+         （transport: http 的卡不带 --registry / --direct；harness 实现选项见下文）
 report   --in <目录 | 结果.json> [--out <file.md>]
-crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file> [--tool-command <text>] [--tool-version <text>]
+crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] [--tool-version <text>]
          [--cpu-tool <crossval.sh 的 CPU 采样行>] --out <dir>
 ```
 
@@ -163,7 +172,7 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file> [--tool-co
 - **`server --http-port <p>`**（缺省关闭）：在同一进程、独立端口起 HTTP/1.1 对照端点（Netty `HttpServerCodec` + `HttpObjectAggregator`
   8MiB，keep-alive，业务在 IO 线程上完成）：`POST /echo` 原样返回请求体（`application/octet-stream`），`GET /ping` 返回 `ok`，
   `GET /environment` 返回服务端环境 JSON；其它路径 404、方法不对 405。ready 行末尾多一个 `http_port=<p>`。
-- **crossval**：读一次 `transport: http` 运行的结果 JSON 与 wrk / wrk2 的原始输出，并排比较、按[交叉验证](#交叉验证)的口径判定，
+- **crossval**：读一次 `transport: http` 运行的结果 JSON 与 wrk / wrk2 的原始输出（`--tool-output` 可给逗号分隔的多份，取 p99 中位那一次作对照值），并排比较、按[交叉验证](#交叉验证)的口径判定，
   写 `crossval-<mode>-<yyyyMMdd-HHmmss>.json` 与由它生成的 `.md`（闭环另有结论句）；判定 PASS 退出码 0，FAIL 退出码 2。一般由 `bench/bin/crossval.sh` 调用。
 
 - **`--metrics-port <p>`**（`server` 与 `run`，缺省关闭）：给被压的 RpcServer / RpcClient 加上 `rpc-metrics-micrometer` 的指标 Filter 与
@@ -178,6 +187,27 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file> [--tool-co
 **`--direct` 的实现**：`RpcClient` 没有直连 API，但注册中心是 SPI。harness 注册了一个只读的 `direct` 注册中心扩展（`DirectRegistryFactory`），
 把 `--direct` 给出的地址当作任何被订阅服务的全部提供者、订阅时立即推送。连接池、负载均衡、Cluster、超时与注册中心模式走完全相同的代码，
 只是提供者列表的来源不同；core 没有为此做任何改动。
+
+### harness 实现选项
+
+口径卡描述"压什么、怎么算"；下面这些是"harness 用什么方式把请求发出去"，不属于口径，但会影响 harness 自身的开销与尾延迟，
+所以每一项（含实际生效情况）都进 JSON 的 `run.harness_options`，Markdown 口径表多两行"harness 选项""预热段"，交叉验证报告的设置表也列出。
+缺省值来自对照实验（[docs/probes/harness-tail-latency.md](probes/harness-tail-latency.md)），不改缺省就不需要写任何选项。
+
+| 选项 | 取值（**缺省**） | 作用 | 实验结论 |
+|---|---|---|---|
+| `--open-workers` | rpc 卡与 netty 客户端：**`pool`**（N 个虚拟线程工作者，N = http 卡的 `connections` / rpc 卡 64；`pool:N` 指定）；http 卡用阻塞客户端时：**`pool-platform`**（N 个平台线程工作者）· `per-request`（每请求一个新虚拟线程，旧实现） | 开环调度线程把计划时刻交给谁执行。pool：调度线程只做一次入队（有界 FIFO，容量 = 在途上限；满了计 `backlog_dropped`），工作者按入队顺序取走 | pool 比 per-request 的服务时间 p99 低约 0.1ms（短卡 0.53 vs 0.61~0.64ms）、各轮更稳。平台线程工作者配 netty 客户端没有更好（p50 反而高约 30µs）；配阻塞客户端时必须是平台线程（虚拟线程的阻塞 read 要多经 JDK poller 与载体调度两跳，p50 0.206 vs 0.148ms） |
+| `--http-client` | http 开环卡 **`blocking`**；http 闭环卡 **`netty`** | http 卡的客户端：`netty`（事件循环，`HttpCallTarget`）或 `blocking`（每条连接一个阻塞 `java.net.Socket`，调用方线程自己写请求、阻塞在 read 上等响应，`BlockingHttpCallTarget`）。rpc 卡不适用 | 阻塞客户端 + 平台线程工作者：没有 IO 线程交接、没有忙等的 IO 线程，服务时间 p50 / p99 与 wrk2 未修正值基本重合（正式卡 0.146 / 0.354 vs 0.156 / 0.382ms），各轮比 netty 忙轮询稳 |
+| `--io-threads` | netty 客户端：开环卡 **1**；闭环卡 **可用核数** | netty 客户端的事件循环线程数（阻塞客户端没有事件循环，记 n/a）。rpc 卡不适用（`RpcClient` 没有这个配置），给了就是用法错误 | 单独改它（5 → 2 / 1）对 p99 的影响在噪声范围内；与忙轮询一起用 1 个 |
+| `--io-busy-poll` | netty 客户端：开环卡 **`on`**；闭环卡 **`off`** | 事件循环每圈非阻塞 `epoll_wait` / `selectNow`，从不阻塞：调用方提交写出任务时不需要唤醒它（省掉一次跨线程唤醒），代价是占满一个核。rpc 卡不适用 | 唯一能消掉 harness 固定开销的一项：服务时间 p50 从约 0.225ms 降到 0.147ms（wrk2 未修正 0.149ms），p99 与 wrk2 的差从约 120µs 降到约 85µs |
+| `--pin-dispatcher` | `<cpu>` · `off`（**命令行缺省 off；`bench-run.sh` 在 Linux 绑核启动时缺省加上压测端核列表的第一个核**） | Linux：开环调度线程（`bench-dispatch`）钉到该核，进程里其余线程钉到进程亲和里剩下的核（`taskset -cp`，按 `/proc/self/task/*/comm` 找线程）；每轮计时开始前钉一次，轮末核对是否有线程又落到该核（`rounds[].scheduler.pin.stray_threads_at_end`）。非 Linux 记 `unsupported`、不报错 | 发出滞后 p99 从 0.09~0.18ms 降到 0.02~0.04ms；服务时间 p99.9 / max 明显收窄（短卡 0.66 / 3.2ms vs 5.5 / 20ms）。调度线程忙等，不钉时与 IO 线程、载体线程抢核 |
+| `--pre-warmup` | **卡片的 `load.warmup`** · 时长 · `0`（关闭） | 第 1 轮之前以同样负载跑一段，不计入任何一轮；摘要（发出数、错误、延迟、发出滞后、最大在途）进 `run.pre_warmup`，`run.harness_options.pre_warmup_ms` 记时长 | 冷 JVM 的第一段（JIT、连接）在预热段里消化。`loopback-latency-v1`：第 1 轮 p99 52.6 → 3.5ms、最大在途 4220 → 387（预热段自己 p99 512ms、最大在途 5515）；HTTP 卡上的改善小于环境噪声，详见探针 |
+
+`bench-run.sh` 另读 `BENCH_HARNESS_OPTS`（追加在命令行参数之后，`crossval.sh` 经它启动 harness，同样生效），对照实验就是这样改选项的：
+
+```bash
+BENCH_HARNESS_OPTS="--http-client netty --open-workers per-request --io-threads 5 --io-busy-poll off --pin-dispatcher off --pre-warmup 0"   bash bench/bin/crossval.sh --mode open      # 即 d5d620c 的旧实现
+```
 
 ## WSL2 上的标准流程
 
@@ -237,6 +267,10 @@ bench/bin/bench-report.sh --in bench/reports/<yyyyMMdd>-<sha7> --out bench/repor
 否则原样启动并在 stderr 提示。实际生效的亲和由进程自己读 `/proc/self/status` 的 `Cpus_allowed_list`，写进 `environment.cpus_allowed`（压测端）
 与 `server_environment.cpus_allowed`（服务端），Markdown 环境表各占一行——报告记录的是"实际绑上了什么"，不是"脚本想绑什么"。
 
+`bench-run.sh` 在 Linux 上按 `BENCH_CLIENT_CPUS` 绑核启动时，还缺省加 `--pin-dispatcher <列表的第一个核>`：开环调度线程独占该核，
+进程里其余线程（IO 线程、虚拟线程载体、GC / JIT 线程）钉到剩下的核（5-9 时即调度线程 5、其余 6-9）。实际生效情况由进程读回
+各线程的 `Cpus_allowed_list`，写进 `rounds[].scheduler.pin`（口径表"harness 选项"一行显示第 1 轮的结果）；不想要时传 `--pin-dispatcher off`。
+
 WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分：
 
 | 进程 | 核 | 变量 |
@@ -258,14 +292,16 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
 
 ### 开环（open）
 
-单个调度线程按 `rate` 生成等间隔的计划发出时刻（第 i 个 = 开始 + i × 1/rate），远时 `LockSupport.parkNanos`、最后一段自旋对齐（自旋窗口在本轮计时开始前按实测的 park 超睡量校准，Windows 上约为一个系统定时器节拍），到点就把调用交给一个新的虚拟线程
-（同步代理方法，与闭环走同一个远程方法、同一条客户端代码路径）。记录三样东西：
+单个调度线程（`bench-dispatch`）按 `rate` 生成等间隔的计划发出时刻（第 i 个 = 开始 + i × 1/rate），远时 `LockSupport.parkNanos`、最后一段自旋对齐（自旋窗口在本轮计时开始前按实测的 park 超睡量校准，Windows 上约为一个系统定时器节拍），到点就把计划时刻交给执行者：
+缺省是固定的 N 个虚拟线程工作者（`--open-workers pool`，从有界 FIFO 队列按入队顺序取），也可以每个请求一个新虚拟线程（`per-request`，旧实现）；
+执行者调用同步代理方法（与闭环走同一个远程方法、同一条客户端代码路径）。Linux 上 `bench-run.sh` 缺省把调度线程单独钉到一个核（`--pin-dispatcher`）。
+第 1 轮之前缺省先以同样负载跑一段预热段（`--pre-warmup`，缺省 = 卡片的 warmup，不计入任何一轮）。记录三样东西：
 
 - **延迟** = 完成时刻 − **计划**发出时刻；
-- **服务时间** = 完成时刻 − 实际开始执行时刻；
+- **服务时间** = 完成时刻 − 实际开始执行时刻（执行者取到它的时刻；在工作者队列里等的时间计入延迟、不计入服务时间）；
 - **发出滞后** = 调度线程实际到点 − 计划时刻（调度器自身是否可信）。
 
-在途数达到 `rate × timeout × 2` 时不再发出，计为 `backlog_dropped` 错误，本轮无效：此时压测端已经跟不上计划，再发只会测压测端自己。
+在途数（排队 + 执行中）达到 `rate × timeout × 2`（或工作者队列满）时不再发出，计为 `backlog_dropped` 错误，本轮无效：此时压测端已经跟不上计划，再发只会测压测端自己。
 
 ### 为什么开环按计划时刻计时
 
@@ -299,7 +335,10 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
 
 ## 判定与正式轮
 
-- **有效轮**：预热期内有成功调用（`warmup_completed`）、没有 `backlog_dropped`、窗口内至少一次成功。
+- **有效轮**：预热期内有成功调用（`warmup_completed`）、没有 `backlog_dropped`、窗口内至少一次成功；开环另要求**轮内发出滞后 p99 ≤ 1ms**
+  （按报告写出的毫秒值比较）。超过即 `valid = false`、原因 `dispatcher_delayed`（`rounds[].dispatcher_delayed = true`），声明段写明是哪几轮：
+  调度线程自己被推迟时，从计划时刻算的延迟里混进了压测端的滞后，这一轮的尾延迟说的是压测端而不是被测服务。这样的轮不参与正式轮选取，
+  数字仍列在轮次表里；交叉验证的前提检查（全部轮次有效）随之不通过。1ms 是调度器的设计目标（正常时 p99 在几十微秒），交叉验证另有更严的 100µs（c 项）。
 - **正式轮**：闭环取窗口吞吐中位数那一轮，开环取 p99 中位数那一轮（偶数轮取下中位；有有效轮时只在有效轮里选）。正式轮在 Markdown 里加粗，断言里的延迟与吞吐按正式轮判定。
 - **极差**：各轮吞吐与各分位数的 max − min 及其相对最小值的百分比，衡量本机的可重复性。
 - **通过** = 全部轮次有效 且 全部断言满足；否则退出码 2。
@@ -315,13 +354,15 @@ JSON 顶层（`schema_version: 1`）：
 | `run` | `command`（完整命令行）、`target`（直连 / 注册中心、实际提供者地址、序列化器、负载均衡、每节点连接数） |
 | `environment` | 压测端：OS、`wsl`、CPU、`available_cpus`（JVM 可用核数 = `availableProcessors`，受 taskset 影响）、`host_cpus`（主机逻辑核数：Linux 数 `/proc/cpuinfo` 的 processor 行、读不到用 `nproc --all`，Windows 读 `NUMBER_OF_PROCESSORS`）、`cpus_allowed`、内存、JDK、`jvm_args`、GC、Netty、`git_sha` / `git_dirty` / `git_dirty_files`、主机名、`power_supply`、`cpu_governor`、开始 / 结束时间、`harness_version`、`pid`、`metrics_enabled`（`--metrics-port` 是否开启）。`available_cpus` 原名 `logical_cpus`，旧结果文件照常渲染 |
 | `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http` |
-| `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
-| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况）、`warmup_completed`、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上） |
+| `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads` / `io_busy_poll`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
+| `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads` / `io_busy_poll`（rpc 卡记 n/a）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source` |
+| `run.pre_warmup` | 预热段的摘要（`duration_ms`、`issued`、`successes`、`errors`、`latency_ms`、`service_time_ms`、`dispatch_lag_ms`、`backlog_dropped`、`scheduler`）；关闭时为 `"off"` |
+| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况：节拍、`max_inflight`、`workers` / `pool_size`、`dispatcher_thread`、`pin`——绑核读回的结果与轮末的 `stray_threads_at_end`）、`warmup_completed`、`dispatcher_delayed`（开环）、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上） |
 | `summary` | `official_round`、`selection_rule`、`official`（正式轮的数字）、`spread`（各指标的 min / max / range / range_pct） |
-| `validity` | `passed`、`warmup_completed`、`backlog_triggered`、`all_rounds_valid`、`client_bound`、`client_gc_pause_pct_max`（有效轮压测端 GC 停顿占窗口的最大百分比）、`statements`（闭环声明、client_bound 声明、发压端 GC 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
+| `validity` | `passed`、`warmup_completed`、`backlog_triggered`、`all_rounds_valid`、`dispatcher_delayed_rounds`、`client_bound`、`client_gc_pause_pct_max`（有效轮压测端 GC 停顿占窗口的最大百分比）、`statements`（闭环声明、client_bound 声明、发压端 GC 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
 
 Markdown 由 JSON 读回后生成，分节：标题（卡片 id）与判定 → 问题 → 环境表（含"可用核数 / 主机核数"、压测端 / 服务端的 JVM 参数与 CPU 亲和、
-"指标"一行列出两端的 `metrics_enabled`）→ 口径表 → 轮次表（正式轮加粗，末尾是客户端核 / 服务端核的 CPU 忙碌率与两端 GC 停顿）→ 断言表 → 声明（"数字来自固定本机，不可外推" + 拓扑一句 + 模型声明）。
+"指标"一行列出两端的 `metrics_enabled`）→ 口径表（末尾两行"harness 选项""预热段"）→ 轮次表（正式轮加粗，末尾是客户端核 / 服务端核的 CPU 忙碌率与两端 GC 停顿）→ 断言表 → 声明（"数字来自固定本机，不可外推" + 拓扑一句 + 模型声明）。
 表格是 GitHub 风格，可以直接嵌进 README。
 
 JSON 用手写的极简写出器生成；读回复用 SnakeYAML（JSON 是 YAML flow 风格的子集），写出器只产出两边语义一致的子集（字符串一律双引号、小数不用指数）。
@@ -354,8 +395,9 @@ bash bench/bin/crossval.sh --mode open --out bench/reports/<yyyyMMdd>-<sha7>
 ```
 
 `crossval.sh` 起 `bench server --port 19100 --http-port 19180 --no-registry`（`BENCH_SERVER_CPUS`，缺省 0-4）→ harness 跑对应的卡
-（`BENCH_CLIENT_CPUS`，缺省 5-9，`--label` 透传，缺省 `crossval`；每轮统计窗口自带 CPU 采样）→ 停 harness 后用工具打同一 URL（`taskset -c 5-9`）：先预热 20s
-跑一次丢弃，再测 40s（与卡片的统计窗口等长），测量运行中段采样一次 `/proc/stat`。wrk：`-t 4 -c 64 -d 40s --latency -s bench/bin/post-1k.lua`；
+（`BENCH_CLIENT_CPUS`，缺省 5-9，`--label` 透传，缺省 `crossval`；每轮统计窗口自带 CPU 采样）→ 停 harness 后用工具打同一 URL（`taskset -c 5-9`）：每次先预热 20s
+跑一次丢弃，再测 40s（与卡片的统计窗口等长）；开环（wrk2）这样测 **3 次**，闭环（wrk）1 次（`CROSSVAL_TOOL_RUNS` 可改），
+第 1 次测量的中段采样一次 `/proc/stat`。wrk：`-t 4 -c 64 -d 40s --latency -s bench/bin/post-1k.lua`；
 wrk2 另加 `-R 5000 -U`（`-U` 让同一次运行同时输出修正后与未修正分布）。`post-1k.lua` POST 固定的 1024 字节请求体。最后调用 `crossval`
 子命令写 `crossval-<mode>-<时间>.json` / `.md`（`--out`，缺省 `target/crossval/`，被 .gitignore 忽略）。**正式的交叉验证结果进该 sha 的归档目录**
 `bench/reports/<yyyyMMdd>-<sha7>/`（`--out` 指向它），作为该 sha 下 harness 可信度的证据：`bench-report.sh` 汇总时在"交叉验证判定"一节列出
@@ -363,14 +405,16 @@ wrk2 另加 `-R 5000 -U`（`-U` 让同一次运行同时输出修正后与未修
 
 ### 开环判定（测量校验）
 
-harness 取正式轮（与 `run` 的选法相同），相对偏差 = |harness − wrk2| / wrk2（以第三方工具为参照）。三项分别判定：
+harness 取正式轮（与 `run` 的选法相同：有效轮里 p99 的中位那一轮）；wrk2 取 3 次测量里**未修正 p99 的中位那一次**作对照值
+（对称口径，三次的数字都写进 JSON 的 `tool.measurements` 与 Markdown 的"wrk2 各次测量"表，被选中的标"对照值"）。
+相对偏差 = |harness − wrk2| / wrk2（以第三方工具为参照）。三项分别判定：
 
 | 项 | 检查 | 判据 |
 |---|---|---|
 | a. 达成吞吐 | harness、wrk2 各自相对目标 rate | 偏差都 ≤ 2% |
 | b. 测量一致性 | harness 的**服务时间**（实际发出 → 完成）vs wrk2 的**未修正**延迟（实际发出 → 响应），p50 与 p99 | 相对偏差 ≤ 15% **或**绝对差 ≤ 100µs（取宽者：亚毫秒级时两个工具的时钟与记录点不同，百分比会被放大） |
 | c. 节拍质量 | harness 的发出滞后（计划时刻 → 调度线程到点）p99 | ≤ 100µs |
-| 前提 | harness 全部轮次有效、正式轮窗口内无错误；wrk2 无 socket 错误、无非 2xx/3xx 响应 | — |
+| 前提 | harness **有效轮 ≥ 2**（卡片 3 轮；正式轮在有效轮里选）、有效轮窗口内无错误；wrk2 **每一次**测量都无 socket 错误、无非 2xx/3xx 响应 | — |
 
 为什么 b 比较的是服务时间与**未修正**延迟：两边的起点定义一致（都从实际发出算）。harness 的 CO 修正延迟 = 服务时间 + 发出滞后，发出滞后由
 c 独立测量并约束，所以 b、c 都通过就说明 harness 的开环延迟可信。wrk2 的"修正后"延迟不能做亚毫秒级的参照：wrk2 推迟发送时把等待向上取整到
@@ -378,8 +422,33 @@ c 独立测量并约束，所以 b、c 都通过就说明 harness 的开环延�
 ae 定时器），每个请求都比计划时刻晚发零点几到一毫秒多，这段滞后计入它的修正后延迟（本机实测修正后 p50 约为未修正的 6 倍，见
 [pitfalls 第 31 条](pitfalls.md)）。报告仍把两边的修正后延迟并排列出，标注"信息项，不判定"。
 
-亚毫秒级对比以 100µs 绝对差为主判据：在本机的口径下，b 项的相对偏差主要反映 harness 每次调用两次线程交接（发压虚拟线程 ↔ Netty IO 线程）
-的固定开销（约 75µs），p50 往往只靠绝对差这一条通过——这是 harness 调用方式的已知成本，不是测量误差；p99 的相对偏差则在 15% 以内。
+亚毫秒级对比以 100µs 绝对差为主判据。早先的实现里 b 项的偏差主要是 harness 每次调用两次线程交接（发压虚拟线程 ↔ Netty IO 线程）
+的固定开销（p50 约 75µs）。HTTP 适配器是 harness 自己的代码，交叉验证要比较的是驱动与计时，所以把这段开销从适配器里拿掉：
+先试过让 Netty 事件循环忙轮询（写出不再需要唤醒 IO 线程，p50 与 wrk2 重合，但忙等的 IO 线程更容易撞上宿主对 vCPU 的抢占，
+正式卡 3 次只过 1 次），最终缺省是阻塞客户端 + 平台线程工作者：调用方线程自己 write / read，没有 IO 线程，正式卡上服务时间 p50 / p99
+与 wrk2 未修正值的差在 ±30µs 以内。RPC 卡里 `RpcClient` 的 IO 线程交接是被测框架的一部分，照常计入。
+
+**为什么参照端也测 3 次取中位（对称口径，`crossval/3`）**：环境停顿（宿主抢占 vCPU，见噪声地板）对两边一样生效。以前 harness 跑 3 轮取中位、
+wrk2 只测 1 次，参照值撞上一次停顿就整次 FAIL：任务 10 的第 4 次正式交叉验证里 wrk2 未修正 p99 是 0.537ms（同期其余 27 次测量都在
+0.329~0.382ms），harness 三轮 0.327~0.375ms，偏差 35% 全部来自参照端。两边都按"多次取中位"选代表值，单次停顿就不会单独决定判定；
+阈值不变。
+
+**为什么前提是"有效轮 ≥ 2"而不是"全部轮有效"**：开环轮被判无效的典型原因是 `dispatcher_delayed`——调度线程自己被环境停顿（宿主抢占 vCPU，
+见噪声地板）推迟，这条规则本来就是为把这种轮排除出正式轮选取而设的；正式轮只在有效轮里按原规则（p99 中位）选。如果再因为它让整次
+交叉验证 FAIL，等于一次环境停顿就否决 harness 的测量。剩 1 个有效轮时只有一个样本，证据不足，判 FAIL。b / c 项的阈值不变。
+
+### 噪声地板
+
+开环 p99 在本机上的漂移，有多少是环境本身的（2026-10-19，WSL2 10 vCPU、AMD Ryzen 5 4600H、宿主 Windows 同时运行桌面应用；细节见探针）：
+
+- **wrk2 自己很稳**：同一时段连跑 2 次（各预热 20s + 测 40s），未修正 p99 0.339 / 0.346ms（差 7µs、2%）；穿插在 2 小时实验里的 19 次
+  wrk2 测量（20s / 40s）未修正 p99 全部在 0.329 ~ 0.376ms。
+- **harness 旧实现连跑 2 次**（短卡，per-request、不绑核、无预热段）：正式轮服务时间 p99 0.636 / 0.608ms，各轮 0.57 ~ 1.43ms。
+- **vCPU 被宿主抢占**：一个钉在 cpu5 上忙等读 `nanoTime` 的线程（`Hiccup`），空闲系统上 40s 里有 2.4% 的时间没跑上（最长一次 10.3ms，
+  ≥ 1ms 的空洞 70 次）；wrk2 加压期间 30s 里 2.0%（最长 2.1ms）。忙等的线程（开环调度线程、忙轮询的 IO 线程）比大部分时间在睡的
+  wrk2 线程更容易撞上这种空洞，这是 harness 的 p99.9 / max 远大于 wrk2 的主要来源，也是同一配置各轮 p99 起伏（0.40 ~ 0.48ms）的来源。
+
+这些数字只用来解释交叉验证的起伏，不用来放宽阈值：阈值仍是代码常量。
 
 ### 闭环判定（容量标定）
 
@@ -392,7 +461,11 @@ ae 定时器），每个请求都比计划时刻晚发零点几到一毫秒多�
 
 ## 已知局限
 
-- **开环调度线程忙等、独占一个核**：自旋窗口按 park 超睡量自适应放大，超过请求间隔后调度线程就一直忙等——Windows（定时器粒度毫秒级）上总是如此，Linux 上在高 rate 时也如此。精度不受影响，代价是占掉压测端的一个核；开环卡的报告声明段会写明这一点，绑核时给压测端留足核。Windows 只用来跑流水线冒烟，正式数字在 WSL2 / Linux 上产生。
+- **开环调度线程忙等、独占一个核**：自旋窗口按 park 超睡量自适应放大，超过请求间隔后调度线程就一直忙等——Windows（定时器粒度毫秒级）上总是如此，Linux 上在高 rate 时也如此（WSL2 上校准出的超睡约 150µs，5000 req/s 时就已一直忙等）。精度不受影响，代价是占掉压测端的一个核；开环卡的报告声明段会写明这一点，绑核时给压测端留足核。Windows 只用来跑流水线冒烟，正式数字在 WSL2 / Linux 上产生。
+- **忙等的线程更容易撞上宿主对 vCPU 的抢占**（见[噪声地板](#噪声地板)）：开环调度线程总在忙等；http 卡改用 netty 客户端并忙轮询时
+  还多一个忙等的 IO 线程（这也是缺省改为阻塞客户端的原因）。这是 harness 的 p99.9 / max 远大于 wrk2 的主要原因，见 docs/probes/harness-tail-latency.md。
+- **`--pin-dispatcher` 只在 Linux 生效**，并且只管进程里已有的线程：轮次中途由调度线程触发新建的平台线程（例如虚拟线程调度器补的载体）
+  会继承调度线程的核。每轮开始前重钉一次、轮末核对（`stray_threads_at_end`），本机的运行里没有出现过这种线程。
 - **日志只输出 WARN 及以上**：harness 绑定 slf4j-simple（`simplelogger.properties`：WARN、stderr、带时间戳），框架告警可见，又不让 INFO 日志的 IO 混进测量。
 - **服务端环境依赖一次调用**：`server_environment` 由服务端启动时采集、压测端预热前调用一次取回（RPC 卡经 `environment()`，HTTP 卡经
   `GET /environment`）；目标不是本 harness 的 `bench-server`（例如任意第三方 HTTP 端点）时记为 `unknown`。

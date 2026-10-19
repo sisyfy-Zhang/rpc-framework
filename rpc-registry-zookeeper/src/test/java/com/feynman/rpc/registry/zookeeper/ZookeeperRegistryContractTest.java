@@ -78,6 +78,15 @@ class ZookeeperRegistryContractTest extends RegistryContractTest {
 		server.restart();
 	}
 
+	/**
+	 * Curator 后台操作在没连上时先每秒重排、满 connection-timeout-ms（缺省 5000）后按 ExponentialBackoffRetry(500ms, 3 次)
+	 * 再试三次（退避上限 500 + 1500 + 3500ms）才放弃；15s 让订阅时发出的那次后台操作肯定已经放弃过。
+	 */
+	@Override
+	protected Duration clientRetryHorizon() {
+		return Duration.ofSeconds(15);
+	}
+
 	static int unusedPort() {
 		try (ServerSocket socket = new ServerSocket(0)) {
 			return socket.getLocalPort();

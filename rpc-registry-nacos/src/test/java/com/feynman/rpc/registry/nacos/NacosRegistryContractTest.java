@@ -113,6 +113,12 @@ class NacosRegistryContractTest extends RegistryContractTest {
 		container.start();
 	}
 
+	/** Nacos 客户端的 gRPC 重连本身不放弃；仍让后端停机超过一次注册失败上限（15s），覆盖"停机很久才恢复"。 */
+	@Override
+	protected Duration clientRetryHorizon() {
+		return Duration.ofSeconds(15);
+	}
+
 	/** subscribe 最多等 connect-wait-ms（默认 3000ms），加调度余量。 */
 	@Override
 	protected Duration subscribeReturnBound() {

@@ -133,6 +133,7 @@ class CrossValidationTest {
 		Map<String, Object> round = new LinkedHashMap<>();
 		round.put("round", 2);
 		round.put("valid", valid);
+		round.put("window", Map.of("requests", 200000, "errors", 0));
 		round.put("latency_ms", Map.of("p50", latencyP50, "p99", latencyP99, "p999", latencyP99 * 1.5, "max", latencyP99 * 3));
 		round.put("service_time_ms", Map.of("p50", serviceP50, "p99", serviceP99, "p999", serviceP99 * 1.3, "max", latencyP99 * 3));
 		round.put("dispatch_lag_ms", Map.of("p50", 0.0, "p99", lagP99, "p999", lagP99 * 5, "max", 1.0));
@@ -154,7 +155,11 @@ class CrossValidationTest {
 		json.put("environment", Map.of("cpus_allowed", "5-9", "available_cpus", 5, "host_cpus", 10, "hostname", "h", "cpu_model", "c",
 				"git_sha", "0123456789", "git_dirty", false));
 		json.put("server_environment", Map.of("cpus_allowed", "0-4"));
-		json.put("rounds", List.of(round));
+		Map<String, Object> first = new LinkedHashMap<>(round);
+		first.put("round", 1);
+		Map<String, Object> third = new LinkedHashMap<>(round);
+		third.put("round", 3);
+		json.put("rounds", List.of(first, round, third));
 		json.put("summary", Map.of("official_round", 2, "selection_rule", "rule", "official", official));
 		json.put("validity", Map.of("all_rounds_valid", valid, "backlog_triggered", false, "client_bound", false, "passed", valid));
 		return json;
@@ -185,6 +190,55 @@ class CrossValidationTest {
 
 	private static Map<String, Object> open(Map<String, Object> harness, CrossValidation.ToolResult tool) {
 		return CrossValidation.compare(harness, "h.json", tool, "", "wrk2 ...", "wrk 4.0.0", "t.txt", null);
+	}
+
+	private static Map<String, Object> open(Map<String, Object> harness, List<CrossValidation.Measurement> runs) {
+		return CrossValidation.compare(harness, "h.json", runs, "wrk2 ...", "wrk 4.0.0", null);
+	}
+
+	private static CrossValidation.Measurement run(String file, CrossValidation.ToolResult result) {
+		return new CrossValidation.Measurement(file, result, "raw " + file);
+	}
+
+	/**
+	 * 对称口径：wrk2 三次测量按未修正 p99 取中位那一次作对照值；离群的一次（task10 #4 那样的 0.537ms）不会单独决定判定。
+	 * 三次都写进 JSON（tool.measurements），被选中的标 selected。
+	 */
+	@Test
+	void theReferenceIsTheMedianOfThreeWrk2Runs() {
+		List<CrossValidation.Measurement> runs = List.of(run("m1.txt", wrk2(4996.0, 0.97, 1.95, 0.150, 0.537)),
+				run("m2.txt", wrk2(4996.0, 0.97, 1.95, 0.148, 0.352)), run("m3.txt", wrk2(4996.0, 0.97, 1.95, 0.152, 0.348)));
+		assertEquals(1, CrossValidation.medianIndex(runs), "sorted by uncorrected p99: m3 0.348, m2 0.352, m1 0.537 -> m2");
+		Map<String, Object> r = open(openHarness(0.150, 0.350, 0.04), runs);
+		assertEquals("PASS", r.get("verdict"), String.valueOf(r.get("checks")));
+		assertEquals(3, ((Number) MarkdownReport.path(r, "tool", "runs")).intValue());
+		assertEquals(2, ((Number) MarkdownReport.path(r, "tool", "selected_run")).intValue());
+		assertEquals("m2.txt", MarkdownReport.path(r, "tool", "output_file"));
+		assertEquals(0.352, ((Number) MarkdownReport.path(r, "tool", "uncorrected_latency_ms", "p99")).doubleValue());
+		List<?> measurements = (List<?>) MarkdownReport.path(r, "tool", "measurements");
+		assertEquals(3, measurements.size());
+		assertEquals(Boolean.TRUE, ((Map<?, ?>) measurements.get(1)).get("selected"));
+		assertEquals(0.537, ((Number) ((Map<?, ?>) measurements.get(0)).get("uncorrected_p99_ms")).doubleValue());
+		assertEquals(CrossValidation.SCHEMA, r.get("schema"));
+		assertEquals("crossval/3", CrossValidation.SCHEMA);
+		Map<?, ?> readBack = (Map<?, ?>) Json.parse(Json.write(r));
+		String md = CrossValidation.render(readBack, "x.json");
+		assertTrue(md.contains("## wrk2 各次测量") && md.contains("（对照值）") && md.contains("`m1.txt`"), md);
+		// 只有一次测量时与旧行为相同
+		assertEquals(0, CrossValidation.medianIndex(List.of(run("only.txt", wrk2(4996.0, 0.97, 1.95, 0.148, 0.330)))));
+	}
+
+	/** 前提：三次里任何一次有 socket 错误（或非 2xx），参照端就不干净，判 FAIL——即使被选中的那一次本身干净。 */
+	@Test
+	void aSocketErrorInAnyReferenceRunFailsThePrecondition() {
+		CrossValidation.ToolResult dirty = new CrossValidation.ToolResult("wrk2", 4996.0, 200000L, 40.0, 0.97, null, null, 1.95, 2.1, 4.0, 3,
+				Map.of("timeout", 3L), 0, 0.150, 0.600, 0.8);
+		List<CrossValidation.Measurement> runs = List.of(run("m1.txt", wrk2(4996.0, 0.97, 1.95, 0.148, 0.352)), run("m2.txt", dirty),
+				run("m3.txt", wrk2(4996.0, 0.97, 1.95, 0.152, 0.348)));
+		assertEquals(0, CrossValidation.medianIndex(runs), "median by p99: m3 0.348, m1 0.352, m2 0.600 -> m1 (clean)");
+		Map<String, Object> r = open(openHarness(0.150, 0.350, 0.04), runs);
+		assertEquals(Boolean.FALSE, check(r, "tool_clean").get("passed"));
+		assertEquals("FAIL", r.get("verdict"));
 	}
 
 	/** 本机实测的形态：wrk2 修正后 0.97 vs harness 0.25 差得很远，但那是 wrk2 的毫秒节拍；服务时间 vs 未修正一致即通过。 */
@@ -247,6 +301,32 @@ class CrossValidationTest {
 				wrk2(5000.0, 0.97, 1.95, 0.148, 0.330));
 		assertEquals("FAIL", invalid.get("verdict"));
 		assertEquals(Boolean.FALSE, check(invalid, "harness_clean").get("passed"));
+	}
+
+	/**
+	 * 前提按有效轮计：3 轮里 1 轮被判无效（例如 dispatcher_delayed）仍可比较（正式轮在有效轮里选）；只剩 1 个有效轮时证据不足，FAIL。
+	 * b 项阈值不受影响。
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	void openLoopPreconditionCountsValidRounds() {
+		Map<String, Object> oneInvalid = harness("open", 5000.0, 0.218, 0.401, 0.009, true, 34.0, 18.0);
+		Map<String, Object> delayed = new LinkedHashMap<>((Map<String, Object>) ((List<?>) oneInvalid.get("rounds")).get(0));
+		delayed.put("valid", false);
+		List<Object> rounds = new java.util.ArrayList<>((List<?>) oneInvalid.get("rounds"));
+		rounds.set(0, delayed);
+		oneInvalid.put("rounds", rounds);
+		Map<String, Object> r = open(oneInvalid, wrk2(5000.0, 0.97, 1.95, 0.148, 0.330));
+		assertEquals(Boolean.TRUE, check(r, "harness_clean").get("passed"), String.valueOf(check(r, "harness_clean")));
+		assertEquals(2, ((Number) MarkdownReport.path(r, "harness", "valid_rounds")).intValue());
+
+		Map<?, ?> second = (Map<?, ?>) rounds.get(2);
+		Map<String, Object> delayedToo = new LinkedHashMap<>((Map<String, Object>) second);
+		delayedToo.put("valid", false);
+		rounds.set(2, delayedToo);
+		Map<String, Object> onlyOne = open(oneInvalid, wrk2(5000.0, 0.97, 1.95, 0.148, 0.330));
+		assertEquals(Boolean.FALSE, check(onlyOne, "harness_clean").get("passed"));
+		assertEquals("FAIL", onlyOne.get("verdict"));
 	}
 
 	/** 闭环 = 容量标定：吞吐差 36% 不判失败；唯一判定项是两侧 CPU 都能判别瓶颈；结论句写明两边的上限。 */

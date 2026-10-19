@@ -1,7 +1,10 @@
 package com.feynman.rpc.bench;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -13,11 +16,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * <ul>
  *   <li><b>闭环</b>：{@code concurrency} 个虚拟线程，各自循环"调用 → 返回 → 立即下一次"直到 duration；
  *       延迟 = 调用前 nanoTime 到返回。服务变慢时发压随之变慢，所以闭环会低估尾延迟（报告里自动附声明）。</li>
- *   <li><b>开环</b>：{@link OpenLoopScheduler} 按 rate 等间隔产生计划发出时刻，到点把调用交给一个新的虚拟线程
- *       （同步代理方法，与闭环走同一个远程方法、同一条客户端代码路径——RpcClient 的同步调用本身就是异步 future 上的等待，
+ *   <li><b>开环</b>：{@link OpenLoopScheduler} 按 rate 等间隔产生计划发出时刻，到点把计划时刻交给执行者
+ *       （{@link HarnessOptions#openWorkers()}：每个请求一个新虚拟线程，或固定的 {@link OpenLoopWorkers} 工作者池），
+ *       执行者调用同步代理方法（与闭环走同一个远程方法、同一条客户端代码路径——RpcClient 的同步调用本身就是异步 future 上的等待，
  *       不需要为开环另造一个返回 CompletableFuture 的接口、让服务端多出一个方法）。
- *       延迟 = 完成时刻 − <b>计划</b>发出时刻（修正 coordinated omission）；另记"实际发出（虚拟线程开始执行）→ 完成"的服务时间。
- *       在途数达到 {@code rate × timeout × 2} 时不再发出，计为 {@code backlog_dropped}，本轮无效。</li>
+ *       延迟 = 完成时刻 − <b>计划</b>发出时刻（修正 coordinated omission）；另记"实际发出（执行者开始执行）→ 完成"的服务时间。
+ *       在途数达到 {@code rate × timeout × 2}（或工作者池的队列满）时不再发出，计为 {@code backlog_dropped}，本轮无效。
+ *       调度线程名 {@value ThreadAffinity#DISPATCHER_THREAD_NAME}；{@code --pin-dispatcher} 时在本轮计时开始前把它单独钉到一个核
+ *       （{@link ThreadAffinity}）。</li>
  * </ul>
  * 每轮结束后等全部在途调用返回（它们最晚在 timeout 后返回）才算本轮结束。
  */
@@ -27,7 +33,11 @@ final class LoadDriver {
 	}
 
 	static RoundRecorder runRound(int round, Profile profile, CallTarget target) {
-		return runRound(round, profile, target, null);
+		return runRound(round, profile, target, null, HarnessOptions.DEFAULTS);
+	}
+
+	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu) {
+		return runRound(round, profile, target, cpu, HarnessOptions.DEFAULTS);
 	}
 
 	/**
@@ -35,25 +45,66 @@ final class LoadDriver {
 	 *            null 时记 n/a（非 Linux 或拿不到核列表）。GC 不论 cpu 是否为 null 都在同样两个时刻采样
 	 *            （本进程的 GC MXBean + 服务端的 {@link CallTarget#serverStats()}），差值进 {@code rounds[].gc}。
 	 *            采样在一个只睡眠的虚拟线程里做，不占发压线程。
+	 * @param options 开环的执行者与调度线程绑核（{@link HarnessOptions}）
 	 */
-	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu) {
-		// 开环调度器在本轮计时开始之前构造：构造时的 park 校准不占用本轮的时间线
-		OpenLoopScheduler scheduler = profile.load().closed() ? null : new OpenLoopScheduler(profile.load().rate());
-		RoundRecorder recorder = new RoundRecorder(round, profile);
-		Thread sampler = Thread.ofVirtual().name("bench-window-sampler").start(() -> sampleWindow(cpu, target, profile, recorder));
-		if (scheduler == null) {
+	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu, HarnessOptions options) {
+		if (profile.load().closed()) {
+			RoundRecorder recorder = new RoundRecorder(round, profile);
+			Thread sampler = startSampler(cpu, target, profile, recorder);
 			closedLoop(profile, target, recorder);
+			return finish(recorder, sampler);
+		}
+		return openLoop(round, profile, target, cpu, options, true);
+	}
+
+	/**
+	 * 第 1 轮之前的预热段（{@code --pre-warmup}）：以卡片同样的负载跑 {@code length}，不计入任何一轮。用一个临时的
+	 * "整段都是窗口"的记录器统计它，摘要进 {@code run.pre_warmup}（只作观察：看冷 JVM 的第一段时间里发生了什么）。
+	 */
+	static Map<String, Object> preWarmup(Profile profile, CallTarget target, HarnessOptions options, Duration length) {
+		Profile.Load l = profile.load();
+		Profile.Load load = new Profile.Load(l.model(), l.concurrency(), l.rate(), length, Duration.ZERO, Duration.ZERO, length, 1,
+				l.timeout());
+		Profile segment = new Profile(profile.id(), profile.question(), profile.target(), load, profile.isolation(), profile.measure(),
+				List.of(), profile.rawYaml());
+		RoundRecorder recorder;
+		if (load.closed()) {
+			recorder = new RoundRecorder(0, segment);
+			closedLoop(segment, target, recorder);
+			recorder.finish();
 		} else {
-			openLoop(profile, target, recorder, scheduler);
+			recorder = openLoop(0, segment, target, null, options, false);
 		}
+		Map<String, Object> round = recorder.toJson();
+		Map<String, Object> summary = new LinkedHashMap<>();
+		summary.put("duration_ms", Durations.millis(length));
+		summary.put("issued", round.get("issued"));
+		summary.put("successes", round.get("successes_total"));
+		summary.put("errors", round.get("errors_total"));
+		summary.put("errors_by_type", round.get("errors_total_by_type"));
+		summary.put("latency_ms", round.get("latency_ms"));
+		summary.put("service_time_ms", round.get("service_time_ms"));
+		summary.put("dispatch_lag_ms", round.get("dispatch_lag_ms"));
+		summary.put("backlog_dropped", round.get("backlog_dropped"));
+		summary.put("scheduler", round.get("scheduler"));
+		return summary;
+	}
+
+	private static Thread startSampler(CpuSampler cpu, CallTarget target, Profile profile, RoundRecorder recorder) {
+		return Thread.ofVirtual().name("bench-window-sampler").start(() -> sampleWindow(cpu, target, profile, recorder));
+	}
+
+	private static RoundRecorder finish(RoundRecorder recorder, Thread sampler) {
 		recorder.finish();
-		try {
-			// 窗口结束 ≤ duration ≤ 本轮结束，此时采样线程最多还差读一次文件、取一次服务端统计
-			sampler.join(5_000);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
+		if (sampler != null) {
+			try {
+				// 窗口结束 ≤ duration ≤ 本轮结束，此时采样线程最多还差读一次文件、取一次服务端统计
+				sampler.join(5_000);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			sampler.interrupt();
 		}
-		sampler.interrupt();
 		return recorder;
 	}
 
@@ -135,61 +186,132 @@ final class LoadDriver {
 		} // close() 等全部虚拟用户退出
 	}
 
-	private static void openLoop(Profile profile, CallTarget target, RoundRecorder recorder, OpenLoopScheduler scheduler) {
+	/** 一次调用：执行者（新虚拟线程或池里的工作者）在 {@code actual} 时刻开始执行计划时刻为 {@code scheduled} 的请求。 */
+	private static void execute(CallTarget target, RoundRecorder recorder, AtomicLong inFlight, long scheduled, long actual) {
+		try {
+			target.call();
+			recorder.success(scheduled, actual, System.nanoTime());
+		} catch (Throwable e) {
+			recorder.error(ErrorClassifier.classify(e), System.nanoTime());
+		} finally {
+			inFlight.decrementAndGet();
+		}
+	}
+
+	/**
+	 * 开环一轮。调度线程先起来、在门闩上等着；需要绑核时此刻钉好（{@code taskset} 要 fork，不能占本轮的时间线），
+	 * 然后才建记录器（本轮计时从这里开始）、放行调度线程。
+	 *
+	 * @param sample 是否做统计窗口的 CPU / GC 采样（预热段不做）
+	 */
+	private static RoundRecorder openLoop(int round, Profile profile, CallTarget target, CpuSampler cpu, HarnessOptions options,
+			boolean sample) {
 		Profile.Load load = profile.load();
+		// 开环调度器在本轮计时开始之前构造：构造时的 park 校准不占用本轮的时间线
+		OpenLoopScheduler scheduler = new OpenLoopScheduler(load.rate());
 		long cap = load.inflightCap();
 		AtomicLong inFlight = new AtomicLong();
 		AtomicLong maxInFlight = new AtomicLong();
-		long start = recorder.startNanos;
-		long end = start + load.duration().toNanos();
 		AtomicReference<Throwable> pacerFailure = new AtomicReference<>();
-		try (ExecutorService calls = Executors.newVirtualThreadPerTaskExecutor()) {
-			Thread pacer = Thread.ofPlatform().name("bench-open-loop-scheduler").unstarted(() -> {
-				try {
-					scheduler.run(start, end, (scheduled, now) -> {
-						recorder.dispatchLag(now - scheduled);
-						if (inFlight.get() >= cap) {
-							recorder.issued();
-							recorder.error(RoundRecorder.BACKLOG_DROPPED, now);
-							return;
-						}
-						long current = inFlight.incrementAndGet();
-						if (current > maxInFlight.get()) {
-							maxInFlight.set(current); // 只有调度线程写，无需 CAS
-						}
-						recorder.issued();
-						calls.execute(() -> {
-							long actual = System.nanoTime();
-							try {
-								target.call();
-								recorder.success(scheduled, actual, System.nanoTime());
-							} catch (Throwable e) {
-								recorder.error(ErrorClassifier.classify(e), System.nanoTime());
-							} finally {
-								inFlight.decrementAndGet();
-							}
-						});
-					});
-				} catch (Throwable t) {
-					pacerFailure.set(t);
-				}
-			});
-			pacer.setPriority(Thread.MAX_PRIORITY);
-			pacer.start();
+		AtomicReference<RoundRecorder> recorderRef = new AtomicReference<>();
+		CountDownLatch go = new CountDownLatch(1);
+		// 调度线程进入 run 体时 JVM 已把线程名写进 /proc 的 comm（钉核按名字找它）
+		CountDownLatch ready = new CountDownLatch(1);
+		boolean pool = options.pool(profile);
+		int poolSize = options.effectivePoolSize(profile);
+		// 工作者池的队列容量 = 在途上限：在途（排队 + 执行中）先触顶，队列满只是同一件事的另一道保险
+		int queueCapacity = (int) Math.min(Integer.MAX_VALUE - poolSize, cap);
+		ExecutorService perRequest = pool ? null : Executors.newVirtualThreadPerTaskExecutor();
+		OpenLoopWorkers workers = pool ? new OpenLoopWorkers(poolSize, queueCapacity, options.platformWorkers(profile),
+				(scheduled, actual) -> execute(target, recorderRef.get(), inFlight, scheduled, actual)) : null;
+		Thread pacer = Thread.ofPlatform().name(ThreadAffinity.DISPATCHER_THREAD_NAME).unstarted(() -> {
 			try {
-				pacer.join();
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new IllegalStateException("interrupted while running the open-loop schedule", e);
+				ready.countDown();
+				go.await();
+				RoundRecorder recorder = recorderRef.get();
+				long start = recorder.startNanos;
+				long end = start + load.duration().toNanos();
+				scheduler.run(start, end, (scheduled, now) -> {
+					recorder.dispatchLag(now - scheduled);
+					if (inFlight.get() >= cap) {
+						recorder.issued();
+						recorder.error(RoundRecorder.BACKLOG_DROPPED, now);
+						return;
+					}
+					long current = inFlight.incrementAndGet();
+					if (current > maxInFlight.get()) {
+						maxInFlight.set(current); // 只有调度线程写，无需 CAS
+					}
+					recorder.issued();
+					if (workers != null) {
+						if (!workers.offer(scheduled)) {
+							inFlight.decrementAndGet();
+							recorder.error(RoundRecorder.BACKLOG_DROPPED, now);
+						}
+					} else {
+						perRequest.execute(() -> execute(target, recorder, inFlight, scheduled, System.nanoTime()));
+					}
+				});
+			} catch (Throwable t) {
+				pacerFailure.set(t);
 			}
-		} // close() 等全部在途调用返回
+		});
+		pacer.setPriority(Thread.MAX_PRIORITY);
+		pacer.setDaemon(true);
+		pacer.start();
+		try {
+			ready.await();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("interrupted while starting the open-loop scheduler", e);
+		}
+		Map<String, Object> pin = null;
+		long dispatcherTid = -1;
+		if (options.pinDispatcher() != null) {
+			pin = ThreadAffinity.pin(ThreadAffinity.DISPATCHER_THREAD_NAME, options.pinDispatcher());
+			if (pin.get("dispatcher_tid") instanceof Long tid) {
+				dispatcherTid = tid;
+			}
+		}
+		RoundRecorder recorder = new RoundRecorder(round, profile);
+		recorderRef.set(recorder);
+		Thread sampler = sample ? startSampler(cpu, target, profile, recorder) : null;
+		go.countDown();
+		try {
+			pacer.join();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("interrupted while running the open-loop schedule", e);
+		} finally {
+			// 等全部在途调用返回
+			if (workers != null) {
+				workers.close();
+			} else {
+				perRequest.close();
+			}
+		}
+		if (pin != null && dispatcherTid > 0) {
+			List<String> strays = ThreadAffinity.strays(options.pinDispatcher(), dispatcherTid);
+			pin.put("stray_threads_at_end", strays == null ? EnvironmentProbe.NA : strays);
+		}
+		finish(recorder, sampler);
 		if (pacerFailure.get() != null) {
 			throw new IllegalStateException("open-loop scheduler failed", pacerFailure.get());
 		}
 		Map<String, Object> info = scheduler.describe();
 		info.put("inflight_cap", cap);
 		info.put("max_inflight", maxInFlight.get());
-		info.put("call_style", "sync proxy method on a new virtual thread per request");
+		info.put("workers", options.effectiveOpenWorkers(profile));
+		if (pool) {
+			info.put("pool_size", poolSize);
+			info.put("queue_capacity", queueCapacity);
+		}
+		info.put("call_style", pool
+				? "sync proxy method on one of " + poolSize + (options.platformWorkers(profile) ? " platform" : " virtual") + "-thread workers taking scheduled times from a bounded FIFO queue"
+				: "sync proxy method on a new virtual thread per request");
+		info.put("dispatcher_thread", ThreadAffinity.DISPATCHER_THREAD_NAME);
+		info.put("pin", pin == null ? "off" : pin);
 		recorder.schedulerInfo(info);
+		return recorder;
 	}
 }

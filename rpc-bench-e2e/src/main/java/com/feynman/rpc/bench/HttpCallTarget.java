@@ -29,6 +29,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.DefaultSelectStrategyFactory;
+import io.netty.channel.SelectStrategyFactory;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.epoll.Epoll;
@@ -68,7 +70,7 @@ import io.netty.util.concurrent.DefaultThreadFactory;
  * <p>每次 {@link #call()} 在调用它的虚拟线程上写出请求、等响应（与 RPC 的同步代理同一种调用方式）。为了让交叉验证比较的是
  * harness 的驱动与计时、而不是这个适配器的额外开销，热路径刻意做轻：
  * <ul>
- *   <li>IO 线程数 = 可用核数，Linux 上用 Netty 的 epoll 原生传输（netty-all 自带，没有新依赖），其它平台 NIO；</li>
+ *   <li>IO 线程数缺省 = 可用核数（{@code --io-threads} 可改），Linux 上用 Netty 的 epoll 原生传输（netty-all 自带，没有新依赖），其它平台 NIO；</li>
  *   <li>等待响应用不带超时的等待，超时由每个目标一个的扫描任务（每 {@value #TIMEOUT_SWEEP_MILLIS}ms 一次）判定：
  *       虚拟线程上的限时 park 每次都要在共享的调度器里登记、撤销一个定时任务，闭环高并发下这是可观的开销；
  *       代价是超时最多晚 {@value #TIMEOUT_SWEEP_MILLIS}ms 触发（{@code load.timeout} 是秒级）；</li>
@@ -119,7 +121,7 @@ final class HttpCallTarget implements CallTarget {
 	private final ScheduledFuture<?> sweeper;
 	private final Map<String, Object> description;
 
-	private HttpCallTarget(Profile profile) {
+	private HttpCallTarget(Profile profile, Integer ioThreadsOption, boolean busyPoll) {
 		this.uri = URI.create(profile.target().httpUrl());
 		this.host = uri.getHost();
 		this.port = uri.getPort() > 0 ? uri.getPort() : 80;
@@ -131,10 +133,14 @@ final class HttpCallTarget implements CallTarget {
 		this.open = !profile.load().closed();
 		this.poolSize = open ? profile.target().httpConnections() : profile.load().concurrency();
 		this.permits = new java.util.concurrent.Semaphore(poolSize, true);
-		int ioThreads = Runtime.getRuntime().availableProcessors();
+		int ioThreads = ioThreadsOption != null ? ioThreadsOption : Runtime.getRuntime().availableProcessors();
 		boolean epoll = Epoll.isAvailable();
 		DefaultThreadFactory threads = new DefaultThreadFactory("bench-http-client");
-		this.group = epoll ? new EpollEventLoopGroup(ioThreads, threads) : new NioEventLoopGroup(ioThreads, threads);
+		// 忙轮询：选择策略永远返回 selectNow 的结果（≥ 0，非阻塞），事件循环每圈处理就绪事件 + 任务队列、从不进入阻塞的
+		// epoll_wait / select——调用方线程提交写出任务时不需要唤醒它（省掉一次跨线程唤醒），代价是每个 IO 线程占满一个核
+		SelectStrategyFactory strategy = busyPoll ? () -> (selectNow, hasTasks) -> selectNow.get() : DefaultSelectStrategyFactory.INSTANCE;
+		this.group = epoll ? new EpollEventLoopGroup(ioThreads, threads, strategy)
+				: new NioEventLoopGroup(ioThreads, threads, java.nio.channels.spi.SelectorProvider.provider(), strategy);
 		this.bootstrap = new Bootstrap()
 				.group(group)
 				.channel(epoll ? EpollSocketChannel.class : NioSocketChannel.class)
@@ -161,6 +167,7 @@ final class HttpCallTarget implements CallTarget {
 		d.put("http_client", "netty HttpClientCodec + HttpObjectAggregator(8MiB), keep-alive, no pipelining");
 		d.put("io_transport", epoll ? "epoll" : "nio");
 		d.put("io_threads", ioThreads);
+		d.put("io_busy_poll", busyPoll);
 		d.put("timeout_check", "sweep every " + TIMEOUT_SWEEP_MILLIS + "ms");
 		d.put("retries", 0);
 		d.put("pre_warmup_calls_per_connection", PRE_WARMUP_CALLS_PER_CONNECTION);
@@ -171,7 +178,17 @@ final class HttpCallTarget implements CallTarget {
 
 	/** 建好全部连接、做完预热再返回（都不算进任何一轮）；任一步失败则关闭已建的并抛出。 */
 	static HttpCallTarget connect(Profile profile) {
-		HttpCallTarget target = new HttpCallTarget(profile);
+		return connect(profile, null);
+	}
+
+	/** @param ioThreads 事件循环线程数；null = 可用核数（{@code --io-threads}） */
+	static HttpCallTarget connect(Profile profile, Integer ioThreads) {
+		return connect(profile, ioThreads, false);
+	}
+
+	/** @param busyPoll 事件循环忙轮询（{@code --io-busy-poll on}） */
+	static HttpCallTarget connect(Profile profile, Integer ioThreads, boolean busyPoll) {
+		HttpCallTarget target = new HttpCallTarget(profile, ioThreads, busyPoll);
 		try {
 			List<ChannelFuture> pending = new ArrayList<>();
 			for (int i = 0; i < target.poolSize; i++) {

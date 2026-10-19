@@ -482,3 +482,41 @@ harness 的服务时间（从实际执行）p50 0.22ms，发出滞后 p99 只有
 - "已分配、还没交出所有权"的缓冲区只 `catch (RuntimeException)` 释放是不够的；能不在这个窗口里持有缓冲区更好。
 - 泄漏报告行前的线程名是报告者，不是泄漏者；看 Created at 与最后一条访问记录，再对照"正常路径上下一条应该出现的记录"（这里是
   `writeAndFlush` 的 touch）推断它断在哪里。
+
+## 33. 注册中心"晚到"的集成测试偶发超时：不是订阅不补推，是 ZK 启动瞬间吞掉了握手
+
+**现象**：CI paranoid 作业（2026-10-19 03:29）`UnreachableRegistryTest.clientReferenceDoesNotWaitForAnUnreachableRegistry_andCatchesUpOnceItAppears:126`
+报 `ConditionTimeout 'subscription catches up' within 15 seconds`。日志：ZK（`TestingServer`）在 18.18s 出现，服务端注册中心 18.33s 连上并完成注册；
+消费端注册中心直到超时都没有 CONNECTED，24.08s 出现 `connection SUSPENDED` 与 Curator 的 `Background operation retry gave up ... ConnectionLoss`，
+随后 `RpcClient closed in 14778ms`。同一时刻 ZK 服务端日志：`Close of session 0x0 ... ZooKeeperServer not running`，紧跟一条
+`NullPointerException: Cannot invoke "ZKDatabase.removeCnxn(...)" because "this.zkDb" is null`。本机（Windows）paranoid 循环 10 次另有一个
+**确定性**失败：`reference() blocked 2585~2732ms`（上界 2500ms），与 CI 那条无关。
+
+**根因**：
+1. **订阅本身会补推**，包括 Curator 后台重试已经放弃之后。探针 `ZookeeperLateBackendProbeTest`（`-Pprobe`）让 ZK 在订阅之后 0~35s 才出现：
+   D ≥ 8s 的各次都先经历"重试放弃 → SUSPENDED"，ZK 出现后 0.1~1.05s 内订阅者都收到了提供者（两次运行共 20 次，无一例外）。原因是
+   `CuratorCache` 用的 `PersistentWatcher`：后台 `addWatch` 失败时回调里立即再 `reset()`（重新排队），每次连接状态变为已连接时也 `reset()`；
+   重建缓存后由本实现的合并推送补推。设计文档的契约（"后端连上之后订阅补推首次列表"）成立。
+2. **CI 那次是"后端没真正连上"**。`TestingServer` 启动时监听端口先于 `ZooKeeperServer` 就绪；恰在这一瞬间连进来的客户端，服务端按
+   "not running" 关闭连接，而 ZK 3.9.4 的 `NIOServerCnxn.close()`（第 607–627 行）先调 `zkServer.removeCnxn(this)`，后者是
+   `zkDb.removeCnxn(cnxn)`（`ZooKeeperServer` 第 333 行），`zkDb` 尚为 null → NPE，`closeSock()` 没执行到：**服务端不回包也不关套接字**。
+   客户端握手没有回应，要等 ZK 客户端的连接超时 `connectTimeout = sessionTimeout / 主机数`（`ClientCnxn` 第 421、1241 行；会话超时缺省
+   30s、1 台主机 → 30s）才断开重连。期间 Curator 的后台操作照常在 connection-timeout（5s）+ 3 次退避后放弃、报 SUSPENDED——这条 ERROR
+   日志是旁证，不是原因。探针第二个用例用"接受连接后不读不写不关"的端口复现客户端视角：ZK 出现后 **30.3s** 才补推
+   （`SUSPENDED@7028 → CONNECTED@31292`）。测试只等 15s。
+3. Windows 冷 JVM 上 `RpcClient` 构造（类加载）约 1.5s、`reference()`（订阅最多等 connect-wait-ms）约 1.06s，旧断言把两者合在一起给 2500ms。
+
+**修法**（只改测试，不改实现）：`UnreachableRegistryTest` 的两个"ZK 出现后"的等待（服务端 `registered()`、客户端补推）上界从 15s 改为
+`CATCH_UP_BOUND_SECONDS = 45`（30s 连接超时 + ≤1s 重连退避 + 推送合并 + 余量），注释写明依据；客户端构造与 `reference()` 分开计时，
+`reference()` 仍是 < 2500ms，构造另给 < 5000ms。改后本机 paranoid 循环 10/10 通过。TCK 增加
+`subscribeSurvivesTheClientGivingUpRetriesBeforeTheBackendAppears`：后端在订阅之后停机超过客户端重试放弃点（ZK 15s）才恢复，
+订阅仍须补推（进程内参考实现 / ZK / Nacos 三个实现都跑）。
+
+**教训**：
+- "重试放弃"的 ERROR 日志很吓人，但先看它放弃的是什么：Curator 的单次后台操作放弃之后，持久 watch 会重新排队，订阅并没有死。
+  判断"会不会补推"要做实验（让后端晚到不同时长），不能读日志猜。
+- 测试里的"等后端恢复"上界要从客户端的超时链推出来：这里真正的上界是 ZK 客户端的握手超时（会话超时 / 主机数），不是 Curator 的
+  connection-timeout，也不是拍脑袋的 15s。
+- 生产上同一个窗口也存在：ZK 服务端重启的那一瞬间连进来的客户端，可能被吊住一个会话超时（缺省 30s）才重连。它有界、会自愈，
+  缩短它的办法是调小 `session-timeout-ms`（代价是 GC / 网络抖动更容易误判会话过期）。
+- 计时断言只框住被测的那一段：构造期的类加载与"订阅等多久"是两件事，混在一起的上界会在慢机器上误报。

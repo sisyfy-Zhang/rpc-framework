@@ -63,6 +63,12 @@ class InMemoryRegistryContractTest extends RegistryContractTest {
 		backend.setUp(true);
 	}
 
+	/** 参考实现没有内部重试；仍让后端停机一小段，证明这条用例在它上面也成立。 */
+	@Override
+	protected Duration clientRetryHorizon() {
+		return Duration.ofSeconds(2);
+	}
+
 	@Override
 	protected RegistryConfig config() {
 		return RegistryConfig.of("memory", "memory://up");

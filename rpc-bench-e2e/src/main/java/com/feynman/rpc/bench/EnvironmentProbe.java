@@ -302,13 +302,25 @@ final class EnvironmentProbe {
 			}
 			Process process = builder.start();
 			process.getOutputStream().close();
-			byte[] out = process.getInputStream().readAllBytes();
+			// 输出在另一个线程里读：子进程卡住时（本机见过 powershell 的 Get-CimInstance 一直不退出）readAllBytes 会永远阻塞，
+			// 超时判断必须不依赖读完输出
+			java.util.concurrent.CompletableFuture<byte[]> out = new java.util.concurrent.CompletableFuture<>();
+			Thread reader = Thread.ofVirtual().start(() -> {
+				try {
+					out.complete(process.getInputStream().readAllBytes());
+				} catch (IOException e) {
+					out.completeExceptionally(e);
+				}
+			});
 			if (!process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+				process.descendants().forEach(ProcessHandle::destroyForcibly);
 				process.destroyForcibly();
+				reader.interrupt();
 				return null;
 			}
-			return process.exitValue() == 0 ? new String(out, StandardCharsets.UTF_8) : null;
-		} catch (IOException | RuntimeException e) {
+			byte[] bytes = out.get(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+			return process.exitValue() == 0 ? new String(bytes, StandardCharsets.UTF_8) : null;
+		} catch (IOException | RuntimeException | java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
 			return null;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();

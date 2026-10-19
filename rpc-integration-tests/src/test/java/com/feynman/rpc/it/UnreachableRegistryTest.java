@@ -34,12 +34,22 @@ import com.feynman.rpc.registry.zookeeper.ZookeeperRegistryFactory;
  * 注册中心不可达时的启动行为：
  * <ul>
  *   <li>RpcServer 配一个没有监听的 ZK 地址：start() 1 秒内返回、端口可以被直连调用；随后在那个端口上起 ZK，
- *       后台注册在 15 秒内完成（{@code registered()}）。</li>
+ *       后台注册在 {@link #CATCH_UP_BOUND_SECONDS} 秒内完成（{@code registered()}）。</li>
  *   <li>RpcClient 配一个没有监听的 ZK 地址：构造与 reference() 都不阻塞（ZK 实现的 subscribe 最多等 connect-wait-ms），
  *       期间调用以"无可用提供者"快速失败；ZK 出现后订阅补推，调用恢复。</li>
  * </ul>
  */
 class UnreachableRegistryTest {
+
+	/**
+	 * ZK 出现之后、补推 / 后台注册完成的等待上界。不是 15s：TestingServer 启动时监听端口先于 ZooKeeperServer 就绪，恰好在这一瞬间
+	 * 连进来的客户端被服务端以 "ZooKeeperServer not running" 关闭，而 ZK 3.9.4 的 {@code NIOServerCnxn.close} 在
+	 * {@code zkServer.removeCnxn} 处 NPE（{@code zkDb} 为 null），{@code closeSock()} 没执行到——服务端不回包也不关套接字，
+	 * 客户端的握手被吊到 ZK 客户端连接超时（sessionTimeout 30s / 1 台主机 = 30s）才断开重连。CI paranoid 作业的那次失败正是这样
+	 * （日志里 ZK 出现时的 NPE、之后 15s 内消费端没有 CONNECTED）；探针 ZookeeperLateBackendProbeTest 复现为 ZK 出现后 30.3s 才补推。
+	 * 30s + 重连退避（≤1s）+ 推送合并 + 余量 → 45s。docs/pitfalls.md 第 33 条。
+	 */
+	static final long CATCH_UP_BOUND_SECONDS = 45;
 
 	public interface Echo {
 		String echo(String s);
@@ -80,10 +90,10 @@ class UnreachableRegistryTest {
 		}
 		assertFalse(server.isRegistered(), "nothing to register against yet");
 
-		// 注册中心在原地址出现：后台重试在 15s 内把服务注册上
+		// 注册中心在原地址出现：后台重试把服务注册上（上界见 CATCH_UP_BOUND_SECONDS）
 		long appearedAt = System.nanoTime();
 		try (TestingServer zk = new TestingServer(zkPort, true)) {
-			server.registered().get(15, TimeUnit.SECONDS);
+			server.registered().get(CATCH_UP_BOUND_SECONDS, TimeUnit.SECONDS);
 			long registeredMs = (System.nanoTime() - appearedAt) / 1_000_000;
 			assertTrue(server.isRegistered());
 			try (CuratorFramework inspector = CuratorFrameworkFactory.newClient(zk.getConnectString(), new RetryOneTime(100))) {
@@ -107,10 +117,16 @@ class UnreachableRegistryTest {
 		RegistryConfig registry = RegistryConfig.zookeeper("127.0.0.1:" + zkPort);
 		long start = System.nanoTime();
 		try (RpcClient client = RpcClient.builder().registry(registry).defaultTimeout(Duration.ofSeconds(3)).build()) {
+			long buildMillis = (System.nanoTime() - start) / 1_000_000;
+			long referenceStart = System.nanoTime();
 			Echo echo = client.reference(Echo.class);
-			long referenceMillis = (System.nanoTime() - start) / 1_000_000;
-			System.out.printf("[unreachable] RpcClient build + reference() returned in %dms with registry unreachable%n", referenceMillis);
+			long referenceMillis = (System.nanoTime() - referenceStart) / 1_000_000;
+			System.out.printf("[unreachable] RpcClient build returned in %dms, reference() in %dms with registry unreachable%n", buildMillis,
+					referenceMillis);
+			// reference() 是订阅发生的地方：最多等 connect-wait-ms（1000ms）。build 不连注册中心，但冷 JVM 的类加载算在它头上
+			// （Windows 本机约 1.5s），所以分开计时、各自给界——以前合在一起的 2500ms 在 Windows 冷 JVM 上 10 次 10 次超
 			assertTrue(referenceMillis < 2500, "reference() blocked " + referenceMillis + "ms");
+			assertTrue(buildMillis < 5000, "RpcClient build blocked " + buildMillis + "ms");
 			assertTrue(client.providers(ServiceKey.of(Echo.class)).isEmpty());
 			long callStart = System.nanoTime();
 			RpcException noProvider = assertThrows(RpcException.class, () -> echo.echo("x"));
@@ -121,8 +137,8 @@ class UnreachableRegistryTest {
 					RpcServer server = RpcServer.builder().port(0).host("127.0.0.1").registry(registry).build()) {
 				server.export(Echo.class, s -> "echo:" + s);
 				server.start();
-				server.registered().get(15, TimeUnit.SECONDS);
-				await("subscription catches up").atMost(15, TimeUnit.SECONDS)
+				server.registered().get(CATCH_UP_BOUND_SECONDS, TimeUnit.SECONDS);
+				await("subscription catches up").atMost(CATCH_UP_BOUND_SECONDS, TimeUnit.SECONDS)
 						.until(() -> !client.providers(ServiceKey.of(Echo.class)).isEmpty());
 				assertEquals("echo:late", echo.echo("late"));
 			}

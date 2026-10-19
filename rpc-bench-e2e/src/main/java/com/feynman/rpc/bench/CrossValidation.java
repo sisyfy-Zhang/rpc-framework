@@ -39,11 +39,17 @@ import java.util.regex.Pattern;
  */
 final class CrossValidation {
 
-	static final String SCHEMA = "crossval/2";
+	static final String SCHEMA = "crossval/3";
 	static final double OPEN_THROUGHPUT_VS_RATE_PCT = 2.0;
 	static final double LATENCY_REL_PCT = 15.0;
 	static final double LATENCY_ABS_MS = 0.1;
 	static final double DISPATCH_LAG_P99_MAX_MS = 0.1;
+	/**
+	 * 开环前提：harness 至少有这么多有效轮（卡片 3 轮）。被判无效的轮（典型是 dispatcher_delayed：调度线程自己被环境停顿推迟）
+	 * 本来就是为排除环境停顿设计的，正式轮只在有效轮里选；有效轮少于 2 时只剩一个样本，证据不足，判 FAIL。
+	 * 这是前提检查，不是 b 项阈值：15% / 100µs 不变。
+	 */
+	static final int MIN_VALID_ROUNDS = 2;
 	/** 判别瓶颈侧：一组核的平均忙碌率达到它即视为饱和。 */
 	static final double SATURATED_PCT = 90.0;
 
@@ -75,6 +81,28 @@ final class CrossValidation {
 			long non2xx, Double uncorrectedP50Ms, Double uncorrectedP99Ms, Double uncorrectedP999Ms) {
 	}
 
+	/** 参照端的一次测量：原始输出文件名、解析结果、原文。 */
+	record Measurement(String outputFile, ToolResult result, String text) {
+	}
+
+	/**
+	 * 对称口径：参照端测多次（crossval.sh 缺省 wrk2 3 次，各预热 + 测量），按 p99（wrk2 取未修正 p99，wrk 取 p99）取中位那一次
+	 * 作为对照值——与 harness 的"3 轮取 p99 中位为正式轮"对称。偶数次取下中位。返回被选中的下标。
+	 */
+	static int medianIndex(List<Measurement> measurements) {
+		List<Integer> order = new ArrayList<>();
+		for (int i = 0; i < measurements.size(); i++) {
+			order.add(i);
+		}
+		order.sort(java.util.Comparator.comparingDouble((Integer i) -> referenceP99(measurements.get(i).result())).thenComparing(i -> i));
+		return order.get((order.size() - 1) / 2);
+	}
+
+	private static double referenceP99(ToolResult r) {
+		Double p99 = r.uncorrectedP99Ms() != null ? r.uncorrectedP99Ms() : r.p99Ms();
+		return p99 == null ? Double.MAX_VALUE : p99;
+	}
+
 	static int command(Bench.Options options, PrintStream out) throws IOException {
 		options.allowOnly("harness", "tool", "tool-output", "tool-command", "tool-version", "cpu-tool", "out");
 		Path harnessFile = Path.of(options.required("harness"));
@@ -82,17 +110,28 @@ final class CrossValidation {
 		if (!tool.equals("wrk") && !tool.equals("wrk2")) {
 			throw new Bench.UsageException("--tool must be wrk or wrk2, got \"" + tool + "\"");
 		}
-		Path toolOutput = Path.of(options.required("tool-output"));
+		// --tool-output 可以是逗号分隔的多份输出（参照端多次测量，见 medianIndex）
+		List<Path> toolOutputs = new ArrayList<>();
+		for (String part : options.required("tool-output").split(",")) {
+			if (!part.isBlank()) {
+				toolOutputs.add(Path.of(part.trim()));
+			}
+		}
 		Path outDir = Path.of(options.required("out"));
 		Object parsed = Json.parse(Files.readString(harnessFile, StandardCharsets.UTF_8));
 		if (!(parsed instanceof Map<?, ?> harness)) {
 			throw new Bench.UsageException(harnessFile + " is not a bench result JSON object");
 		}
-		String toolText = Files.readString(toolOutput, StandardCharsets.UTF_8);
-		ToolResult toolResult = parseToolOutput(tool, toolText);
-		Map<String, Object> result = compare(harness, harnessFile.getFileName().toString(), toolResult, toolText,
-				options.value("tool-command", null), options.value("tool-version", null), toolOutput.getFileName().toString(),
-				options.value("cpu-tool", null));
+		List<Measurement> measurements = new ArrayList<>();
+		for (Path toolOutput : toolOutputs) {
+			String toolText = Files.readString(toolOutput, StandardCharsets.UTF_8);
+			measurements.add(new Measurement(toolOutput.getFileName().toString(), parseToolOutput(tool, toolText), toolText));
+		}
+		if (measurements.isEmpty()) {
+			throw new Bench.UsageException("--tool-output needs at least one file");
+		}
+		Map<String, Object> result = compare(harness, harnessFile.getFileName().toString(), measurements,
+				options.value("tool-command", null), options.value("tool-version", null), options.value("cpu-tool", null));
 
 		Files.createDirectories(outDir);
 		String base = "crossval-" + result.get("mode") + "-" + LocalDateTime.now().format(BenchRunner.FILE_TIME);
@@ -192,6 +231,23 @@ final class CrossValidation {
 
 	static Map<String, Object> compare(Map<?, ?> harness, String harnessFileName, ToolResult tool, String toolText,
 			String toolCommand, String toolVersion, String toolOutputFile, String cpuToolLine) {
+		return compare(harness, harnessFileName, List.of(new Measurement(toolOutputFile, tool, toolText)), toolCommand, toolVersion,
+				cpuToolLine);
+	}
+
+	/** 参照端一次或多次测量：取 p99 中位那一次作对照值（{@link #medianIndex}），前提要求每一次都干净。 */
+	static Map<String, Object> compare(Map<?, ?> harness, String harnessFileName, List<Measurement> measurements, String toolCommand,
+			String toolVersion, String cpuToolLine) {
+		int selected = medianIndex(measurements);
+		ToolResult tool = measurements.get(selected).result();
+		String toolText = measurements.get(selected).text();
+		String toolOutputFile = measurements.get(selected).outputFile();
+		long allSocketErrors = 0;
+		long allNon2xx = 0;
+		for (Measurement m : measurements) {
+			allSocketErrors += m.result().socketErrors();
+			allNon2xx += m.result().non2xx();
+		}
 		Map<?, ?> load = map(MarkdownReport.path(harness, "profile", "parsed", "load"));
 		String mode = String.valueOf(load.get("model"));
 		boolean open = "open".equals(mode);
@@ -231,6 +287,20 @@ final class CrossValidation {
 		h.put("window_requests", official.get("window_requests"));
 		h.put("window_errors", official.get("window_errors"));
 		h.put("all_rounds_valid", MarkdownReport.path(harness, "validity", "all_rounds_valid"));
+		int roundsTotal = 0;
+		int validRounds = 0;
+		long validRoundErrors = 0;
+		for (Object r : list(harness.get("rounds"))) {
+			Map<?, ?> each = map(r);
+			roundsTotal++;
+			if (Boolean.TRUE.equals(each.get("valid"))) {
+				validRounds++;
+				validRoundErrors += (long) number(MarkdownReport.path(each, "window", "errors"));
+			}
+		}
+		h.put("rounds_total", roundsTotal);
+		h.put("valid_rounds", validRounds);
+		h.put("valid_rounds_window_errors", validRoundErrors);
 		h.put("backlog_triggered", MarkdownReport.path(harness, "validity", "backlog_triggered"));
 		h.put("client_bound", MarkdownReport.path(harness, "validity", "client_bound"));
 		h.put("passed", MarkdownReport.path(harness, "validity", "passed"));
@@ -247,6 +317,8 @@ final class CrossValidation {
 		h.put("hostname", env.get("hostname"));
 		h.put("cpu_model", env.get("cpu_model"));
 		h.put("started_at", env.get("started_at"));
+		h.put("harness_options", MarkdownReport.path(harness, "run", "harness_options"));
+		h.put("dispatcher_pin", MarkdownReport.path(round, "scheduler", "pin"));
 		result.put("harness", h);
 
 		Map<String, Object> t = new LinkedHashMap<>();
@@ -281,6 +353,31 @@ final class CrossValidation {
 		tc.put("client_busy_pct", toolCpu == null ? null : toolCpu[1]);
 		t.put("cpu", tc);
 		t.put("raw_output", toolText);
+		t.put("runs", measurements.size());
+		t.put("selected_run", selected + 1);
+		t.put("selection_rule", measurements.size() == 1 ? "单次测量" : "参照端 " + measurements.size() + " 次测量里"
+				+ (open ? "未修正 p99" : "p99") + " 的中位那一次（与 harness 的正式轮选法对称；偶数次取下中位）");
+		List<Object> runs = new ArrayList<>();
+		for (int i = 0; i < measurements.size(); i++) {
+			ToolResult r = measurements.get(i).result();
+			Map<String, Object> run = new LinkedHashMap<>();
+			run.put("run", i + 1);
+			run.put("selected", i == selected);
+			run.put("output_file", measurements.get(i).outputFile());
+			run.put("requests_per_sec", r.requestsPerSec());
+			run.put("requests", r.requests());
+			run.put("p50_ms", r.p50Ms());
+			run.put("p99_ms", r.p99Ms());
+			run.put("max_ms", r.maxMs());
+			run.put("uncorrected_p50_ms", r.uncorrectedP50Ms());
+			run.put("uncorrected_p99_ms", r.uncorrectedP99Ms());
+			run.put("uncorrected_p999_ms", r.uncorrectedP999Ms());
+			run.put("socket_errors", r.socketErrors());
+			run.put("non_2xx_3xx", r.non2xx());
+			run.put("raw_output", measurements.get(i).text());
+			runs.add(run);
+		}
+		t.put("measurements", runs);
 		result.put("tool", t);
 
 		List<Object> checks = new ArrayList<>();
@@ -289,12 +386,15 @@ final class CrossValidation {
 		double hThroughput = number(h.get("throughput_rps"));
 		double tThroughput = tool.requestsPerSec();
 		if (open) {
-			boolean harnessClean = Boolean.TRUE.equals(h.get("all_rounds_valid")) && number(h.get("window_errors")) == 0;
-			checks.add(check("harness_clean", "前提", "harness 全部轮次有效、正式轮窗口内无错误", "all_rounds_valid="
-					+ h.get("all_rounds_valid") + ", window_errors=" + h.get("window_errors"), null, harnessClean));
-			boolean toolClean = tool.socketErrors() == 0 && tool.non2xx() == 0;
-			checks.add(check("tool_clean", "前提", tool.tool() + " 无 socket 错误、无非 2xx/3xx 响应", "socket_errors=" + tool.socketErrors()
-					+ ", non_2xx_3xx=" + tool.non2xx(), null, toolClean));
+			boolean harnessClean = number(h.get("valid_rounds")) >= MIN_VALID_ROUNDS && number(h.get("valid_rounds_window_errors")) == 0
+					&& number(h.get("window_errors")) == 0;
+			checks.add(check("harness_clean", "前提", "harness 有效轮 ≥ " + MIN_VALID_ROUNDS + "（正式轮在有效轮中选）、有效轮窗口内无错误",
+					"valid_rounds=" + h.get("valid_rounds") + "/" + h.get("rounds_total") + ", valid_rounds_window_errors="
+							+ h.get("valid_rounds_window_errors"), null, harnessClean));
+			boolean toolClean = allSocketErrors == 0 && allNon2xx == 0;
+			checks.add(check("tool_clean", "前提", tool.tool() + (measurements.size() > 1 ? " 全部 " + measurements.size() + " 次测量" : "")
+					+ "无 socket 错误、无非 2xx/3xx 响应", "socket_errors=" + allSocketErrors + ", non_2xx_3xx=" + allNon2xx
+					+ (measurements.size() > 1 ? "（" + measurements.size() + " 次合计）" : ""), null, toolClean));
 			if (!harnessClean || !toolClean) {
 				causes.add(CAUSE_ERRORS);
 			}
@@ -380,7 +480,9 @@ final class CrossValidation {
 		if (open) {
 			notes.add("相对偏差 = |harness − " + tool.tool() + "| / " + tool.tool() + "（以第三方工具为参照）。harness 取正式轮（"
 					+ h.get("selection_rule") + "），统计窗口 " + load.get("steady_window") + "；" + tool.tool()
-					+ " 先预热跑一次丢弃，再带 -U 测一次（同一次运行同时给出修正后与未修正分布），测量时长与 harness 的窗口长度相同。");
+					+ " 每次先预热跑一次丢弃、再带 -U 测一次（同一次运行同时给出修正后与未修正分布），测量时长与 harness 的窗口长度相同；"
+					+ (measurements.size() > 1 ? "这样测 " + measurements.size() + " 次，取未修正 p99 的中位那一次作对照值（第 " + (selected + 1)
+							+ " 次），与 harness 三轮取中位对称。" : "只测了 1 次。"));
 			notes.add(WRK2_PACING_NOTE);
 			notes.add("harness 的修正后延迟（从计划时刻）= 服务时间 + 发出滞后；发出滞后由判定项 c 独立约束，所以服务时间与 wrk2 未修正延迟一致、"
 					+ "发出滞后受控，就说明 harness 的开环延迟可信。修正后延迟两列只作信息项并排，不判定。");
@@ -503,7 +605,17 @@ final class CrossValidation {
 				.append("，harness 连接 ").append(target.get("harness_connections")).append(" 条 |\n");
 		md.append("| harness | 口径卡 `").append(h.get("profile")).append("`，结果 `").append(h.get("file")).append("`，正式轮第 ")
 				.append(h.get("official_round")).append(" 轮，统计窗口 ").append(target.get("window")).append("；全部轮次有效 ")
-				.append(h.get("all_rounds_valid")).append("，client_bound ").append(h.get("client_bound")).append(" |\n");
+				.append(h.get("all_rounds_valid")).append("（有效轮 ").append(h.get("valid_rounds")).append("/").append(h.get("rounds_total")).append("）").append("，client_bound ").append(h.get("client_bound")).append(" |\n");
+		if (h.get("harness_options") instanceof Map<?, ?> options) {
+			md.append("| harness 选项 | ").append(open ? "开环执行者 " + options.get("open_workers")
+					+ (options.get("open_pool_size") == null ? "" : "（" + options.get("open_pool_size") + " 个工作者）") + " · " : "")
+					.append(options.get("http_client") == null ? "" : "HTTP 客户端 " + options.get("http_client") + " · ")
+					.append(String.valueOf(options.get("io_threads")).startsWith("n/a") ? ""
+							: "HTTP IO 线程 " + options.get("io_threads") + (Boolean.TRUE.equals(options.get("io_busy_poll")) ? "（忙轮询）" : "") + " · ")
+					.append("调度线程绑核 ").append(options.get("pin_dispatcher"))
+					.append(h.get("dispatcher_pin") instanceof Map<?, ?> pin ? "（正式轮读回：" + pin.get("status") + "）" : "")
+					.append(" · 预热段 ").append(options.get("pre_warmup")).append(" |\n");
+		}
 		md.append("| ").append(tool).append(" | `").append(t.get("command")).append("`").append(t.get("version") == null ? "" : "（" + t.get("version") + "）")
 				.append(" |\n");
 		md.append("| CPU 亲和 | 服务端 ").append(h.get("server_cpus_allowed")).append(" · 压测端（harness 与 ").append(tool).append("）")
@@ -520,6 +632,29 @@ final class CrossValidation {
 					.append(" | ").append(Boolean.TRUE.equals(c.get("passed")) ? "通过" : "**未通过**").append(" |\n");
 		}
 		md.append('\n');
+
+		List<Object> toolRuns = list(MarkdownReport.path(json, "tool", "measurements"));
+		if (toolRuns.size() > 1) {
+			md.append("## ").append(tool).append(" 各次测量\n\n").append(String.valueOf(MarkdownReport.path(json, "tool", "selection_rule"))).append("。\n\n");
+			md.append(open ? "| 次 | 吞吐 (req/s) | 未修正 p50 / p99 / p99.9 (ms) | 修正后 p99 (ms) | socket 错误 | 非 2xx/3xx | 输出 |\n|---|---|---|---|---|---|---|\n"
+					: "| 次 | 吞吐 (req/s) | p50 / p99 (ms) | max (ms) | socket 错误 | 非 2xx/3xx | 输出 |\n|---|---|---|---|---|---|---|\n");
+			for (Object o : toolRuns) {
+				Map<?, ?> r = map(o);
+				boolean sel = Boolean.TRUE.equals(r.get("selected"));
+				String b = sel ? "**" : "";
+				md.append("| ").append(b).append(r.get("run")).append(sel ? "（对照值）" : "").append(b).append(" | ").append(num(r.get("requests_per_sec")))
+						.append(" | ");
+				if (open) {
+					md.append(num(r.get("uncorrected_p50_ms"))).append(" / ").append(b).append(num(r.get("uncorrected_p99_ms"))).append(b).append(" / ")
+							.append(num(r.get("uncorrected_p999_ms"))).append(" | ").append(num(r.get("p99_ms")));
+				} else {
+					md.append(num(r.get("p50_ms"))).append(" / ").append(num(r.get("p99_ms"))).append(" | ").append(num(r.get("max_ms")));
+				}
+				md.append(" | ").append(r.get("socket_errors")).append(" | ").append(r.get("non_2xx_3xx")).append(" | `").append(r.get("output_file"))
+						.append("` |\n");
+			}
+			md.append('\n');
+		}
 
 		md.append("## 并排\n\n| 指标 | harness（正式轮） | ").append(tool).append(" | 差（harness − ").append(tool)
 				.append("） | 相对偏差 | 性质 |\n|---|---|---|---|---|---|\n");

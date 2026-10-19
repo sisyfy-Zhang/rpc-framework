@@ -230,6 +230,52 @@ class BenchEndToEndTest {
 		assertEquals("echoOrder", path(r.json(), "profile", "parsed", "target", "method"));
 	}
 
+	/**
+	 * 预热段（{@code --pre-warmup}，缺省 = 卡片的 warmup）：第 1 轮之前以同样负载跑一段，摘要进 {@code run.pre_warmup}，
+	 * 不计入任何一轮——第 1 轮的发出数仍恰好是 rate × duration。{@code --pre-warmup 0} 关闭，记为 off。
+	 */
+	@Test
+	void preWarmupRunsBeforeTheFirstRoundAndIsNotCounted(@TempDir Path dir) throws Exception {
+		String id = "it-prewarm";
+		String yaml = card(id, "open", "rate: 500", "2s", "500ms", "[500ms, 1.5s]", 1, "1s", "{ kind: bytes, size: 256 }", "");
+		Result r = run(dir, id, yaml, "--direct", "127.0.0.1:" + server.port(), "--open-workers", "pool");
+		assertEquals(Bench.OK, r.code(), r.err());
+		assertEquals(500.0, ((Number) path(r.json(), "run", "harness_options", "pre_warmup_ms")).doubleValue());
+		assertEquals("pool", path(r.json(), "run", "harness_options", "open_workers"));
+		Map<?, ?> pre = (Map<?, ?>) path(r.json(), "run", "pre_warmup");
+		assertEquals(250L, number(pre.get("issued")), "pre-warmup = rate x 500ms");
+		Map<?, ?> round = (Map<?, ?>) ((List<?>) r.json().get("rounds")).get(0);
+		assertEquals(1000L, number(round.get("issued")), "round 1 still issues exactly rate x duration: the segment is not counted");
+		assertEquals(Boolean.FALSE, round.get("dispatcher_delayed"));
+		String md = Files.readString(r.markdown(), StandardCharsets.UTF_8);
+		assertTrue(md.contains("| 预热段 | 500ms（load.warmup）"), md);
+		assertTrue(md.contains("| harness 选项 | 开环执行者 pool"), md);
+		assertTrue(r.out().contains("pre-warmup: open for 500ms"), r.out());
+
+		String offId = "it-prewarm-off";
+		Result off = run(dir, offId, yaml.replace("profile: " + id, "profile: " + offId), "--direct", "127.0.0.1:" + server.port(),
+				"--pre-warmup", "0");
+		assertEquals(Bench.OK, off.code(), off.err());
+		assertEquals("off", path(off.json(), "run", "pre_warmup"));
+		assertEquals(0.0, ((Number) path(off.json(), "run", "harness_options", "pre_warmup_ms")).doubleValue());
+		assertTrue(Files.readString(off.markdown(), StandardCharsets.UTF_8).contains("| 预热段 | 关闭（--pre-warmup = 0ms）"));
+	}
+
+	@Test
+	void ioThreadsIsAnHttpOnlyOption(@TempDir Path dir) throws Exception {
+		String id = "it-io-threads";
+		Path card = dir.resolve(id + ".yaml");
+		Files.writeString(card, card(id, "open", "rate: 100", "1s", "200ms", "[200ms, 1s]", 1, "1s", "{ kind: bytes, size: 16 }", ""),
+				StandardCharsets.UTF_8);
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		int code = Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:" + server.port(), "--io-threads", "2" },
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8));
+		assertEquals(Bench.ERROR, code);
+		assertTrue(err.toString(StandardCharsets.UTF_8).contains("apply to transport: http cards only"), err.toString(StandardCharsets.UTF_8));
+		assertEquals(Bench.ERROR, Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:1", "--open-workers", "x" },
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8)));
+	}
+
 	@Test
 	void registryModeDiscoversTheProviderThroughZooKeeper(@TempDir Path dir) throws Exception {
 		try (TestingServer zk = new TestingServer(true);

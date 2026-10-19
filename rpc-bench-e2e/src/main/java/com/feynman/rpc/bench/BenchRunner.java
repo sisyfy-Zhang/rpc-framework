@@ -58,6 +58,14 @@ final class BenchRunner {
 	 */
 	static Outcome run(Profile profile, CallTarget.Endpoint endpoint, Path outDir, String label, List<String> commandLine,
 			PrintStream out, MeterRegistry metrics) throws IOException {
+		return run(profile, endpoint, outDir, label, commandLine, out, metrics, HarnessOptions.DEFAULTS);
+	}
+
+	/**
+	 * @param options harness 的实现选项（开环执行者、HTTP IO 线程数、调度线程绑核、预热段），如实进 {@code run.harness_options}
+	 */
+	static Outcome run(Profile profile, CallTarget.Endpoint endpoint, Path outDir, String label, List<String> commandLine,
+			PrintStream out, MeterRegistry metrics, HarnessOptions options) throws IOException {
 		Instant started = Instant.now();
 		Map<String, Object> environment = EnvironmentProbe.collect();
 		environment.put("metrics_enabled", metrics != null);
@@ -67,7 +75,8 @@ final class BenchRunner {
 		Map<String, Object> targetDescription;
 		Object serverEnvironment;
 		CpuSampler cpu = null;
-		try (CallTarget target = CallTarget.create(profile, endpoint, metrics)) {
+		Object preWarmup = null;
+		try (CallTarget target = CallTarget.create(profile, endpoint, metrics, options)) {
 			targetDescription = target.describe();
 			serverEnvironment = serverEnvironment(target, environment, out);
 			Object serverCpus = serverEnvironment instanceof Map<?, ?> m ? m.get("cpus_allowed") : null;
@@ -80,10 +89,20 @@ final class BenchRunner {
 				// 例如卡片故意把 timeout 设得极小：不在这里中止，失败会在轮次与断言里如实体现
 				out.println("warning: pre-run verification call failed (" + ErrorClassifier.classify(e) + "): " + e.getMessage());
 			}
+			java.time.Duration preWarmupLength = options.effectivePreWarmup(profile);
+			if (!preWarmupLength.isZero()) {
+				out.printf(Locale.ROOT, "pre-warmup: %s for %s (not counted in any round) ...%n", profile.load().model(),
+						Durations.format(preWarmupLength));
+				Map<String, Object> segment = LoadDriver.preWarmup(profile, target, options, preWarmupLength);
+				preWarmup = segment;
+				out.printf(Locale.ROOT, "pre-warmup: issued=%s errors=%s p99=%s max_inflight=%s%n", segment.get("issued"), segment.get("errors"),
+						((Map<?, ?>) segment.get("latency_ms")).get("p99"),
+						segment.get("scheduler") instanceof Map<?, ?> s ? s.get("max_inflight") : "n/a");
+			}
 			for (int round = 1; round <= profile.load().rounds(); round++) {
 				out.printf(Locale.ROOT, "round %d/%d: %s for %s ...%n", round, profile.load().rounds(), profile.load().model(),
 						Durations.format(profile.load().duration()));
-				RoundRecorder recorder = LoadDriver.runRound(round, profile, target, cpu);
+				RoundRecorder recorder = LoadDriver.runRound(round, profile, target, cpu, options);
 				Map<String, Object> json = recorder.toJson();
 				rounds.add(json);
 				out.printf(Locale.ROOT, "round %d: window requests=%d throughput=%.1f req/s p50=%s p99=%s errors=%d valid=%s cpu=%s%n", round,
@@ -106,6 +125,8 @@ final class BenchRunner {
 		Map<String, Object> run = new LinkedHashMap<>();
 		run.put("command", String.join(" ", commandLine));
 		run.put("target", targetDescription);
+		run.put("harness_options", options.toJson(profile));
+		run.put("pre_warmup", preWarmup == null ? "off" : preWarmup);
 		result.put("run", run);
 		result.put("environment", environment);
 		result.put("server_environment", serverEnvironment);
@@ -230,6 +251,14 @@ final class BenchRunner {
 		}
 		if (backlog) {
 			statements.add("开环 backlog 触发：在途调用达到 rate × timeout × 2，压测端已无法按计划发出，对应轮次无效。");
+		}
+		List<Object> delayed = rounds.stream().filter(r -> Boolean.TRUE.equals(r.get("dispatcher_delayed"))).map(r -> r.get("round")).toList();
+		validity.put("dispatcher_delayed_rounds", delayed);
+		if (!delayed.isEmpty()) {
+			statements.add("第 " + delayed.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("、"))
+					+ " 轮发出滞后 p99 超过 " + RoundRecorder.round3(RoundRecorder.DISPATCH_LAG_P99_MAX_NANOS / 1e6)
+					+ "ms（dispatcher_delayed）：调度线程本身被推迟，从计划时刻算的延迟混进了压测端的滞后。这些轮判为无效、"
+					+ "不参与正式轮选取，数字仍列在轮次表里。");
 		}
 		if (clientBound) {
 			statements.add(CLIENT_BOUND_STATEMENT);

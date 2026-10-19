@@ -10,9 +10,10 @@
 #       --profile <card.yaml>（缺省按 mode 选仓库里的卡；只在调试脚本时换成短卡）
 # 环境变量：BENCH_SERVER_CPUS（缺省 0-4）、BENCH_CLIENT_CPUS（缺省 5-9，harness 与 wrk/wrk2 用同一组核）、
 #           CROSSVAL_TOOLS_BIN（wrk / wrk2 所在目录，缺省 ~/tools/bin）、
-#           CROSSVAL_TOOL_WARMUP / CROSSVAL_TOOL_DURATION（工具的预热 / 测量秒数，缺省 20 / 40，与卡片的预热与窗口长度一致）。
+#           CROSSVAL_TOOL_WARMUP / CROSSVAL_TOOL_DURATION（工具每次的预热 / 测量秒数，缺省 20 / 40，与卡片的预热与窗口长度一致）、
+#           CROSSVAL_TOOL_RUNS（工具测几次，缺省开环 3 次取未修正 p99 中位、闭环 1 次）。
 # 流程：起 bench server（RPC 19100 + HTTP 19180，--no-registry）→ harness 跑卡（每轮统计窗口自带 CPU 采样）→ 工具预热一次（丢弃）
-#       → 工具测量一次（wrk2 带 -U，同一次运行给出修正后与未修正分布；测量中段采样 /proc/stat）→ 停服务端
+#       → 工具测量（开环 wrk2 带 -U 测 3 次、每次先预热，闭环 wrk 1 次；第 1 次测量中段采样 /proc/stat）→ 停服务端
 #       → rpc-bench-e2e crossval 比较并写 crossval-<mode>-<时间>.json / .md。
 # 退出码：0 PASS；2 FAIL（判定未通过）；1 运行出错。先构建：mvn -pl rpc-bench-e2e -am package -DskipTests
 set -euo pipefail
@@ -43,6 +44,7 @@ SERVER_CPUS="${BENCH_SERVER_CPUS:-0-4}"
 CLIENT_CPUS="${BENCH_CLIENT_CPUS:-5-9}"
 TOOL_WARMUP="${CROSSVAL_TOOL_WARMUP:-20}"
 TOOL_DURATION="${CROSSVAL_TOOL_DURATION:-40}"
+TOOL_RUNS_SET="${CROSSVAL_TOOL_RUNS:-}"
 RPC_PORT=19100
 HTTP_PORT=19180
 URL="http://127.0.0.1:${HTTP_PORT}/echo"
@@ -53,11 +55,13 @@ case "$MODE" in
     PROFILE="${PROFILE:-$ROOT/bench/profiles/crossval-http-open-v1.yaml}"
     TOOL=wrk2
     TOOL_ARGS=(-t 4 -c 64 -R 5000 --latency -U -s "$SCRIPT")
+    TOOL_RUNS="${TOOL_RUNS_SET:-3}"
     ;;
   closed)
     PROFILE="${PROFILE:-$ROOT/bench/profiles/crossval-http-closed-capacity-v1.yaml}"
     TOOL=wrk
     TOOL_ARGS=(-t 4 -c 64 --latency -s "$SCRIPT")
+    TOOL_RUNS="${TOOL_RUNS_SET:-1}"
     ;;
   *) echo "--mode must be open or closed" >&2; exit 1 ;;
 esac
@@ -165,26 +169,36 @@ if [ -z "$HARNESS_JSON" ] || [ ! -f "$HARNESS_JSON" ]; then
   exit 1
 fi
 
-# 3. 工具：先预热一次（丢弃），再测量一次；时长与 harness 的预热 / 统计窗口一致
+# 3. 工具：每次先预热一次（丢弃），再测量一次；时长与 harness 的预热 / 统计窗口一致。开环（wrk2）缺省测 3 次，
+#    crossval 取未修正 p99 的中位那一次作对照值（对称口径：与 harness 的 3 轮取中位一致）；闭环（wrk）缺省 1 次。
+#    CPU 在第 1 次测量的中段采样。
 TOOL_VERSION="$("$TOOL_BIN" -v 2>&1 | head -1 || true)"
-echo "$TOOL warmup ${TOOL_WARMUP}s (discarded) ..."
-"${PIN[@]}" "$TOOL_BIN" "${TOOL_ARGS[@]}" -d "${TOOL_WARMUP}s" "$URL" > "$RUN_DIR/$TOOL-warmup.txt" 2>&1
 TOOL_CMD="${PIN[*]} $TOOL ${TOOL_ARGS[*]} -d ${TOOL_DURATION}s $URL"
 TOOL_CMD="${TOOL_CMD/#$ROOT\//}"
 TOOL_CMD="${TOOL_CMD//$ROOT\//}"
-echo "$TOOL measure ${TOOL_DURATION}s: $TOOL_CMD"
-sample_cpu "$((TOOL_DURATION / 4))" "$((TOOL_DURATION / 2))" "$RUN_DIR/cpu-tool.txt" &
-SAMPLER_PID=$!
-"${PIN[@]}" "$TOOL_BIN" "${TOOL_ARGS[@]}" -d "${TOOL_DURATION}s" "$URL" > "$RUN_DIR/$TOOL-measure.txt" 2>&1
-wait "$SAMPLER_PID" 2>/dev/null || true
-echo "cpu during $TOOL: $(cat "$RUN_DIR/cpu-tool.txt" 2>/dev/null)"
-sed '/Detailed Percentile spectrum/,/^-----/d' "$RUN_DIR/$TOOL-measure.txt"
+TOOL_OUTPUTS=""
+for run in $(seq 1 "$TOOL_RUNS"); do
+  echo "$TOOL run $run/$TOOL_RUNS: warmup ${TOOL_WARMUP}s (discarded) ..."
+  "${PIN[@]}" "$TOOL_BIN" "${TOOL_ARGS[@]}" -d "${TOOL_WARMUP}s" "$URL" > "$RUN_DIR/$TOOL-warmup-$run.txt" 2>&1
+  echo "$TOOL run $run/$TOOL_RUNS: measure ${TOOL_DURATION}s: $TOOL_CMD"
+  if [ "$run" -eq 1 ]; then
+    sample_cpu "$((TOOL_DURATION / 4))" "$((TOOL_DURATION / 2))" "$RUN_DIR/cpu-tool.txt" &
+    SAMPLER_PID=$!
+  fi
+  "${PIN[@]}" "$TOOL_BIN" "${TOOL_ARGS[@]}" -d "${TOOL_DURATION}s" "$URL" > "$RUN_DIR/$TOOL-measure-$run.txt" 2>&1
+  if [ "$run" -eq 1 ]; then
+    wait "$SAMPLER_PID" 2>/dev/null || true
+    echo "cpu during $TOOL: $(cat "$RUN_DIR/cpu-tool.txt" 2>/dev/null)"
+  fi
+  sed '/Detailed Percentile spectrum/,/^-----/d' "$RUN_DIR/$TOOL-measure-$run.txt"
+  TOOL_OUTPUTS="${TOOL_OUTPUTS:+$TOOL_OUTPUTS,}$RUN_DIR/$TOOL-measure-$run.txt"
+done
 
 # 4. 停服务端，比较
 stop_server
 set +e
 "$JAVA_HOME/bin/java" -cp "$CP" com.feynman.rpc.bench.Bench crossval --harness "$HARNESS_JSON" --tool "$TOOL" \
-  --tool-output "$RUN_DIR/$TOOL-measure.txt" --tool-command "$TOOL_CMD" --tool-version "$TOOL_VERSION" \
+  --tool-output "$TOOL_OUTPUTS" --tool-command "$TOOL_CMD" --tool-version "$TOOL_VERSION" \
   --cpu-tool "$(cat "$RUN_DIR/cpu-tool.txt" 2>/dev/null || echo unknown)" --out "$OUT"
 CODE=$?
 set -e

@@ -44,13 +44,27 @@ interface CallTarget extends AutoCloseable {
 
 	/** @param metrics 非 null 时被压的客户端带指标 Filter 与 Gauge（{@code --metrics-port}）；null 时与上面相同 */
 	static CallTarget create(Profile profile, Endpoint endpoint, MeterRegistry metrics) {
+		return create(profile, endpoint, metrics, HarnessOptions.DEFAULTS);
+	}
+
+	/**
+	 * @param options {@link HarnessOptions#ioThreads()} 只对 http 生效（RpcClient 没有事件循环线程数的配置，
+	 *                rpc 卡给了 {@code --io-threads} 时抛 {@link IllegalArgumentException}）
+	 */
+	static CallTarget create(Profile profile, Endpoint endpoint, MeterRegistry metrics, HarnessOptions options) {
 		return switch (profile.target().transport()) {
-			case "rpc" -> RpcCallTarget.connect(profile, endpoint, metrics);
+			case "rpc" -> {
+				if (options.httpIoOptionsGiven()) {
+					throw new IllegalArgumentException("--http-client / --io-threads / --io-busy-poll apply to transport = http only");
+				}
+				yield RpcCallTarget.connect(profile, endpoint, metrics);
+			}
 			case "http" -> {
 				if (metrics != null) {
 					throw new IllegalArgumentException("--metrics-port does not apply to transport = http");
 				}
-				yield HttpCallTarget.connect(profile);
+				yield HarnessOptions.HTTP_CLIENT_BLOCKING.equals(options.effectiveHttpClient(profile)) ? BlockingHttpCallTarget.connect(profile)
+						: HttpCallTarget.connect(profile, options.effectiveIoThreads(profile), options.effectiveIoBusyPoll(profile));
 			}
 			default -> throw new IllegalArgumentException("unknown transport " + profile.target().transport());
 		};

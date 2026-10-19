@@ -101,7 +101,25 @@ class HttpCallTargetTest {
 			String md = Files.readString(out.resolve(jsonFile.getFileName().toString().replace(".json", ".md")), StandardCharsets.UTF_8);
 			assertTrue(md.contains("| 序列化 / 提供者 | —（HTTP 请求体就是原始字节）/ 1 个 URL |"), md);
 			assertTrue(md.contains("4 条 keep-alive 连接、每条同一时刻 1 个在途请求"), md);
+			assertTrue(md.contains("HTTP 客户端 netty · HTTP IO 线程 "), "the harness options row names the HTTP client: " + md);
 		}
+	}
+
+	/** 口径表"harness 选项"一行单列 HTTP 客户端：http 开环卡缺省是阻塞客户端（没有 IO 线程，不列 IO 线程数）。 */
+	@Test
+	void harnessOptionsRowNamesTheBlockingClient() {
+		Profile profile = openCard(1, "1s");
+		Map<String, Object> options = HarnessOptions.DEFAULTS.toJson(profile);
+		Map<String, Object> json = new java.util.LinkedHashMap<>();
+		json.put("profile", Map.of("id", "x", "parsed", profile.toJson()));
+		json.put("run", Map.of("target", Map.of("address", "u", "connections", 1, "connection_model", "m"), "harness_options", options,
+				"pre_warmup", "off"));
+		json.put("environment", Map.of());
+		json.put("rounds", List.of());
+		json.put("summary", Map.of());
+		json.put("validity", Map.of("statements", List.of()));
+		String md = MarkdownReport.render((Map<?, ?>) Json.parse(Json.write(json)), "x.json");
+		assertTrue(md.contains("| harness 选项 | 开环执行者 pool-platform（1 个平台线程工作者，有界 FIFO 队列） · HTTP 客户端 blocking · 调度线程绑核 off"), md);
 	}
 
 	private static Map<String, String> withHttpMarker(Map<String, String> environment) {
@@ -134,6 +152,70 @@ class HttpCallTargetTest {
 			Thread.sleep(2);
 		}
 		assertTrue(server.received() >= count, "server received " + server.received() + " < " + count);
+	}
+
+	/** {@code --io-threads 1 --io-busy-poll on}：忙轮询的事件循环照样完成写出与收包（调用方提交写出时不唤醒它）。 */
+	@Test
+	void busyPollingEventLoopCompletesCalls() throws Exception {
+		try (BenchServer rpc = BenchServer.start(0, "127.0.0.1", null, "protobuf");
+				BenchHttpServer http = BenchHttpServer.start(0, withHttpMarker(rpc.environment()));
+				HttpCallTarget target = HttpCallTarget.connect(openCard(http.port(), "2s"), 1, true)) {
+			assertEquals(Boolean.TRUE, target.describe().get("io_busy_poll"));
+			assertEquals(1, target.describe().get("io_threads"));
+			target.verify();
+			try (var callers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+				List<java.util.concurrent.Future<?>> calls = new java.util.ArrayList<>();
+				for (int i = 0; i < 200; i++) {
+					calls.add(callers.submit(() -> {
+						target.call();
+						return null;
+					}));
+				}
+				for (java.util.concurrent.Future<?> call : calls) {
+					call.get(10, java.util.concurrent.TimeUnit.SECONDS);
+				}
+			}
+		}
+	}
+
+	/** {@code --http-client blocking}：阻塞 Socket 客户端完成回显校验、并发调用（排队等唯一的连接）与取服务端环境。 */
+	@Test
+	void blockingClientCompletesCallsAndReadsTheServerEnvironment() throws Exception {
+		try (BenchServer rpc = BenchServer.start(0, "127.0.0.1", null, "protobuf");
+				BenchHttpServer http = BenchHttpServer.start(0, withHttpMarker(rpc.environment()));
+				BlockingHttpCallTarget target = BlockingHttpCallTarget.connect(openCard(http.port(), "2s"))) {
+			assertEquals("blocking java.net.Socket per connection (TCP_NODELAY), keep-alive, no pipelining; the calling thread writes and reads",
+					target.describe().get("http_client"));
+			target.verify();
+			assertEquals("http", target.serverEnvironment().get("endpoint"));
+			assertTrue(!target.serverStats().isEmpty(), "GET /stats through a temporary connection");
+			try (var callers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+				List<java.util.concurrent.Future<?>> calls = new java.util.ArrayList<>();
+				for (int i = 0; i < 200; i++) {
+					calls.add(callers.submit(() -> {
+						target.call();
+						return null;
+					}));
+				}
+				for (java.util.concurrent.Future<?> call : calls) {
+					call.get(10, java.util.concurrent.TimeUnit.SECONDS);
+				}
+			}
+		}
+	}
+
+	/** 阻塞客户端的超时：卡住的目标在 load.timeout 后以 TimeoutException 结束（按 SO_TIMEOUT 判定），连接关掉、下次重连。 */
+	@Test
+	void blockingClientTimesOutAStuckCall() throws Exception {
+		try (ScriptedHttpServer server = new ScriptedHttpServer(HttpCallTarget.PRE_WARMUP_CALLS_PER_CONNECTION, -1);
+				BlockingHttpCallTarget target = BlockingHttpCallTarget.connect(openCard(server.port(), "500ms"))) {
+			assertEquals(HttpCallTarget.PRE_WARMUP_CALLS_PER_CONNECTION, server.answered(), "pre-warm-up is answered");
+			long start = System.nanoTime();
+			Throwable error = assertThrows(TimeoutException.class, target::call);
+			assertEquals(ErrorClassifier.TIMEOUT, ErrorClassifier.classify(error));
+			long elapsed = (System.nanoTime() - start) / 1_000_000;
+			assertTrue(elapsed >= 400 && elapsed < 2000, "timeout 500ms, took " + elapsed + "ms");
+		}
 	}
 
 	/**
