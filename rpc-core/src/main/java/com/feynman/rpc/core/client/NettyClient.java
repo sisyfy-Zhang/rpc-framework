@@ -58,15 +58,24 @@ public final class NettyClient implements AutoCloseable {
 	 * @param loadStats 所属客户端的每地址在途统计：下线节点的连接据此判断何时排空（见 ConnectionManager）
 	 */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats) {
-		this(serializers, connectionsPerNode, loadStats, null);
+		this(serializers, connectionsPerNode, loadStats, 0, null);
+	}
+
+	/** @param ioThreads IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads} */
+	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads) {
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null);
 	}
 
 	/** @param allocator 非 null 时作为连接的 {@link ChannelOption#ALLOCATOR}（测试用它记录分配发生在哪些线程上） */
 	NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, ByteBufAllocator allocator) {
+		this(serializers, connectionsPerNode, loadStats, 0, allocator);
+	}
+
+	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator) {
 		this.serializers = serializers;
 		byte[] supportedCodes = serializers.codesByPriority();
 
-		this.ioGroup = new NioEventLoopGroup(0, new DefaultThreadFactory("rpc-client-io"));
+		this.ioGroup = new NioEventLoopGroup(ioThreads, new DefaultThreadFactory("rpc-client-io"));
 		Bootstrap bootstrap = new Bootstrap()
 				.group(ioGroup)
 				.channel(NioSocketChannel.class)

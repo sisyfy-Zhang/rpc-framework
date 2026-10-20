@@ -39,7 +39,16 @@ final class BenchServer implements AutoCloseable {
 	 *                服务端环境里的 {@code metrics_enabled} 如实记录是否开启——指标 Filter 在热路径上，开没开要进报告
 	 */
 	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics) throws Exception {
-		var builder = RpcServer.builder().port(port).serializer(serializer);
+		return start(port, host, registry, serializer, metrics, 0);
+	}
+
+	/**
+	 * @param ioThreads {@code RpcServerConfig.ioThreads}（{@code server --io-threads}）；0 = Netty 缺省（2 × 可用核数）。
+	 *                  实际值与业务执行器一起记进服务端环境（{@code server_io_threads} / {@code server_executor}），对比报告据此写明两端配置
+	 */
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads)
+			throws Exception {
+		var builder = RpcServer.builder().port(port).serializer(serializer).ioThreads(ioThreads);
 		if (metrics != null) {
 			builder.serverFilter(new MicrometerServerFilter(metrics));
 		}
@@ -54,6 +63,10 @@ final class BenchServer implements AutoCloseable {
 			// 环境在启动时采集一次（含外部命令，可能要几百毫秒），之后 environment() 直接返回，不占压测时间
 			Map<String, String> environment = new LinkedHashMap<>(EnvironmentProbe.collectAsStrings());
 			environment.put("metrics_enabled", String.valueOf(metrics != null));
+			environment.put("transport", "rpc");
+			environment.put("server_io_threads", server.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText()
+					: String.valueOf(server.config().ioThreads()));
+			environment.put("server_executor", describe(server.config().executor()));
 			server.export(BenchService.class, new BenchServiceImpl(environment));
 			if (metrics != null) {
 				RpcServerMetrics.bind(server, metrics);
@@ -69,6 +82,15 @@ final class BenchServer implements AutoCloseable {
 
 	int port() {
 		return server.port();
+	}
+
+	/** 业务执行器的一句话描述（缺省：固定池 2 × 可用核数、有界队列 1000；业务方法不在 IO 线程上执行）。 */
+	static String describe(com.feynman.rpc.core.config.ExecutorConfig executor) {
+		return switch (executor) {
+			case com.feynman.rpc.core.config.ExecutorConfig.Fixed f -> "fixed pool (" + f.threads() + " threads, queue " + f.queueCapacity()
+					+ "): business methods run off the IO threads";
+			case com.feynman.rpc.core.config.ExecutorConfig.VirtualThreads v -> "virtual thread per request (max " + v.maxConcurrent() + ")";
+		};
 	}
 
 	RpcServer rpcServer() {

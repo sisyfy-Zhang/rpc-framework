@@ -1,0 +1,31 @@
+# 口径卡（连接数扫描）：本框架，同机 loopback、1KB、单提供者，闭环 128 并发，直连（--direct），每节点 8 条连接。
+# 与 sweep-closed128-rpc-v1（每节点 2 条 = 缺省）只差 target.connections（RpcClientConfig.connectionsPerNode）：
+# 看 128 并发下吞吐是否受连接数（= 服务端实际在干活的 IO 线程数）限制。跑法：bench/bin/sweep.sh --connections 2,4,8。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: sweep-c8-closed128-rpc-v1
+question: 同机 loopback、1KB、单提供者、直连，本框架 闭环 128 并发下的吞吐与两侧 CPU（并发扫描）（每节点 8 条连接）
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  connections: 8
+load:
+  model: closed
+  concurrency: 128
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

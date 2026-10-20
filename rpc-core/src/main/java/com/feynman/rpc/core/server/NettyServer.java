@@ -61,16 +61,26 @@ public final class NettyServer implements AutoCloseable {
 	private final ByteBufAllocator childAllocator;
 
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, null);
+		this(dispatcher, executorConfig, fallbackSerializerCode, 0, null);
+	}
+
+	/** @param ioThreads worker 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcServerConfig.ioThreads} */
+	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads) {
+		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null);
 	}
 
 	NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode,
+			ByteBufAllocator childAllocator) {
+		this(dispatcher, executorConfig, fallbackSerializerCode, 0, childAllocator);
+	}
+
+	private NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads,
 			ByteBufAllocator childAllocator) {
 		this.dispatcher = dispatcher;
 		this.fallbackSerializerCode = fallbackSerializerCode;
 		this.childAllocator = childAllocator;
 		this.bossGroup = new NioEventLoopGroup(1, new DefaultThreadFactory("rpc-server-boss"));
-		this.workerGroup = new NioEventLoopGroup(0, new DefaultThreadFactory("rpc-server-worker"));
+		this.workerGroup = new NioEventLoopGroup(ioThreads, new DefaultThreadFactory("rpc-server-worker"));
 		this.bizExecutor = new BusinessExecutor(executorConfig);
 	}
 

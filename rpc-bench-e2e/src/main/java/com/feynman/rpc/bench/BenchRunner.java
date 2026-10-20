@@ -76,7 +76,7 @@ final class BenchRunner {
 		Object serverEnvironment;
 		CpuSampler cpu = null;
 		Object preWarmup = null;
-		try (CallTarget target = CallTarget.create(profile, endpoint, metrics, options)) {
+		try (CallTarget target = CallTargets.create(profile, endpoint, metrics, options)) {
 			targetDescription = target.describe();
 			serverEnvironment = serverEnvironment(target, environment, out);
 			Object serverCpus = serverEnvironment instanceof Map<?, ?> m ? m.get("cpus_allowed") : null;
@@ -125,7 +125,12 @@ final class BenchRunner {
 		Map<String, Object> run = new LinkedHashMap<>();
 		run.put("command", String.join(" ", commandLine));
 		run.put("target", targetDescription);
-		run.put("harness_options", options.toJson(profile));
+		Map<String, Object> harnessOptions = options.toJson(profile);
+		if (!profile.target().http() && targetDescription.get("io_threads") != null) {
+			// rpc 卡与对比对象：客户端事件循环的实际线程数由目标在建好线程组时记下（进程绑核之后再算会少算）
+			harnessOptions.put("io_threads", targetDescription.get("io_threads"));
+		}
+		run.put("harness_options", harnessOptions);
 		run.put("pre_warmup", preWarmup == null ? "off" : preWarmup);
 		result.put("run", run);
 		result.put("environment", environment);

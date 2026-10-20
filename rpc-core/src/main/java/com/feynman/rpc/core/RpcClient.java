@@ -122,7 +122,7 @@ public final class RpcClient implements AutoCloseable {
 				.getExtension(config.registry().type());
 		this.registry = registryFactory.create(config.registry());
 		try {
-			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats);
+			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats, config.ioThreads());
 		} catch (RuntimeException e) {
 			registry.close();
 			cluster.close();

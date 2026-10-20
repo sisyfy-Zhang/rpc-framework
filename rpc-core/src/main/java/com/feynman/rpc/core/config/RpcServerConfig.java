@@ -27,6 +27,8 @@ import com.feynman.rpc.core.serialize.Serializer;
  *   <li>{@code deregisterGrace}（默认 0）：优雅停机时摘注册之后、开始拒绝新请求之前的等待时长，见
  *       {@link Builder#deregisterGrace(Duration)}。</li>
  *   <li>{@code serializerOptions}：同 {@link RpcClientConfig}。</li>
+ *   <li>{@code ioThreads}（默认 0）：IO 事件循环（worker）线程数，0 = Netty 缺省（2 × 可用核数），见
+ *       {@link Builder#ioThreads(int)}。</li>
  * </ul>
  */
 public record RpcServerConfig(
@@ -41,12 +43,15 @@ public record RpcServerConfig(
 		Map<String, String> serializerOptions,
 		int remoteStackTraceMaxBytes,
 		Duration shutdownTimeout,
-		Duration deregisterGrace) {
+		Duration deregisterGrace,
+		int ioThreads) {
 
 	public static final int DEFAULT_PORT = 9000;
 	public static final int DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES = 8192;
 	public static final Duration DEFAULT_SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
 	public static final Duration DEFAULT_DEREGISTER_GRACE = Duration.ZERO;
+	/** 0 = 交给 Netty 决定，同 {@link RpcClientConfig#DEFAULT_IO_THREADS}。 */
+	public static final int DEFAULT_IO_THREADS = RpcClientConfig.DEFAULT_IO_THREADS;
 	/** 堆栈被截断时追加的标记（计入字节上限）。 */
 	public static final String TRUNCATION_MARKER = "…(truncated)";
 	/** 上限至少能放下标记本身和一行有意义的内容。 */
@@ -84,6 +89,7 @@ public record RpcServerConfig(
 		if (deregisterGrace.isNegative()) {
 			throw new IllegalArgumentException("deregisterGrace must not be negative: " + deregisterGrace);
 		}
+		RpcClientConfig.checkIoThreads(ioThreads);
 	}
 
 	public static Builder<RpcServerConfig> builder() {
@@ -106,6 +112,7 @@ public record RpcServerConfig(
 		private int remoteStackTraceMaxBytes = DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES;
 		private Duration shutdownTimeout = DEFAULT_SHUTDOWN_TIMEOUT;
 		private Duration deregisterGrace = DEFAULT_DEREGISTER_GRACE;
+		private int ioThreads = DEFAULT_IO_THREADS;
 
 		public Builder(Function<RpcServerConfig, T> finisher) {
 			this.finisher = finisher;
@@ -199,9 +206,18 @@ public record RpcServerConfig(
 			return this;
 		}
 
+		/**
+		 * IO 事件循环（{@code rpc-server-worker-*}，读写与编解码）的线程数，默认 0 = Netty 缺省（2 × 可用核数）；
+		 * 接受连接的 boss 线程固定 1 个。业务方法仍在 {@link #executor(ExecutorConfig)} 上执行，与它无关。
+		 */
+		public Builder<T> ioThreads(int ioThreads) {
+			this.ioThreads = ioThreads;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcServerConfig(port, host, registry, serializer, executor, weight, serverFilters,
-					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace));
+					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace, ioThreads));
 		}
 	}
 }

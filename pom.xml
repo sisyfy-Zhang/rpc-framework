@@ -17,6 +17,8 @@
   	<module>rpc-integration-tests</module>
   	<module>rpc-benchmark</module>
   	<module>rpc-bench-e2e</module>
+  	<module>rpc-bench-compare-grpc</module>
+  	<module>rpc-bench-compare-dubbo</module>
   </modules>
 
   <properties>
@@ -46,6 +48,17 @@
     <!-- rpc-metrics-micrometer：与 Spring Boot 4.1 管理的 Micrometer 同一条 1.17 线（starter 的 optional Actuator 也走它），
          避免同一个 classpath 上 Boot 的指标自动配置与本模块各拿一个 Micrometer 小版本 -->
     <micrometer.version>1.17.1</micrometer.version>
+    <!-- 对比对象（rpc-bench-compare-grpc）：grpc-java 当前稳定版（1.85.0，2026-10-14），grpc-protobuf 1.85.0 依赖 protobuf-java 3.25.9，
+         protoc 用同一版本生成代码（生成代码与运行时同一条 3.25 线）。protoc / protoc-gen-grpc-java 由 ascopes 的
+         protobuf-maven-plugin 按平台从 Maven Central 取（Windows 与 Linux 同一份配置，不需要 os-maven-plugin 扩展）。 -->
+    <grpc.version>1.85.0</grpc.version>
+    <protobuf.version>3.25.9</protobuf.version>
+    <protobuf-maven-plugin.version>5.1.11</protobuf-maven-plugin.version>
+    <!-- 对比对象（rpc-bench-compare-dubbo）：Dubbo 3.3 线当前稳定版（3.3.6，2025-10-17），all-in-one 的 org.apache.dubbo:dubbo。
+         它声明依赖 netty-all 4.2.2.Final（未 shade）；本仓库在下面统一管理 netty-all 4.1.136.Final，Dubbo 模块也解析到 4.1.136
+         （dependency:tree -Dverbose 实证：4.2.2 omitted；3.3.6 的 remoting / triple 代码不引用 4.2 才有的 IoHandler 系 API，测试与压测在 4.1.136 上跑通）。
+         这样同一个 JVM（harness + Dubbo 客户端）里只有一份 Netty，与本框架同一版本。 -->
+    <dubbo.version>3.3.6</dubbo.version>
     <!-- -DskipTests 时 JaCoCo 全部跳过（prepare-agent / report / check）：没有跑测试就没有 exec，check 只会误报或白跑。
          写成 jacoco.skip 的默认值而不是插件的 <skip>${skipTests}</skip>：后者会覆盖插件对 jacoco.skip 的绑定，
          让 CI 与 paranoid 命令里的 -Djacoco.skip=true 失效；命令行的 -Djacoco.skip=... 仍然优先。 -->
@@ -73,6 +86,26 @@
         <version>${jackson-bom.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+
+      <!-- 对比对象 gRPC：grpc-netty-shaded / grpc-protobuf / grpc-stub 同一版本线（只用于 rpc-bench-compare-grpc） -->
+      <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-bom</artifactId>
+        <version>${grpc.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.google.protobuf</groupId>
+        <artifactId>protobuf-java</artifactId>
+        <version>${protobuf.version}</version>
+      </dependency>
+      <!-- 对比对象 Dubbo（只用于 rpc-bench-compare-dubbo） -->
+      <dependency>
+        <groupId>org.apache.dubbo</groupId>
+        <artifactId>dubbo</artifactId>
+        <version>${dubbo.version}</version>
       </dependency>
 
       <!-- micrometer-core / micrometer-registry-prometheus 等同一版本线 -->
@@ -300,6 +333,12 @@
         <artifactId>rpc-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>
+      <!-- 对比模块（rpc-bench-compare-*）实现 harness 的公开 SPI（CallTarget / CallTargetProvider） -->
+      <dependency>
+        <groupId>com.feynman.rpc</groupId>
+        <artifactId>rpc-bench-e2e</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -343,6 +382,11 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-dependency-plugin</artifactId>
           <version>3.7.0</version>
+        </plugin>
+        <plugin>
+          <groupId>io.github.ascopes</groupId>
+          <artifactId>protobuf-maven-plugin</artifactId>
+          <version>${protobuf-maven-plugin.version}</version>
         </plugin>
       </plugins>
     </pluginManagement>

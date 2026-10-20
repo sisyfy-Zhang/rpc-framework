@@ -189,6 +189,8 @@ harness 自身在正式卡上的 b 项偏差已降到 ±30µs，剩下决定判�
   "连续 3 次 PASS"按新口径在任务 13 正式归档时检验。
 - **建议（待裁定）**：若希望 RPC 卡也能做 IO 线程数的对照，`RpcClientConfig` 需要一个事件循环线程数的配置项（现在只能靠全局的
   `-Dio.netty.eventLoopThreads`，会同时影响进程里所有缺省大小的 Netty 线程组）。
+  （任务 11 已落实：`RpcClientConfig.ioThreads` / `RpcServerConfig.ioThreads`，starter 属性 `rpc.client.io-threads` / `rpc.server.io-threads`，
+  harness 的 `--io-threads` 对 rpc 卡生效；见 docs/benchmarking.md 的 harness 实现选项。）
 
 ## 重跑
 

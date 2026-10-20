@@ -1,0 +1,61 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.feynman.rpc</groupId>
+    <artifactId>rpc-parent</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+  </parent>
+  <artifactId>rpc-bench-compare-dubbo</artifactId>
+  <name>rpc-bench-compare-dubbo</name>
+  <description>对比对象 Dubbo 3（triple 协议，Java 接口模式，不经注册中心直连 tri://host:port）：导出与 rpc bench server 同一个
+    BenchService 接口与实现的服务端（DubboBenchServer）与 rpc-bench-e2e 的 CallTarget 实现（transport: dubbo）。
+    经 BENCH_EXTRA_CP 加进 bench/bin/*.sh 的 classpath，口径见 docs/benchmarking.md「对比对象」。</description>
+
+  <properties>
+    <!-- 压测工具，不作为库发布 -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+  </properties>
+
+  <dependencies>
+    <!-- harness 的公开 SPI 与 BenchService / BenchServiceImpl（同一个业务接口直接导出） -->
+    <dependency>
+      <groupId>com.feynman.rpc</groupId>
+      <artifactId>rpc-bench-e2e</artifactId>
+    </dependency>
+    <!-- all-in-one：triple 协议、hessian2 / fastjson2 序列化、netty4 传输都在里面；它依赖的 netty-all 由根 pom 管理到 4.1.136 -->
+    <dependency>
+      <groupId>org.apache.dubbo</groupId>
+      <artifactId>dubbo</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 与 rpc-bench-compare-grpc 相同：本仓库模块不复制（由 rpc-bench-e2e/target 提供），第三方 jar 按本模块解析出的版本复制 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+              <excludeGroupIds>com.feynman.rpc</excludeGroupIds>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

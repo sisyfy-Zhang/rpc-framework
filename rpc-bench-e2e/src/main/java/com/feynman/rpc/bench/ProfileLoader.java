@@ -35,6 +35,8 @@ final class ProfileLoader {
 			List.of("throughput", "mean", "p50", "p90", "p95", "p99", "p999", "max", "errors_by_status"));
 	private static final Set<String> SERVICES = Set.of("BenchService#echo", "BenchService#echoOrder");
 	private static final Set<String> PROCESS_KINDS = Set.of("separate_jvm", "same_jvm");
+	/** {@code target.connections} 上限：每个提供者的连接数，压测里用到 8 已经足够说明趋势。 */
+	static final int MAX_CONNECTIONS = 64;
 	/** bytes 负载上限：协议帧上限是 8MiB（请求帧还要装信封与参数），4MiB 以上的回显必然撞线，此处直接拒绝。 */
 	private static final int MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 
@@ -96,10 +98,25 @@ final class ProfileLoader {
 		if (s == null) {
 			return null;
 		}
-		s.allowOnly("transport", "service", "payload", "serializer", "providers", "http");
-		String transport = s.oneOf("transport", true, Set.of(Profile.TRANSPORT_RPC, Profile.TRANSPORT_HTTP));
+		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http");
+		// 内置 rpc / http + classpath 上的 CallTargetProvider（对比对象）；不认识的名字报错并列出可用的全部 transport
+		Map<String, CallTargetProvider> plugins;
+		try {
+			plugins = CallTargets.providers();
+		} catch (IllegalStateException e) {
+			problems.add("target.transport: " + e.getMessage());
+			plugins = Map.of();
+		}
+		Set<String> transports = new LinkedHashSet<>(CallTargets.BUILTIN);
+		transports.addAll(plugins.keySet());
+		String transport = s.string("transport", true);
+		if (transport != null && !transports.contains(transport)) {
+			problems.add("target.transport: " + CallTargets.unknownMessage(transport));
+			transport = null;
+		}
 		boolean http = Profile.TRANSPORT_HTTP.equals(transport);
-		String service = s.oneOf("service", true, SERVICES);
+		CallTargetProvider plugin = transport == null ? null : plugins.get(transport);
+		String service = s.oneOf("service", true, plugin == null ? SERVICES : plugin.services());
 		String method = service == null ? null : service.substring(service.indexOf('#') + 1);
 		Section payload = s.section("payload", true);
 		String kind = null;
@@ -128,10 +145,15 @@ final class ProfileLoader {
 		if (s.has("http")) {
 			problems.add("target.http: only applies to transport = http (an rpc card is addressed with --direct / --registry)");
 		}
-		Set<String> serializers = ExtensionLoader.getExtensionLoader(Serializer.class).getSupportedExtensions();
+		// rpc：classpath 上实际可用的 Serializer SPI 名；对比对象：提供者声明的编码名（例如 gRPC 的 protobuf 生成代码）
+		Set<String> serializers = plugin != null ? plugin.serializers()
+				: ExtensionLoader.getExtensionLoader(Serializer.class).getSupportedExtensions();
 		String serializer = s.oneOf("serializer", true, serializers);
 		Integer providers = s.integer("providers", true, 1, 1024);
-		return new Profile.Target(transport, service, method, kind, size, serializer, providers == null ? 0 : providers, null, 0);
+		// 可选：到每个提供者的连接数（rpc = connectionsPerNode，grpc = ManagedChannel 数，dubbo = 独立客户端实例数）；不写 = 各框架缺省
+		Integer connections = s.has("connections") ? s.integer("connections", false, 1, MAX_CONNECTIONS) : null;
+		return new Profile.Target(transport, service, method, kind, size, serializer, providers == null ? 0 : providers, null, 0,
+				connections);
 	}
 
 	/**
@@ -147,12 +169,15 @@ final class ProfileLoader {
 		if (s.has("providers")) {
 			problems.add("target.providers: does not apply to transport = http (the target is a single URL)");
 		}
+		if (s.has("connections")) {
+			problems.add("target.connections: does not apply to transport = http (the connection pool is target.http.connections)");
+		}
 		Section http = s.section("http", false);
 		if (http == null) {
 			if (!s.has("http")) {
 				problems.add("target.http: required when transport = http ({ url: http://host:port/echo, connections: 64 })");
 			}
-			return new Profile.Target(transport, service, method, kind, size, null, 1, null, Profile.DEFAULT_HTTP_CONNECTIONS);
+			return new Profile.Target(transport, service, method, kind, size, null, 1, null, Profile.DEFAULT_HTTP_CONNECTIONS, null);
 		}
 		http.allowOnly("url", "connections");
 		String url = http.string("url", true);
@@ -165,7 +190,7 @@ final class ProfileLoader {
 		}
 		Integer connections = http.has("connections") ? http.integer("connections", false, 1, 100_000) : null;
 		return new Profile.Target(transport, service, method, kind, size, null, 1, url,
-				connections == null ? Profile.DEFAULT_HTTP_CONNECTIONS : connections);
+				connections == null ? Profile.DEFAULT_HTTP_CONNECTIONS : connections, null);
 	}
 
 	/** null = 合法：{@code http://host[:port]/path}，不支持 https（压的是明文 HTTP/1.1，与 wrk 对照）。 */

@@ -18,4 +18,4 @@ if [ -n "${BENCH_CLIENT_CPUS:-}" ]; then
     echo "warning: BENCH_CLIENT_CPUS is set but taskset is not available; starting unpinned" >&2
   fi
 fi
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" -cp "$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench report "$@"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench report "$@"

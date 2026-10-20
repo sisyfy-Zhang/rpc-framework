@@ -19,6 +19,8 @@
 - [判定与正式轮](#判定与正式轮)
 - [报告字段](#报告字段)
 - [交叉验证](#交叉验证)：harness 与 wrk / wrk2 打同一个 HTTP 目标——开环测量校验、闭环发压容量标定
+- [对比对象（gRPC / Dubbo）](#对比对象grpc--dubbo)：CallTarget SPI · 对等性 · 开箱即用与连接数对齐 · compare.sh
+- [并发扫描与连接数扫描](#并发扫描与连接数扫描)：sweep.sh
 - [已知局限](#已知局限)
 
 ## 构建
@@ -32,9 +34,15 @@ mvn -pl rpc-bench-e2e -am package -DskipTests
 产物是 `rpc-bench-e2e/target/classes` 与 `rpc-bench-e2e/target/lib/*`（`maven-dependency-plugin` 在 package 阶段复制运行时依赖，不打 fat jar），
 `bench/bin/*.sh` 用这两者拼 classpath。脚本开头 `export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"`，从仓库根目录运行。
 
+对比对象（[gRPC / Dubbo](#对比对象grpc--dubbo)）各是一个模块，跑对比卡之前一起构建：
+
+```bash
+mvn -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+```
+
 ## 口径卡
 
-一张卡回答一个问题，放在 `bench/profiles/<profile>.yaml`。仓库自带四张：
+一张卡回答一个问题，放在 `bench/profiles/<profile>.yaml`。仓库自带的卡：
 
 | 卡片 | 问题 | 负载 |
 |---|---|---|
@@ -42,8 +50,13 @@ mvn -pl rpc-bench-e2e -am package -DskipTests
 | `loopback-latency-v1` | 同一拓扑在给定负载下的延迟分布（含尾延迟） | 开环 10000 req/s |
 | `crossval-http-open-v1` | harness 校验卡：开环发压与测量是否与 wrk2 一致（见[交叉验证](#交叉验证)） | HTTP，开环 5000 req/s，64 连接 |
 | `crossval-http-closed-capacity-v1` | harness 校验卡：闭环发压容量标定（harness 与 wrk 各自的上限与瓶颈侧） | HTTP，闭环 64 并发 |
+| `compare-closed64-<rpc\|grpc\|dubbo>-v1` | 对比对象，**开箱即用**：同机、1KB、直连（`--direct`，不经注册中心），各框架缺省连接数（本框架 2、gRPC 1 个 channel、Dubbo 1 条） | 闭环 64 并发 |
+| `compare-open10k-<rpc\|grpc\|dubbo>-v1` | 同上，延迟分布 | 开环 10000 req/s |
+| `compare-closed64-<grpc\|dubbo>-c2-v1`、`compare-open10k-<grpc\|dubbo>-c2-v1` | 对比对象，**连接数对齐**：到提供者 2 条连接（`target.connections: 2`，与本框架缺省的每节点 2 条对齐） | 同上 |
+| `sweep-closed128-rpc-v1`、`sweep-closed256-rpc-v1` | 并发扫描：与 `compare-closed64-rpc-v1` 只差并发（64 的结果与它共用），找吞吐不再随并发增长的点 | 闭环 128 / 256 并发 |
+| `sweep-c4-closed128-rpc-v1`、`sweep-c8-closed128-rpc-v1` | 连接数扫描：与 `sweep-closed128-rpc-v1`（每节点 2 条）只差 `target.connections` | 闭环 128 并发，每节点 4 / 8 条 |
 
-两张 loopback 卡都是每轮 60s、预热 20s、统计窗口 [20s, 55s]、3 轮；两张 crossval 卡每轮 60s、预热 20s、统计窗口 [20s, 60s]
+loopback / compare / sweep 卡都是每轮 60s、预热 20s、统计窗口 [20s, 55s]、3 轮；两张 crossval 卡每轮 60s、预热 20s、统计窗口 [20s, 60s]
 （40s，与工具的测量时长一致）、3 轮。**改口径就复制成新 id（`-v2`），不要原地改**：报告以卡片 id 为准，同一个 id 必须始终代表同一个口径。
 
 ### 字段说明
@@ -52,11 +65,12 @@ mvn -pl rpc-bench-e2e -am package -DskipTests
 profile: loopback-throughput-v1      # 必填，须与文件名（去扩展名）一致
 question: 同机 loopback、1KB、单提供者的吞吐与延迟量级
 target:
-  transport: rpc                     # rpc | http（http 卡见下文“transport: http”）
+  transport: rpc                     # rpc | http（见下文“transport: http”）| classpath 上的对比对象（grpc、dubbo，见“对比对象”）
   service: BenchService#echo         # BenchService#echo | BenchService#echoOrder
   payload: { kind: bytes, size: 1024 }   # bytes（size 字节，固定种子随机内容）| order（固定 fixture，不写 size）
-  serializer: protobuf               # classpath 上的 Serializer SPI 名
+  serializer: protobuf               # rpc：classpath 上的 Serializer SPI 名；对比对象：它声明的编码名
   providers: 1                       # 提供者数：开压前客户端看到的提供者数必须恰好等于它
+  connections: 2                     # 可选：到每个提供者的连接数，不写 = 各框架缺省（含义随 transport，见下表）
 load:
   model: closed                      # closed | open
   concurrency: 64                    # closed 必填：虚拟用户数
@@ -83,6 +97,7 @@ assert:                              # 可选
 |---|---|
 | `target.service` / `payload.kind` | `echo` 只配 `bytes`，`echoOrder` 只配 `order`（8 字段 POJO，含 `List<String>`、`Instant`、`LocalDate`，覆盖序列化器的对象图路径） |
 | `target.providers` | 开压前用 `ReferenceOptions.awaitProviders` 等到提供者出现，再要求数量恰好相等；拓扑与卡片不符时不压，直接失败 |
+| `target.connections` | 可选，1 ~ 64；不写 = 各框架缺省。rpc = `RpcClientConfig.connectionsPerNode`（缺省 2）；grpc = `ManagedChannel` 数（每个一条 HTTP/2 连接，每次调用轮询取一个，缺省 1）；dubbo = 独立的客户端实例数（各自的 FrameworkModel 与引用，各一条 triple 连接，每次调用轮询取一个；缺省 1。不用 reference 的 `connections` 参数：Dubbo 3.3.6 的 triple 忽略它，实测仍是 1 条连接）。实际生效的连接数与含义写进 `run.target.connections_per_node` / `connections_meaning`，Markdown 口径表一行"连接数（target.connections）"。http 卡不接受（它的连接池是 `target.http.connections`） |
 | `target.http.url` / `target.http.connections` | 只用于 `transport: http`，见下节 |
 | `load.concurrency` / `load.rate` | 另一种模型的字段可以出现，只记录、不使用 |
 | `load.timeout` | 引用的超时；重试固定为 0（重试会把一次失败藏进更长的延迟） |
@@ -143,27 +158,36 @@ YAML 只用 SnakeYAML 的 `SafeConstructor` 加载成 Map（`!!java...` 这类�
 - 未知字段一律拒绝（拼错的 `warm_up` 被静默忽略比报错危险得多）；重复键拒绝。
 - 必填：`profile`、`question`、`target.*`、`load.model / duration / warmup / steady_window / rounds / timeout`、`isolation.*`、`measure.histogram.*`、`measure.report`；closed 必填 `concurrency`，open 必填 `rate`。
 - `profile` 须匹配 `[a-z0-9][a-z0-9._-]*` 且等于文件名去扩展名。
-- 枚举：`transport`、`service`、`payload.kind`、`model`、`client_process` / `server_process`、`serializer`（classpath 上实际可用的 SPI 名）、`report` 的每一项（不得重复）。
-- 范围：`size` 1 ~ 4MiB，`concurrency` 1 ~ 100000，`rate` 1 ~ 10000000，`rounds` 1 ~ 100，`providers` ≥ 1，`significant_digits` 1 ~ 5，时长 > 0（`warmup` 可为 0）。
+- 枚举：`transport`（内置 `rpc` / `http` + classpath 上 `CallTargetProvider` 声明的名字；不认识时报错并列出全部可用的 transport，最常见的原因是没把对比模块加进 `BENCH_EXTRA_CP`）、`service`（对比对象只接受提供者声明的，缺省只有 `BenchService#echo`）、`payload.kind`、`model`、`client_process` / `server_process`、`serializer`（rpc：classpath 上实际可用的 SPI 名；对比对象：提供者声明的编码名）、`report` 的每一项（不得重复）。
+- 范围：`size` 1 ~ 4MiB，`concurrency` 1 ~ 100000，`rate` 1 ~ 10000000，`rounds` 1 ~ 100，`providers` ≥ 1，`connections` 1 ~ 64，`significant_digits` 1 ~ 5，时长 > 0（`warmup` 可为 0）。
 - 交叉约束：`warmup < duration`；`steady_window` 恰好两个时长，`start < end`，`start ≥ warmup`，`end ≤ duration`；`histogram.max > timeout`；开环 `rate × timeout × 2` 不超过 500 万；`payload.kind` 与 `service` 匹配，`order` 不写 `size`。
-- transport：`http` 必须有 `target.http.url`（`http://`、有 host、有 path），`payload.kind` 只能是 `bytes`，不得写 `serializer` / `providers`；
-  `rpc` 不得写 `target.http`。
+- transport：`http` 必须有 `target.http.url`（`http://`、有 host、有 path），`payload.kind` 只能是 `bytes`，不得写 `serializer` / `providers` / `connections`；
+  `rpc` 与对比对象不得写 `target.http`。
 
 ## 子命令
 
 ```text
 server   --port <p> [--host <公布地址>] (--registry zk://host:port | --no-registry) [--serializer protobuf] [--metrics-port <p>] [--http-port <p>]
+         [--io-threads <n>]
+server   --transport <grpc|dubbo|...> --port <p> ...      （对比对象的服务端，见“对比对象”）
 run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>] [--metrics-port <p>]
-         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--io-threads <n>] [--io-busy-poll on|off]
+         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>] [--io-busy-poll on|off]
          [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0]
-         （transport: http 的卡不带 --registry / --direct；harness 实现选项见下文）
+         （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文）
 report   --in <目录 | 结果.json> [--out <file.md>]
+compare  --in <目录 | 结果.json> [--out <file.md>]
 crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] [--tool-version <text>]
          [--cpu-tool <crossval.sh 的 CPU 采样行>] --out <dir>
 ```
 
 - **server**：导出 `BenchService`（原样回显；另有 `environment()` 返回服务端启动时采集的环境），其余全部是 `RpcServer` 缺省配置——压的是开箱即用的框架。配了注册中心时等到注册完成才打印
   `bench-server ready port=... pid=...`；收到 SIGTERM / Ctrl-C 后按框架的优雅停机顺序关闭。`--host` 是注册时公布的地址（同机压测用 `127.0.0.1`）。
+  `--io-threads <n>` 即 `RpcServerConfig.ioThreads`（worker 事件循环数，缺省 0 = Netty 缺省 2 × 可用核数）；实际值与业务执行器的描述写进服务端环境的
+  `server_io_threads` / `server_executor`（对比表的"服务端配置"列）。
+- **`server --transport <name> ...`**：对比对象的服务端。除 `--transport <name>` 外的参数原样交给该 transport 的 `ServerLauncher`
+  （classpath 上的 `CallTargetProvider` 提供；gRPC 是 `GrpcBenchServer`，Dubbo 是 `DubboBenchServer`），它同样打印 `bench-server ready ...` 并阻塞到关闭。
+- **compare**：读目录下（递归）全部结果 JSON，把同一负载模型、负载大小与时长口径、只在 transport / 连接数 / 并发 / 速率 / `--io-threads` 上不同的结果
+  并排成表，见[对比表](#对比表)。`report` 汇总时也在汇总表之后附上同一份对比表。
 - **run**：读卡 → 校验 → 连目标 → 取服务端环境（`environment()`，单独 30s 超时，失败记 `unknown` 不中止）→ 开压前做一次完整回显校验 → 跑 `rounds` 轮 → 写 `<out>/<profile>-<yyyyMMdd-HHmmss>.json`，再从**读回的** JSON
   生成同名 `.md`。`--out` 缺省为归档目录 `bench/reports/<yyyyMMdd>-<sha7>/`（相对仓库根）。`--label` 原样写进报告（冒烟写 `smoke`）。
 - **report**：读目录下（递归）全部 `schema_version: 1` 的结果 JSON，按卡片分节汇总成一份 Markdown；目录里的交叉验证结果（`crossval-*.json`，
@@ -198,7 +222,7 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...
 |---|---|---|---|
 | `--open-workers` | rpc 卡与 netty 客户端：**`pool`**（N 个虚拟线程工作者，N = http 卡的 `connections` / rpc 卡 64；`pool:N` 指定）；http 卡用阻塞客户端时：**`pool-platform`**（N 个平台线程工作者）· `per-request`（每请求一个新虚拟线程，旧实现） | 开环调度线程把计划时刻交给谁执行。pool：调度线程只做一次入队（有界 FIFO，容量 = 在途上限；满了计 `backlog_dropped`），工作者按入队顺序取走 | pool 比 per-request 的服务时间 p99 低约 0.1ms（短卡 0.53 vs 0.61~0.64ms）、各轮更稳。平台线程工作者配 netty 客户端没有更好（p50 反而高约 30µs）；配阻塞客户端时必须是平台线程（虚拟线程的阻塞 read 要多经 JDK poller 与载体调度两跳，p50 0.206 vs 0.148ms） |
 | `--http-client` | http 开环卡 **`blocking`**；http 闭环卡 **`netty`** | http 卡的客户端：`netty`（事件循环，`HttpCallTarget`）或 `blocking`（每条连接一个阻塞 `java.net.Socket`，调用方线程自己写请求、阻塞在 read 上等响应，`BlockingHttpCallTarget`）。rpc 卡不适用 | 阻塞客户端 + 平台线程工作者：没有 IO 线程交接、没有忙等的 IO 线程，服务时间 p50 / p99 与 wrk2 未修正值基本重合（正式卡 0.146 / 0.354 vs 0.156 / 0.382ms），各轮比 netty 忙轮询稳 |
-| `--io-threads` | netty 客户端：开环卡 **1**；闭环卡 **可用核数** | netty 客户端的事件循环线程数（阻塞客户端没有事件循环，记 n/a）。rpc 卡不适用（`RpcClient` 没有这个配置），给了就是用法错误 | 单独改它（5 → 2 / 1）对 p99 的影响在噪声范围内；与忙轮询一起用 1 个 |
+| `--io-threads` | http 的 netty 客户端：开环卡 **1**；闭环卡 **可用核数**。rpc 卡：**0 = Netty 缺省（2 × 可用核数）** | 客户端事件循环线程数。http 卡：netty 客户端的事件循环（阻塞客户端没有事件循环，记 n/a）；rpc 卡：`RpcClientConfig.ioThreads`；对比对象：gRPC 是它的客户端事件循环组，Dubbo 3.3 客户端是进程级共享事件循环、没有配置项（给了就是用法错误）。实际生效的线程数由目标在建线程组时记下（`run.target.io_threads`，`run.harness_options.io_threads` 取同一个值；Netty 在第一次建线程组时缓存核数，绑核之后再算会少算） | 单独改它（5 → 2 / 1）对 http 卡 p99 的影响在噪声范围内；与忙轮询一起用 1 个 |
 | `--io-busy-poll` | netty 客户端：开环卡 **`on`**；闭环卡 **`off`** | 事件循环每圈非阻塞 `epoll_wait` / `selectNow`，从不阻塞：调用方提交写出任务时不需要唤醒它（省掉一次跨线程唤醒），代价是占满一个核。rpc 卡不适用 | 唯一能消掉 harness 固定开销的一项：服务时间 p50 从约 0.225ms 降到 0.147ms（wrk2 未修正 0.149ms），p99 与 wrk2 的差从约 120µs 降到约 85µs |
 | `--pin-dispatcher` | `<cpu>` · `off`（**命令行缺省 off；`bench-run.sh` 在 Linux 绑核启动时缺省加上压测端核列表的第一个核**） | Linux：开环调度线程（`bench-dispatch`）钉到该核，进程里其余线程钉到进程亲和里剩下的核（`taskset -cp`，按 `/proc/self/task/*/comm` 找线程）；每轮计时开始前钉一次，轮末核对是否有线程又落到该核（`rounds[].scheduler.pin.stray_threads_at_end`）。非 Linux 记 `unsupported`、不报错 | 发出滞后 p99 从 0.09~0.18ms 降到 0.02~0.04ms；服务时间 p99.9 / max 明显收窄（短卡 0.66 / 3.2ms vs 5.5 / 20ms）。调度线程忙等，不钉时与 IO 线程、载体线程抢核 |
 | `--pre-warmup` | **卡片的 `load.warmup`** · 时长 · `0`（关闭） | 第 1 轮之前以同样负载跑一段，不计入任何一轮；摘要（发出数、错误、延迟、发出滞后、最大在途）进 `run.pre_warmup`，`run.harness_options.pre_warmup_ms` 记时长 | 冷 JVM 的第一段（JIT、连接）在预热段里消化。`loopback-latency-v1`：第 1 轮 p99 52.6 → 3.5ms、最大在途 4220 → 387（预热段自己 p99 512ms、最大在途 5515）；HTTP 卡上的改善小于环境噪声，详见探针 |
@@ -352,10 +376,11 @@ JSON 顶层（`schema_version: 1`）：
 | `label` | `--label` 的值 |
 | `profile` | `id`、`parsed`（解析后的结构，时长同时给文本与毫秒）、`raw_yaml`（卡片原文） |
 | `run` | `command`（完整命令行）、`target`（直连 / 注册中心、实际提供者地址、序列化器、负载均衡、每节点连接数） |
+| `run.target`（rpc 卡与对比对象） | `transport`、`mode`、`address`、`providers`、`serializer`、`connections_per_node`（实际连接数：rpc 每节点连接、gRPC channel 数、Dubbo 客户端实例数）、`connection_model`（一句话的连接与多路复用方式）、`connections_meaning` / `connections_source`（`target.connections` 在这个 transport 上的含义、取自卡片还是缺省）、`io_transport`、`io_threads`（客户端事件循环的实际线程数）、`retries`、`call_style`；对比对象另有 `grpc_version` / `dubbo_version`、`retry_policy`、`url` 等 |
 | `environment` | 压测端：OS、`wsl`、CPU、`available_cpus`（JVM 可用核数 = `availableProcessors`，受 taskset 影响）、`host_cpus`（主机逻辑核数：Linux 数 `/proc/cpuinfo` 的 processor 行、读不到用 `nproc --all`，Windows 读 `NUMBER_OF_PROCESSORS`）、`cpus_allowed`、内存、JDK、`jvm_args`、GC、Netty、`git_sha` / `git_dirty` / `git_dirty_files`、主机名、`power_supply`、`cpu_governor`、开始 / 结束时间、`harness_version`、`pid`、`metrics_enabled`（`--metrics-port` 是否开启）。`available_cpus` 原名 `logical_cpus`，旧结果文件照常渲染 |
-| `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http` |
+| `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http`。rpc 服务端与对比对象的服务端另有 `transport`、`server_io_threads`（worker 事件循环的实际线程数）、`server_executor`（业务方法在哪执行）；gRPC 另有 `grpc_version` / `grpc_netty_version`，Dubbo 另有 `dubbo_version` |
 | `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads` / `io_busy_poll`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
-| `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads` / `io_busy_poll`（rpc 卡记 n/a）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source` |
+| `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads`（rpc 卡与对比对象取 `run.target.io_threads`）/ `io_busy_poll`（只对 http 卡）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source` |
 | `run.pre_warmup` | 预热段的摘要（`duration_ms`、`issued`、`successes`、`errors`、`latency_ms`、`service_time_ms`、`dispatch_lag_ms`、`backlog_dropped`、`scheduler`）；关闭时为 `"off"` |
 | `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况：节拍、`max_inflight`、`workers` / `pool_size`、`dispatcher_thread`、`pin`——绑核读回的结果与轮末的 `stray_threads_at_end`）、`warmup_completed`、`dispatcher_delayed`（开环）、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上） |
 | `summary` | `official_round`、`selection_rule`、`official`（正式轮的数字）、`spread`（各指标的 min / max / range / range_pct） |
@@ -458,6 +483,113 @@ wrk2 只测 1 次，参照值撞上一次停顿就整次 FAIL：任务 10 的第
 判 FAIL。吞吐与延迟各列只作信息项（wrk 闭环不做 CO 修正）。
 
 阈值都是代码常量，没有命令行开关：放宽阈值就不再是同一个校验。
+
+## 对比对象（gRPC / Dubbo）
+
+同一台机器、同一个 harness、同一套口径卡，把本框架与 gRPC（grpc-java）、Dubbo 3（triple）并排压。**基础性能对比排除注册中心变量**：
+三方都用 `--direct` 直连（rpc 卡的 `isolation.registry` 写 `none (--direct)`）。
+
+### CallTarget SPI
+
+harness 只依赖 `CallTarget`（一次 `call()` = 一次同步请求）。卡片的 `target.transport` 是内置的 `rpc` / `http` 之外的名字时，harness 用
+`ServiceLoader<CallTargetProvider>` 在 classpath 上找同名的提供者：
+
+```java
+public interface CallTargetProvider {
+    String transport();                       // 卡片 target.transport 的取值
+    Set<String> serializers();                // target.serializer 允许的取值（该框架自带的编码名）
+    default Set<String> services() { ... }    // 缺省只有 BenchService#echo
+    CallTarget create(Profile profile, CallTarget.Endpoint endpoint, HarnessOptions options);
+    default Optional<ServerLauncher> serverLauncher() { ... }   // bench server --transport <name> 的服务端
+}
+```
+
+- 读卡时就按提供者校验（transport 名、serializer、service）；不认识的 transport 报错并列出可用的全部 transport。
+- 公开给对比模块的类型只有：`CallTarget`、`CallTargetProvider`、`ServerLauncher`、`BenchCallException`（自带错误分桶名）、
+  `ServerProbes`（服务端环境 / GC 统计 / 压测负载，与 bench server 同一份采集）、`Profile`、`HarnessOptions`、`BenchService` / `BenchServiceImpl`、`Bench.execute`。
+  对比模块不依赖 harness 的包内实现，也不依赖 rpc-core 以外的本仓库模块。
+- 对比模块的 `target/classes:target/lib/*` 经 `BENCH_EXTRA_CP` 加到脚本 classpath 的**最前面**：对比模块的第三方 jar 按它自己解析出的版本生效
+  （例如 grpc-java 需要的 guava 33.6.0-android 压过 curator 带来的 32.0.0-jre），运行时与该模块的测试同一组版本。`lib/` 里不复制本仓库的模块，
+  它们始终来自 `rpc-bench-e2e/target`。
+
+### 两个对比模块
+
+| | `rpc-bench-compare-grpc` | `rpc-bench-compare-dubbo` |
+|---|---|---|
+| 版本 | grpc-java 1.85.0（grpc-bom）、protobuf-java 3.25.9 | Dubbo 3.3.6（all-in-one `org.apache.dubbo:dubbo`） |
+| 契约 | `bench_echo.proto`：`Echo(Bytes) returns (Bytes)`、`Environment(Empty) returns (Env)`、`Stats(Empty) returns (ServerStats)`（`Stats` 消息与同名 rpc 冲突，改名 `ServerStats`；`Empty` 自定义，不引 well-known types） | Java 接口模式（不写 IDL），**直接导出与 rpc bench server 同一个 `BenchService` 接口与 `BenchServiceImpl` 实现** |
+| 代码生成 | `io.github.ascopes:protobuf-maven-plugin` 5.1.11：按平台从 Maven Central 取 protoc 与 protoc-gen-grpc-java，Windows 与 Linux 同一份配置；`org.xolstice` 0.6.1 自 2018 年不再维护，还要 os-maven-plugin 扩展 | — |
+| 服务端 | `GrpcBenchServer --port --io-threads --executor grpc-default\|fixed\|direct`（缺省 grpc-default） | `DubboBenchServer --port --io-threads`（Dubbo 需要具体端口） |
+| Netty | grpc-netty-shaded（重定位，与 harness 的 netty-all 互不影响） | Dubbo 3.3.6 声明依赖 netty-all 4.2.2.Final（未 shade）；根 pom 统一管理成 4.1.136.Final（`dependency:tree -Dverbose` 实证 4.2.2 被 managed 掉；3.3.6 不引用 4.2 才有的 IoHandler 系 API，测试与压测在 4.1.136 上跑通），同一 JVM 只有一份 Netty |
+
+### 对等性：线程、执行器、连接、序列化
+
+| | 本框架（rpc 卡） | gRPC | Dubbo |
+|---|---|---|---|
+| 客户端调用方式 | 同步代理方法，调用方线程（虚拟线程）上等 future | 阻塞 stub，响应回调在调用方线程上执行（ThreadlessExecutor） | 同步代理方法，ThreadlessExecutor（调用方线程处理响应） |
+| 超时 / 重试 | `load.timeout`，retries 0 | 每次 `withDeadlineAfter(load.timeout)`；`disableRetry()`（gRPC 缺省开着透明重试） | `timeout = load.timeout`（ms 向上取整），`retries = 0` |
+| 客户端 IO 线程 | `RpcClientConfig.ioThreads`，缺省 Netty 缺省 2 × 可用核数，NIO | 显式 NIO 事件循环组，`--io-threads`，缺省 2 × 可用核数（grpc-netty-shaded 在 Linux 缺省会用 epoll，这里不让传输实现成为变量） | Dubbo 进程级共享事件循环，线程数固定为 min(核数 + 1, 32)，没有配置项（`--io-threads` 对 dubbo 卡是用法错误）；NIO（epoll 缺省关） |
+| 服务端 IO 线程 | boss 1 + worker 2 × 可用核数（`--io-threads`） | boss 1 + worker 2 × 可用核数（同上），NIO | `iothreads` 显式对齐 2 × 可用核数（Dubbo 自己的缺省是 min(核数 + 1, 32)） |
+| 服务端执行器 | 固定池 2 × 可用核数、队列 1000，业务方法**离开** IO 线程 | 缺省 `grpc-default`（不调 `executor(...)`：gRPC 自带的共享缓存线程池，回调**离开** IO 线程）——与本框架缺省同一种模型，对比卡（含 c2）都用它。`--executor direct`（`directExecutor()`，回调直接在 IO 线程上执行，少一次线程交接）只是 **gRPC 的上界对照点，不是缺省用法**；`--executor fixed` 是与本框架同样大小的固定池。实际执行器写进服务端环境与 `run.target.server_executor` | Dubbo 缺省 `threadpool=fixed, threads=200`，业务方法离开 IO 线程（与本框架同一种模型，池更大） |
+| 序列化 | Protostuff（`serializer: protobuf`） | protobuf 生成消息（`bytes payload = 1`） | Dubbo 3.3 Java 接口模式 triple 的缺省：**hessian2**（实测：开压前从调用 URL 读回，卡片必须写 `serializer: hessian2`，不一致就不压），外面再包一层 triple 的 protobuf 信封 |
+| 指标 | 指标 Filter 缺省关（`--metrics-port` 才开） | 无 | **显式关掉**（`MetricsConfig` 全部 false）：Dubbo 看到 classpath 上有 Micrometer 就自动开启指标采集，包括 RPC 热路径上的 MetricsFilter |
+| 连接（缺省） | 每个提供者 2 条 TCP 连接，按 requestId 多路复用 | 1 个 ManagedChannel = 1 条 HTTP/2 连接，每次调用一个流 | 1 条 triple HTTP/2 连接 |
+
+对 1KB `byte[]` 的序列化差异：三方编码的主体都是"长度前缀 + 1024 字节原样拷贝"，不涉及对象图；差别在包装：本框架是自己的信封 + Protostuff，
+gRPC 是一个 protobuf 字段，Dubbo 在 hessian2 编码的参数外面再包一层 triple 的 protobuf 信封（`TripleRequestWrapper`，带序列化名与参数类型名）。
+这份开销没有单独测，对比表里的差距不应归因于序列化本身，除非另做剥离实验。
+
+### 开箱即用与连接数对齐：两种配置都报
+
+**单连接的差异是结构性的。** 一条 TCP / HTTP/2 连接固定在一个事件循环线程上：gRPC 与 Dubbo 缺省到一个地址只建一条连接，于是不论
+服务端配了多少 IO 线程，干活的只有**一个** worker 事件循环（客户端同样只有一个）——闭环加压时这个线程先满，另一侧的核还空着。
+任务 11 的冒烟（WSL2、20s 卡）用 jstack 看到：gRPC 单 channel 时两端各一个事件循环线程接近满载、服务端核总体只用到约一个核；Dubbo 单连接时服务端
+唯一的 `NettyServerWorker` 线程满载。本框架缺省每节点 2 条连接，服务端就有 2 个 worker 在干活——所以"开箱即用"的数字比较的不只是编解码与线程模型，
+还有各框架缺省的连接数。只报一组都不完整：
+
+- **开箱即用**（`compare-*-<rpc|grpc|dubbo>-v1`）：各框架缺省连接数，回答"不调参直接用，各自是什么量级"；
+- **连接数对齐**（`compare-*-<grpc|dubbo>-c2-v1`，`target.connections: 2`）：与本框架缺省的每节点 2 条对齐，回答"同样两条连接时的差距"。
+  gRPC 是 2 个 ManagedChannel、每次调用轮询取一个；Dubbo 是 2 个独立的客户端实例（各自的 FrameworkModel 与引用、各一条连接）、轮询取用——
+  **Dubbo reference 的 `connections` 参数对 triple 不起作用**（3.3.6 实测：`connections=2` 时 `ss -tn` 在服务端端口上仍只看到 1 条 ESTABLISHED 连接，
+  jstack 里也只有 1 个 `NettyServerWorker` 在干活），所以 c2 用两个独立的 `FrameworkModel`（各自一套 bootstrap 与引用、各一条连接）实现，调用轮询取用。
+
+`compare` 子命令据此出两类 transport 表："开箱即用：各框架缺省连接数"与"连接数对齐；connections = 2"，另给每个对比对象一张连接数表（1 vs 2）。
+
+### 跑法
+
+```bash
+bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
+mvn -q -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+bash bench/bin/compare.sh                         # rpc、grpc、grpc-c2、dubbo、dubbo-c2 × closed64、open10k → target/compare/run-<时间>/compare.md
+bash bench/bin/compare.sh --out bench/reports/<yyyyMMdd>-<sha7>/compare    # 归档
+COMPARE_SERVER_ARGS_GRPC="--executor direct" bash bench/bin/compare.sh --transports rpc,grpc,grpc-c2 --out <dir>   # gRPC 上界对照点（directExecutor，非缺省用法，结果另放一个目录）
+```
+
+`compare.sh` 依次对每个 transport（`-c<N>` 后缀是卡片变体，服务端按去掉后缀的 transport 起）：起服务端（`BENCH_SERVER_CPUS`，缺省 0-4，端口 19300 + i）→
+跑它的卡（`BENCH_CLIENT_CPUS`，缺省 5-9，`--direct`）→ 停服务端；全部结果写进同一目录，最后 `compare` 生成 `compare.md`。卡片判定未通过（退出码 2）
+照样进对比表（判定列写明），运行出错（退出码 1）中止。`--profiles <dir> --suffix <s>` 换成别的卡（例如不入库的 20s 冒烟卡）。
+
+### 对比表
+
+`compare --in <dir>`（`report` 汇总时也附上）把结果分组：负载模型、服务、payload、时长 / 预热 / 窗口 / 轮数 / 超时、是否同机全部相同的为一组；
+组内取值不止一种的 `transport`（连同序列化）、`connections`（实际连接数，卡片没写 `target.connections` 的标"缺省"）、`concurrency`、`rate`、
+`io_threads`（只有命令行显式给了 `--io-threads` 才算，各 transport 的缺省写法不同、不算对比轴）自动成为对比轴，每个轴一张表、表内其余轴取值相同。
+每行取该结果的正式轮：吞吐（及相对首行的倍数）、p50 / p99 / p99.9 / max、开环的服务时间 p99、两组核的 CPU、client_bound、两端 GC 停顿、窗口错误、判定、
+连接方式、客户端 IO 线程、服务端配置（IO 线程与执行器）、结果文件。
+
+## 并发扫描与连接数扫描
+
+`bench/bin/sweep.sh`：同一个 rpc 服务端上依次跑一组只差一个字段的卡，结果进同一目录，最后生成按该字段并排的对比表。
+
+```bash
+bash bench/bin/sweep.sh                       # 并发扫描：closed 64 / 128 / 256（compare-closed64-rpc-v1 + sweep-closed<n>-rpc-v1）
+bash bench/bin/sweep.sh --connections 2,4,8   # 连接数扫描：closed 128，每节点 2 / 4 / 8 条（sweep-closed128-rpc-v1 + sweep-c<n>-closed128-rpc-v1）
+```
+
+目的：找吞吐不再随并发增长的点，以及此时两侧的 CPU——服务端核饱和是服务端上限，`client_bound`（压测端核 > 90%）是发压上限，两侧都没满说明瓶颈在别处。
+任务 11 冒烟的观察：128 并发之后吞吐不再随并发增长、两侧核都只用到六成左右，jstack 看到服务端只有 2 个 worker 事件循环在干活且都接近满载——
+**限制吞吐的是连接数（= 服务端实际在干活的 IO 线程数），不是并发**；把每节点连接数加到 8 之后 8 个 worker 都只用到三分之一左右，瓶颈转到压测端（`client_bound`）。
+所以并发扫描与连接数扫描要一起看，`RpcServerConfig.ioThreads` 配多少都只有"连接数"个线程会被用上。
 
 ## 已知局限
 

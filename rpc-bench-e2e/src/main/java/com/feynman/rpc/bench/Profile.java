@@ -11,25 +11,49 @@ import java.util.Map;
  * {@link ProfileLoader}，因此这里的值都已通过校验。
  *
  * @param rawYaml 卡片原文，原样进 JSON（事实源要能回答"当时到底跑的是什么"）
+ *
+ * <p>公开类型：对比对象的 {@link CallTargetProvider} 按它创建 {@link CallTarget}（读 payload 大小、超时、负载模型）。
  */
-record Profile(String id, String question, Target target, Load load, Isolation isolation, Measure measure,
+public record Profile(String id, String question, Target target, Load load, Isolation isolation, Measure measure,
 		List<Assertion> assertions, String rawYaml) {
+
+	/**
+	 * 读卡并校验（{@link ProfileLoader#load}）：卡片的 {@code profile} 必须等于文件名去扩展名；不合法时抛出的异常消息逐条列出问题。
+	 * 公开给对比模块的测试校验它们自己的卡。
+	 */
+	public static Profile load(java.nio.file.Path file) throws java.io.IOException {
+		return ProfileLoader.load(file);
+	}
 
 	static final String MODEL_CLOSED = "closed";
 	static final String MODEL_OPEN = "open";
 
 	/**
-	 * @param serializer {@code transport = rpc} 时必填；{@code http} 时为 null（请求体就是原始字节，不经序列化器）
+	 * @param transport  {@code rpc} | {@code http} | classpath 上某个 {@link CallTargetProvider} 的名字（对比对象）
+	 * @param serializer {@code transport = rpc} 时为 Serializer SPI 名；对比对象为它声明的编码名；{@code http} 时为 null（请求体就是原始字节）
 	 * @param providers {@code http} 时固定为 1（一个 URL）
 	 * @param httpUrl {@code target.http.url}，只在 {@code transport = http} 时非 null
 	 * @param httpConnections {@code target.http.connections}（开环的连接池大小，缺省 {@value #DEFAULT_HTTP_CONNECTIONS}）；
 	 *                        闭环每个虚拟用户独占一条连接，此值只记录不使用；{@code rpc} 时为 0
+	 * @param connections {@code target.connections}：到每个提供者的连接数，null = 各框架缺省（rpc 2、gRPC 1 个 channel、Dubbo triple 1 条）。
+	 *                    含义随 transport：rpc = {@code RpcClientConfig.connectionsPerNode}，grpc = ManagedChannel 数（每个一条 HTTP/2 连接，
+	 *                    调用轮询取用），dubbo = 独立客户端实例数（各一条 triple 连接，轮询取用；triple 忽略 reference 的 connections 参数）；http 卡不用它（连接池是 {@code target.http.connections}）
 	 */
-	record Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
-			int providers, String httpUrl, int httpConnections) {
+	public record Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
+			int providers, String httpUrl, int httpConnections, Integer connections) {
 
-		boolean http() {
+		public boolean http() {
 			return TRANSPORT_HTTP.equals(transport);
+		}
+
+		/** 本框架（{@code transport = rpc}）。 */
+		public boolean rpc() {
+			return TRANSPORT_RPC.equals(transport);
+		}
+
+		/** 内置 transport 以外、由 {@link CallTargetProvider} 提供的对比对象。 */
+		public boolean plugin() {
+			return !http() && !rpc();
 		}
 	}
 
@@ -41,10 +65,10 @@ record Profile(String id, String question, Target target, Load load, Isolation i
 	 * @param concurrency closed 必填；open 时可出现但不使用（记为 null 以外的值也只是被记录）
 	 * @param rate open 必填（req/s）；closed 时同上
 	 */
-	record Load(String model, Integer concurrency, Integer rate, Duration duration, Duration warmup, Duration windowStart,
+	public record Load(String model, Integer concurrency, Integer rate, Duration duration, Duration warmup, Duration windowStart,
 			Duration windowEnd, int rounds, Duration timeout) {
 
-		boolean closed() {
+		public boolean closed() {
 			return MODEL_CLOSED.equals(model);
 		}
 
@@ -59,17 +83,17 @@ record Profile(String id, String question, Target target, Load load, Isolation i
 		}
 	}
 
-	record Isolation(String clientProcess, String serverProcess, boolean sameHost, String registry) {
+	public record Isolation(String clientProcess, String serverProcess, boolean sameHost, String registry) {
 	}
 
-	record Measure(int significantDigits, Duration histogramMax, List<String> report) {
+	public record Measure(int significantDigits, Duration histogramMax, List<String> report) {
 	}
 
 	/**
 	 * 一条断言。{@code metric} 为 errors / throughput / p50 / p95 / p99 / p999 / max；{@code upperBound} 为 true 表示
 	 * "实测 ≤ 阈值"（*_max），false 表示"实测 ≥ 阈值"（throughput_min）。延迟阈值以毫秒存。
 	 */
-	record Assertion(String key, String metric, boolean upperBound, double threshold, String thresholdText) {
+	public record Assertion(String key, String metric, boolean upperBound, double threshold, String thresholdText) {
 	}
 
 	/** 解析后的结构，进 JSON 的 {@code profile.parsed}。 */
@@ -84,6 +108,9 @@ record Profile(String id, String question, Target target, Load load, Isolation i
 		t.put("payload", payload);
 		t.put("serializer", target.serializer());
 		t.put("providers", target.providers());
+		if (!target.http()) {
+			t.put("connections", target.connections());
+		}
 		if (target.http()) {
 			Map<String, Object> http = new LinkedHashMap<>();
 			http.put("url", target.httpUrl());

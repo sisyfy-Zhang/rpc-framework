@@ -1,21 +1,26 @@
 package com.feynman.rpc.bench;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-
-import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * 被压的对象：一次 {@link #call()} = 一次完整的同步请求（发出、等待响应、校验回显）。负载驱动只依赖这个接口，
- * {@code target.transport = rpc} 由 {@link RpcCallTarget} 实现，{@code http} 由 {@link HttpCallTarget} 实现；
- * 驱动、计时与报告对两者完全相同。
+ * {@code target.transport = rpc} 由 {@link RpcCallTarget} 实现，{@code http} 由 {@link HttpCallTarget} /
+ * {@link BlockingHttpCallTarget} 实现，其它 transport（gRPC、Dubbo 等对比对象）由 classpath 上的
+ * {@link CallTargetProvider} 提供（见 {@link CallTargets}）；驱动、计时与报告对它们完全相同。
+ *
+ * <p>实现要求（对比对象与本框架同一口径）：{@link #call()} 在调用方线程（闭环虚拟用户 / 开环工作者）上<b>同步</b>完成一次调用；
+ * 超时 = 卡片的 {@code load.timeout}、不重试；失败以异常抛出（{@link BenchCallException} 可指定错误分桶名）。
+ * 这是公开 API：对比模块（{@code rpc-bench-compare-*}）在本模块之外实现它。
  */
-interface CallTarget extends AutoCloseable {
+public interface CallTarget extends AutoCloseable {
 
 	/** 发出一次调用并等待结果；失败（超时、远端错误、回显不一致）以异常抛出，由驱动分桶计数。 */
 	void call() throws Exception;
 
 	/**
-	 * 开压之前做一次完整校验（逐字节 / 全字段比对回显）。回显不一致抛 {@link ErrorClassifier.PayloadMismatchException}
+	 * 开压之前做一次完整校验（逐字节 / 全字段比对回显）。回显不一致抛 {@link BenchCallException#payloadMismatch(String)}
 	 * （harness 或框架有 bug，压出来的数字没有意义）；其它失败（例如卡片故意设了极小的 timeout）照常抛出，由调用方决定。
 	 */
 	void verify();
@@ -24,51 +29,22 @@ interface CallTarget extends AutoCloseable {
 	Map<String, String> serverEnvironment();
 
 	/**
-	 * 被压服务端此刻的累计 GC 次数 / 时间与堆用量（{@link GcSampler.Snapshot#toStrings()} 的形式），每轮统计窗口起止各取一次。
+	 * 被压服务端此刻的累计 GC 次数 / 时间与堆用量（{@link ServerProbes#gcStats()} 的形式），每轮统计窗口起止各取一次。
 	 * 取不到时抛异常，由调用方把 {@code rounds[].gc.server} 记为 unknown；缺省实现（不是 bench server 的目标）直接抛。
 	 */
 	default Map<String, String> serverStats() {
 		throw new UnsupportedOperationException("this target does not expose server stats");
 	}
 
-	/** 进 JSON 的 {@code run.target}：怎么连的、客户端的关键配置。 */
+	/**
+	 * 进 JSON 的 {@code run.target}：怎么连的、客户端的关键配置。约定的键：{@code transport}、{@code mode}、{@code address}、
+	 * {@code providers}（实际提供者地址列表）、{@code serializer}、{@code connection_model}（连接与多路复用方式，一句话）、
+	 * {@code io_threads}、{@code retries}、{@code call_style}。
+	 */
 	Map<String, Object> describe();
 
 	@Override
 	void close();
-
-	/** 按 {@code target.transport} 创建。 */
-	static CallTarget create(Profile profile, Endpoint endpoint) {
-		return create(profile, endpoint, null);
-	}
-
-	/** @param metrics 非 null 时被压的客户端带指标 Filter 与 Gauge（{@code --metrics-port}）；null 时与上面相同 */
-	static CallTarget create(Profile profile, Endpoint endpoint, MeterRegistry metrics) {
-		return create(profile, endpoint, metrics, HarnessOptions.DEFAULTS);
-	}
-
-	/**
-	 * @param options {@link HarnessOptions#ioThreads()} 只对 http 生效（RpcClient 没有事件循环线程数的配置，
-	 *                rpc 卡给了 {@code --io-threads} 时抛 {@link IllegalArgumentException}）
-	 */
-	static CallTarget create(Profile profile, Endpoint endpoint, MeterRegistry metrics, HarnessOptions options) {
-		return switch (profile.target().transport()) {
-			case "rpc" -> {
-				if (options.httpIoOptionsGiven()) {
-					throw new IllegalArgumentException("--http-client / --io-threads / --io-busy-poll apply to transport = http only");
-				}
-				yield RpcCallTarget.connect(profile, endpoint, metrics);
-			}
-			case "http" -> {
-				if (metrics != null) {
-					throw new IllegalArgumentException("--metrics-port does not apply to transport = http");
-				}
-				yield HarnessOptions.HTTP_CLIENT_BLOCKING.equals(options.effectiveHttpClient(profile)) ? BlockingHttpCallTarget.connect(profile)
-						: HttpCallTarget.connect(profile, options.effectiveIoThreads(profile), options.effectiveIoBusyPoll(profile));
-			}
-			default -> throw new IllegalArgumentException("unknown transport " + profile.target().transport());
-		};
-	}
 
 	/**
 	 * 命令行给出的目标：{@code --registry zk://host:port} 或 {@code --direct host:port[,host:port]}；
@@ -76,9 +52,9 @@ interface CallTarget extends AutoCloseable {
 	 */
 	record Endpoint(String mode, String address) {
 
-		static final String REGISTRY = "registry";
-		static final String DIRECT = "direct";
-		static final String HTTP = "http";
+		public static final String REGISTRY = "registry";
+		public static final String DIRECT = "direct";
+		public static final String HTTP = "http";
 
 		static Endpoint http(String url) {
 			return new Endpoint(HTTP, url);
@@ -97,7 +73,19 @@ interface CallTarget extends AutoCloseable {
 			return new Endpoint(DIRECT, addresses);
 		}
 
-		String describe() {
+		/** {@code direct} 模式下的地址列表（{@code host:port}，已校验格式）；其它模式抛 {@link IllegalStateException}。 */
+		public List<String> directAddresses() {
+			if (!DIRECT.equals(mode)) {
+				throw new IllegalStateException("not a --direct endpoint: " + describe());
+			}
+			List<String> result = new ArrayList<>();
+			for (DirectRegistryFactory.HostPort hp : DirectRegistryFactory.parse(address)) {
+				result.add(hp.host() + ":" + hp.port());
+			}
+			return result;
+		}
+
+		public String describe() {
 			return REGISTRY.equals(mode) ? "zk://" + address : HTTP.equals(mode) ? address : "direct " + address;
 		}
 	}

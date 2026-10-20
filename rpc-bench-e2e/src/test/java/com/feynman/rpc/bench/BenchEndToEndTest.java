@@ -261,19 +261,55 @@ class BenchEndToEndTest {
 		assertTrue(Files.readString(off.markdown(), StandardCharsets.UTF_8).contains("| 预热段 | 关闭（--pre-warmup = 0ms）"));
 	}
 
+	/**
+	 * {@code --io-threads} 对 rpc 卡生效（传给 {@code RpcClientConfig.ioThreads}，如实记进 {@code run.harness_options} 与
+	 * {@code run.target}）；{@code --http-client} / {@code --io-busy-poll} 仍然只对 http 卡有效，rpc 卡给了就是用法错误。
+	 */
 	@Test
-	void ioThreadsIsAnHttpOnlyOption(@TempDir Path dir) throws Exception {
+	void ioThreadsAppliesToRpcCardsButHttpClientOptionsDoNot(@TempDir Path dir) throws Exception {
 		String id = "it-io-threads";
+		String yaml = card(id, "open", "rate: 100", "1s", "200ms", "[200ms, 1s]", 1, "1s", "{ kind: bytes, size: 16 }", "");
+		Result r = run(dir, id, yaml, "--direct", "127.0.0.1:" + server.port(), "--io-threads", "2", "--pre-warmup", "0");
+		assertEquals(Bench.OK, r.code(), r.err());
+		assertEquals(2, number(path(r.json(), "run", "harness_options", "io_threads")));
+		assertEquals("command line", path(r.json(), "run", "harness_options", "io_source"));
+		assertEquals(2, number(path(r.json(), "run", "target", "io_threads")), "RpcClient was built with ioThreads = 2");
+		assertTrue(Files.readString(r.markdown(), StandardCharsets.UTF_8).contains("客户端 IO 线程 2"));
+
+		String defaultId = "it-io-threads-default";
+		Result d = run(dir, defaultId, yaml.replace("profile: " + id, "profile: " + defaultId), "--direct", "127.0.0.1:" + server.port(),
+				"--pre-warmup", "0");
+		assertEquals(Bench.OK, d.code(), d.err());
+		assertEquals(HarnessOptions.nettyDefaultIoThreadsText(), path(d.json(), "run", "harness_options", "io_threads"));
+		assertEquals(HarnessOptions.nettyDefaultIoThreadsText(), path(d.json(), "run", "target", "io_threads"));
+
 		Path card = dir.resolve(id + ".yaml");
-		Files.writeString(card, card(id, "open", "rate: 100", "1s", "200ms", "[200ms, 1s]", 1, "1s", "{ kind: bytes, size: 16 }", ""),
-				StandardCharsets.UTF_8);
+		for (String[] httpOnly : List.of(new String[] { "--io-busy-poll", "on" }, new String[] { "--http-client", "netty" })) {
+			ByteArrayOutputStream err = new ByteArrayOutputStream();
+			int code = Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:" + server.port(), httpOnly[0],
+					httpOnly[1] }, new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+					new PrintStream(err, true, StandardCharsets.UTF_8));
+			assertEquals(Bench.ERROR, code, httpOnly[0]);
+			assertTrue(err.toString(StandardCharsets.UTF_8).contains("apply to transport: http cards only"), err.toString(StandardCharsets.UTF_8));
+		}
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
-		int code = Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:" + server.port(), "--io-threads", "2" },
-				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8));
-		assertEquals(Bench.ERROR, code);
-		assertTrue(err.toString(StandardCharsets.UTF_8).contains("apply to transport: http cards only"), err.toString(StandardCharsets.UTF_8));
 		assertEquals(Bench.ERROR, Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:1", "--open-workers", "x" },
 				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8)));
+		assertEquals(Bench.ERROR, Bench.execute(new String[] { "run", "--profile", card.toString(), "--direct", "127.0.0.1:1", "--io-threads", "0" },
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8), new PrintStream(err, true, StandardCharsets.UTF_8)),
+				"--io-threads must be 1..1024");
+	}
+
+	/** {@code server --io-threads}：RpcServerConfig.ioThreads，实际值进服务端环境（对比报告的"服务端配置"列）。 */
+	@Test
+	void serverIoThreadsAndExecutorAreRecordedInTheServerEnvironment() throws Exception {
+		try (BenchServer custom = BenchServer.start(0, "127.0.0.1", null, "protobuf", null, 3)) {
+			assertEquals(3, custom.rpcServer().config().ioThreads());
+			assertEquals("3", custom.environment().get("server_io_threads"));
+			assertEquals("rpc", custom.environment().get("transport"));
+			assertTrue(custom.environment().get("server_executor").startsWith("fixed pool ("), custom.environment().toString());
+		}
+		assertEquals(HarnessOptions.nettyDefaultIoThreadsText(), server.environment().get("server_io_threads"));
 	}
 
 	@Test

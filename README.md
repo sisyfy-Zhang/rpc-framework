@@ -84,6 +84,7 @@
 | `rpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
 | `rpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
 | `rpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
+| `rpc-bench-compare-grpc` / `rpc-bench-compare-dubbo` | 对比对象：同一契约的 gRPC（grpc-java）与 Dubbo 3（triple）服务端和 harness 的 `CallTarget` 实现，见 [docs/benchmarking.md](docs/benchmarking.md#对比对象grpc--dubbo) | — |
 
 ## 环境要求
 
@@ -260,6 +261,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `empty-protection` | `emptyProtection` | true | 推空保护 |
 | `shutdown-timeout` | `shutdownTimeout` | 10s | close 时等在途调用的上限 |
 | `exception-allowlist` | `exceptionAllowlist(String...)` | — | 追加允许按类名还原的异常包前缀 |
+| `io-threads` | `ioThreads` | 0 | IO 事件循环线程数；0 = Netty 缺省（2 × 可用核数），只影响本客户端 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
 引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。
@@ -275,6 +277,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `deregister-grace` | `deregisterGrace` | 0 | 摘注册后、拒新请求前的宽限期；**生产建议 1s** |
 | `remote-stack-trace` | `remoteStackTrace` | true | 异常回包是否带服务端堆栈 |
 | `remote-stack-trace-max-bytes` | `remoteStackTraceMaxBytes` | 8192 | 回传堆栈上限（最小 256） |
+| `io-threads` | `ioThreads` | 0 | IO 事件循环（worker）线程数；0 = Netty 缺省（2 × 可用核数）。业务方法在 executor 上执行，与它无关 |
 | `executor.type` | `executor(ExecutorConfig)` | `fixed` | `fixed` / `virtual` |
 | `executor.threads` | `ExecutorConfig.fixed(threads, queue)` | CPU 核数 × 2 | 固定池线程数 |
 | `executor.queue-capacity` | 同上 | 1000 | 固定池排队上限，满了回 `SERVER_OVERLOADED` |

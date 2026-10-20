@@ -36,6 +36,14 @@ final class MarkdownReport {
 	 */
 	static String renderSummary(Map<String, List<Map.Entry<String, Map<?, ?>>>> runsByProfile,
 			List<Map.Entry<String, Map<?, ?>>> crossval) {
+		return renderSummary(runsByProfile, crossval, "");
+	}
+
+	/**
+	 * @param compare {@link CompareReport#render} 的结果（同一口径、不同 transport / 并发的结果并排）；非空时放在汇总表之后的"对比表"一节
+	 */
+	static String renderSummary(Map<String, List<Map.Entry<String, Map<?, ?>>>> runsByProfile,
+			List<Map.Entry<String, Map<?, ?>>> crossval, String compare) {
 		StringBuilder md = new StringBuilder();
 		md.append("# 压测报告汇总\n\n");
 		md.append("由 `rpc-bench-e2e report` 从 JSON 结果文件生成；每个数字都可在对应 JSON 中找到。\n\n");
@@ -47,6 +55,11 @@ final class MarkdownReport {
 					.append(verdict(last)).append(" |\n");
 		});
 		md.append('\n');
+		if (compare != null && !compare.isEmpty()) {
+			md.append("## 对比表\n\n");
+			md.append("同一负载模型、负载大小与时长口径，只在 transport / 并发 / 速率 / 客户端 IO 线程数上不同的结果并排（`compare` 子命令同一份表）。\n\n");
+			md.append(compare);
+		}
 		runsByProfile.forEach((profile, runs) -> {
 			if (runs.size() == 1) {
 				section(md, runs.get(0).getValue(), runs.get(0).getKey(), 2, null);
@@ -162,10 +175,20 @@ final class MarkdownReport {
 			row(md, "序列化 / 提供者", "—（HTTP 请求体就是原始字节）/ 1 个 URL");
 			row(md, "连接", str(runTarget.get("address")) + "，" + str(runTarget.get("connections")) + " 条 keep-alive 连接、每条同一时刻 1 个在途请求（"
 					+ str(runTarget.get("connection_model")) + "），重试 0");
+		} else if (!"rpc".equals(target.get("transport"))) {
+			// 对比对象（gRPC / Dubbo 等）：连接方式各不相同，按它自己描述的 connection_model 写
+			row(md, "序列化 / 提供者", str(target.get("serializer")) + " / " + str(target.get("providers")) + " 个");
+			row(md, "连接", str(runTarget.get("address")) + "，提供者 " + joined(runTarget.get("providers")) + "，"
+					+ str(runTarget.get("connection_model")) + "，重试 " + str(runTarget.get("retries")));
 		} else {
 			row(md, "序列化 / 提供者", str(target.get("serializer")) + " / " + str(target.get("providers")) + " 个");
 			row(md, "连接", str(runTarget.get("address")) + "，提供者 " + joined(runTarget.get("providers")) + "，每节点连接 "
 					+ str(runTarget.get("connections_per_node")) + "，负载均衡 " + str(runTarget.get("load_balance")) + "，重试 0");
+		}
+		if (runTarget.get("connections_meaning") != null) {
+			// target.connections 的含义随 transport 不同；写明卡片的值（缺省 = 各框架缺省）与实际生效的连接数
+			row(md, "连接数（target.connections）", (target.get("connections") == null ? "缺省" : str(target.get("connections")))
+					+ " → 实际 " + str(runTarget.get("connections_per_node")) + "（" + str(runTarget.get("connections_meaning")) + "）");
 		}
 		row(md, "负载模型", closed ? "闭环（closed），并发 " + str(load.get("concurrency")) + " 个虚拟用户"
 				: "开环（open），" + str(load.get("rate")) + " req/s 等间隔发出，在途上限 " + str(load.get("inflight_cap")));
@@ -180,7 +203,7 @@ final class MarkdownReport {
 		row(md, "延迟起点", closed ? "调用发出前（闭环）" : "计划发出时刻（开环，修正 coordinated omission）");
 		Map<?, ?> harness = map(run.get("harness_options"));
 		if (!harness.isEmpty()) {
-			row(md, "harness 选项", harnessOptions(harness, closed, list(json.get("rounds"))));
+			row(md, "harness 选项", harnessOptions(harness, closed, list(json.get("rounds")), "http".equals(target.get("transport"))));
 			row(md, "预热段", preWarmup(run.get("pre_warmup"), harness));
 		}
 		md.append('\n');
@@ -295,7 +318,7 @@ final class MarkdownReport {
 	}
 
 	/** 口径表"harness 选项"一行：开环执行者、HTTP IO 线程数、调度线程绑核（含第 1 轮读回的实际生效情况）。 */
-	private static String harnessOptions(Map<?, ?> harness, boolean closed, List<Object> rounds) {
+	private static String harnessOptions(Map<?, ?> harness, boolean closed, List<Object> rounds, boolean http) {
 		List<String> parts = new ArrayList<>();
 		if (!closed) {
 			parts.add("开环执行者 " + str(harness.get("open_workers"))
@@ -308,7 +331,7 @@ final class MarkdownReport {
 		Object io = harness.get("io_threads");
 		if (io != null && !String.valueOf(io).startsWith("n/a")) {
 			Object poll = harness.get("io_busy_poll");
-			parts.add("HTTP IO 线程 " + str(io) + (Boolean.TRUE.equals(poll) ? "（忙轮询）" : ""));
+			parts.add((http ? "HTTP IO 线程 " : "客户端 IO 线程 ") + str(io) + (Boolean.TRUE.equals(poll) ? "（忙轮询）" : ""));
 		} else if (io != null && client == null) {
 			parts.add("HTTP IO 线程 " + str(io)); // 早于 http_client 字段的结果文件
 		}

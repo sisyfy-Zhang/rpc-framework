@@ -27,13 +27,16 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 命令行入口。子命令：
  * <pre>
  *   server --port &lt;p&gt; [--host &lt;h&gt;] [--registry zk://host:port | --no-registry] [--serializer protobuf] [--metrics-port &lt;p&gt;]
- *          [--http-port &lt;p&gt;]
+ *          [--http-port &lt;p&gt;] [--io-threads &lt;n&gt;]
+ *   server --transport &lt;name&gt; ...     （对比对象的服务端：参数交给该 transport 的 {@link ServerLauncher}）
  *   run    --profile &lt;file.yaml&gt; (--registry zk://host:port | --direct host:port[,host:port]) [--out &lt;dir&gt;] [--label &lt;text&gt;]
  *          [--metrics-port &lt;p&gt;]       （transport: http 的卡不带 --registry / --direct：目标是卡上的 target.http.url）
  *          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads &lt;n&gt;] [--io-busy-poll on|off]
+ *                                       （--io-threads 对 rpc 卡 = RpcClientConfig.ioThreads，对比对象由其提供者使用）
  *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0]
  *                                       （harness 实现选项，见 {@link HarnessOptions}）
- *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总）
+ *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总，含对比表）
+ *   compare --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]  （同一负载 / 负载大小、不同 transport 或并发的结果并排成表，见 {@link CompareReport}）
  *   crossval --harness &lt;result.json&gt; --tool wrk|wrk2 --tool-output &lt;file&gt;[,&lt;file&gt;...] [--tool-command &lt;text&gt;] --out &lt;dir&gt;
  * </pre>
  * 退出码：0 成功；1 用法错误、口径卡不合法或运行异常；2 实验判定未通过（断言失败或有无效轮次）。
@@ -57,8 +60,8 @@ public final class Bench {
 		System.exit(code);
 	}
 
-	/** 可在进程内调用（集成测试），不调用 System.exit。 */
-	static int execute(String[] args, PrintStream out, PrintStream err) {
+	/** 可在进程内调用（集成测试，含对比模块的端到端测试），不调用 System.exit。 */
+	public static int execute(String[] args, PrintStream out, PrintStream err) {
 		if (args.length == 0 || args[0].equals("-h") || args[0].equals("--help")) {
 			usage(out);
 			return args.length == 0 ? ERROR : OK;
@@ -67,9 +70,10 @@ public final class Bench {
 		try {
 			Options options = Options.parse(args, 1);
 			return switch (command) {
-				case "server" -> server(options, out);
+				case "server" -> server(options, args, out);
 				case "run" -> run(options, args, out);
 				case "report" -> report(options, out, err);
+				case "compare" -> compare(options, out, err);
 				case "crossval" -> CrossValidation.command(options, out);
 				default -> {
 					err.println("unknown command: " + command);
@@ -91,9 +95,14 @@ public final class Bench {
 		}
 	}
 
-	private static int server(Options options, PrintStream out) throws Exception {
-		options.allowOnly("port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port");
+	private static int server(Options options, String[] rawArgs, PrintStream out) throws Exception {
+		String transport = options.value("transport", Profile.TRANSPORT_RPC);
+		if (!Profile.TRANSPORT_RPC.equals(transport)) {
+			return pluginServer(transport, rawArgs, out);
+		}
+		options.allowOnly("transport", "port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port", "io-threads");
 		int port = options.intValue("port");
+		int ioThreads = options.has("io-threads") ? options.intValue("io-threads") : 0;
 		Integer metricsPort = options.has("metrics-port") ? options.intValue("metrics-port") : null;
 		Integer httpPort = options.has("http-port") ? options.intValue("http-port") : null;
 		String host = options.value("host", null);
@@ -106,7 +115,12 @@ public final class Bench {
 				: RegistryConfig.zookeeper(CallTarget.Endpoint.registry(registryUri).address());
 		String serializer = options.value("serializer", "protobuf");
 		MeterRegistry metrics = metricsPort == null ? null : PrometheusEndpoint.newRegistry();
-		BenchServer server = BenchServer.start(port, host, registry, serializer, metrics);
+		BenchServer server;
+		try {
+			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads);
+		} catch (IllegalArgumentException e) {
+			throw new UsageException(e.getMessage());
+		}
 		PrometheusEndpoint endpoint = metrics == null ? null : startEndpoint(metricsPort, metrics, server::close);
 		if (endpoint != null) {
 			out.println("bench-server metrics http://0.0.0.0:" + endpoint.port() + PrometheusEndpoint.PATH);
@@ -132,10 +146,34 @@ public final class Bench {
 		}, "bench-server-shutdown"));
 		out.println("bench-server ready port=" + server.port() + " pid=" + ProcessHandle.current().pid()
 				+ (registry == null ? " registry=none" : " registry=zk://" + registry.address()) + " serializer=" + serializer
-				+ (http == null ? "" : " http_port=" + http.port()));
+				+ (http == null ? "" : " http_port=" + http.port()) + " transport=rpc io_threads=" + server.environment().get("server_io_threads"));
 		out.flush();
 		stopped.await();
 		return OK;
+	}
+
+	/**
+	 * {@code server --transport <name> ...}：对比对象的服务端。除 {@code --transport <name>} 之外的参数原样交给该 transport 的
+	 * {@link ServerLauncher}（它打印就绪行、阻塞到关闭）。
+	 */
+	private static int pluginServer(String transport, String[] rawArgs, PrintStream out) throws Exception {
+		CallTargetProvider provider;
+		try {
+			provider = CallTargets.provider(transport);
+		} catch (IllegalArgumentException e) {
+			throw new UsageException(e.getMessage());
+		}
+		ServerLauncher launcher = provider.serverLauncher()
+				.orElseThrow(() -> new UsageException("transport \"" + transport + "\" has no bench server (CallTargetProvider.serverLauncher() is empty)"));
+		List<String> rest = new ArrayList<>();
+		for (int i = 1; i < rawArgs.length; i++) {
+			if (rawArgs[i].equals("--transport")) {
+				i++;
+				continue;
+			}
+			rest.add(rawArgs[i]);
+		}
+		return launcher.run(rest.toArray(new String[0]), out);
 	}
 
 	private static int run(Options options, String[] rawArgs, PrintStream out) throws Exception {
@@ -169,8 +207,19 @@ public final class Bench {
 			endpoint = CallTarget.Endpoint.http(profile.target().httpUrl());
 		} else {
 			endpoint = registry != null ? CallTarget.Endpoint.registry(registry) : CallTarget.Endpoint.direct(direct);
-			if (harnessOptions.httpIoOptionsGiven()) {
-				throw new UsageException("--http-client / --io-threads / --io-busy-poll apply to transport: http cards only (RpcClient has no event-loop setting)");
+			if (harnessOptions.httpOnlyOptionsGiven()) {
+				throw new UsageException("--http-client / --io-busy-poll apply to transport: http cards only"
+						+ " (--io-threads applies to every transport: RpcClientConfig.ioThreads for rpc cards)");
+			}
+			if (profile.target().plugin()) {
+				if (registry != null) {
+					throw new UsageException("transport: " + profile.target().transport()
+							+ " cards are addressed with --direct host:port (comparison targets do not use a registry)");
+				}
+				if (metricsPort != null) {
+					throw new UsageException("--metrics-port instruments the RPC client and does not apply to transport: "
+							+ profile.target().transport());
+				}
 			}
 		}
 		Path outDir = options.value("out", null) != null ? Path.of(options.value("out", null)) : defaultArchiveDir();
@@ -240,9 +289,8 @@ public final class Bench {
 		return Path.of("bench", "reports", LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + "-" + sha7);
 	}
 
-	private static int report(Options options, PrintStream out, PrintStream err) throws IOException {
-		options.allowOnly("in", "out");
-		Path in = Path.of(options.required("in"));
+	/** {@code --in} 的目录（递归）或单个文件下的全部 {@code .json}。 */
+	private static List<Path> jsonFiles(Path in) throws IOException {
 		List<Path> files = new ArrayList<>();
 		if (Files.isDirectory(in)) {
 			try (Stream<Path> walk = Files.walk(in)) {
@@ -253,6 +301,56 @@ public final class Bench {
 		} else {
 			throw new UsageException("--in does not exist: " + in);
 		}
+		return files;
+	}
+
+	/**
+	 * {@code compare}：把同一负载模型 / 负载大小 / 时长口径、不同 transport（或不同并发、速率、IO 线程数）的结果并排成表
+	 * （{@link CompareReport}）。只读 schema_version 1 的压测结果，交叉验证结果与读不了的文件跳过。
+	 */
+	private static int compare(Options options, PrintStream out, PrintStream err) throws IOException {
+		options.allowOnly("in", "out");
+		List<Path> files = jsonFiles(Path.of(options.required("in")));
+		List<Map.Entry<String, Map<?, ?>>> results = new ArrayList<>();
+		int skipped = 0;
+		for (Path file : files) {
+			Object parsed;
+			try {
+				parsed = Json.parse(Files.readString(file, StandardCharsets.UTF_8));
+			} catch (RuntimeException e) {
+				err.println("skip " + file + ": not readable JSON (" + e.getMessage() + ")");
+				skipped++;
+				continue;
+			}
+			if (!(parsed instanceof Map<?, ?> json) || !Integer.valueOf(BenchRunner.SCHEMA_VERSION).equals(json.get("schema_version"))) {
+				skipped++;
+				continue;
+			}
+			results.add(Map.entry(file.getFileName().toString(), json));
+		}
+		if (results.isEmpty()) {
+			throw new UsageException("no bench result JSON found under " + options.required("in"));
+		}
+		results.sort(Comparator.comparing((Map.Entry<String, Map<?, ?>> e) -> String.valueOf(MarkdownReport.path(e.getValue(), "environment", "started_at"))));
+		String markdown = CompareReport.document(results);
+		String target = options.value("out", null);
+		if (target == null) {
+			out.print(markdown);
+		} else {
+			Path outFile = Path.of(target);
+			if (outFile.toAbsolutePath().getParent() != null) {
+				Files.createDirectories(outFile.toAbsolutePath().getParent());
+			}
+			Files.writeString(outFile, markdown, StandardCharsets.UTF_8);
+			out.println("compare: " + outFile.toAbsolutePath().normalize() + " (" + results.size() + " result(s), " + skipped + " skipped)");
+		}
+		return OK;
+	}
+
+	private static int report(Options options, PrintStream out, PrintStream err) throws IOException {
+		options.allowOnly("in", "out");
+		Path in = Path.of(options.required("in"));
+		List<Path> files = jsonFiles(in);
 		Map<String, List<Map.Entry<String, Map<?, ?>>>> byProfile = new TreeMap<>();
 		List<Map.Entry<String, Map<?, ?>>> crossval = new ArrayList<>();
 		int skipped = 0;
@@ -284,7 +382,10 @@ public final class Bench {
 		byProfile.values().forEach(runs -> runs.sort(Comparator.comparing(
 				(Map.Entry<String, Map<?, ?>> e) -> String.valueOf(MarkdownReport.path(e.getValue(), "environment", "started_at")))));
 		crossval.sort(Comparator.comparing((Map.Entry<String, Map<?, ?>> e) -> String.valueOf(e.getValue().get("created_at"))));
-		String markdown = MarkdownReport.renderSummary(new LinkedHashMap<>(byProfile), crossval);
+		List<Map.Entry<String, Map<?, ?>>> all = new ArrayList<>();
+		byProfile.values().forEach(all::addAll);
+		all.sort(Comparator.comparing((Map.Entry<String, Map<?, ?>> e) -> String.valueOf(MarkdownReport.path(e.getValue(), "environment", "started_at"))));
+		String markdown = MarkdownReport.renderSummary(new LinkedHashMap<>(byProfile), crossval, CompareReport.render(all, 3));
 		String target = options.value("out", null);
 		if (target == null) {
 			out.print(markdown);
@@ -304,12 +405,14 @@ public final class Bench {
 		out.println("""
 				usage:
 				  server --port <p> [--host <advertised-host>] (--registry zk://host:port | --no-registry) [--serializer protobuf]
-				         [--metrics-port <p>] [--http-port <p>]
+				         [--metrics-port <p>] [--http-port <p>] [--io-threads <n>]
+				  server --transport <name> --port <p> ...   (comparison server from a CallTargetProvider on the classpath)
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)
 				         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>]
 				         [--io-busy-poll on|off] [--pin-dispatcher <cpu>|off] [--pre-warmup <duration>|0]
 				  report --in <dir|result.json> [--out <file.md>]
+				  compare --in <dir|result.json> [--out <file.md>]
 				  crossval --harness <result.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] --out <dir>
 				exit codes: 0 ok, 1 usage / invalid profile / runtime error, 2 experiment failed (assert or invalid round)""");
 	}

@@ -13,8 +13,9 @@ import java.util.Map;
  *                    {@link #WORKERS_POOL}（固定数量的虚拟线程工作者从有界 FIFO 队列取计划时刻）或
  *                    {@link #WORKERS_POOL_PLATFORM}（同上，工作者是平台线程）
  * @param poolSize    {@code pool} 的工作者数；null = 缺省（http 卡 = {@code target.http.connections}，rpc 卡 = {@value #DEFAULT_RPC_POOL_SIZE}）
- * @param ioThreads   HTTP 客户端事件循环线程数；null = 缺省（http 开环卡 {@value #OPEN_HTTP_IO_THREADS}，http 闭环卡 = 可用核数）。
- *                    RpcClient 没有这个配置，rpc 卡给了就是用法错误
+ * @param ioThreads   客户端事件循环线程数。http 卡：null = 缺省（开环卡 {@value #OPEN_HTTP_IO_THREADS}，闭环卡 = 可用核数）；
+ *                    rpc 卡：传给 {@code RpcClientConfig.ioThreads}，null = 0 = Netty 缺省（2 × 可用核数）；
+ *                    对比对象（{@link CallTargetProvider}）：同 rpc 卡的语义，由提供者传给它自己的客户端事件循环
  * @param ioBusyPoll  HTTP 客户端事件循环忙轮询（每圈非阻塞 epoll_wait / selectNow，不睡、不需要被唤醒；每个 IO 线程占满一个核）；
  *                    null = 缺省（http 开环卡开、http 闭环卡关）。同样只对 http 卡有效
  * @param httpClient  http 卡的客户端：{@link #HTTP_CLIENT_NETTY}（事件循环）或 {@link #HTTP_CLIENT_BLOCKING}（每连接一个阻塞
@@ -22,7 +23,7 @@ import java.util.Map;
  * @param pinDispatcher Linux 上把开环调度线程钉到这个核（其余线程钉到进程亲和里剩下的核）；null = 不钉
  * @param preWarmup   第 1 轮之前以同样负载跑的预热段（不计入任何一轮）；null = 卡片的 {@code load.warmup}，{@link Duration#ZERO} = 不跑
  */
-record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
+public record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
 		Integer pinDispatcher, Duration preWarmup) {
 
 	static final String WORKERS_PER_REQUEST = "per-request";
@@ -37,7 +38,7 @@ record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, I
 	/** 不带任何选项时的行为。 */
 	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null);
 
-	HarnessOptions {
+	public HarnessOptions {
 		if (openWorkers != null && !WORKERS_PER_REQUEST.equals(openWorkers) && !WORKERS_POOL.equals(openWorkers)
 				&& !WORKERS_POOL_PLATFORM.equals(openWorkers)) {
 			throw new IllegalArgumentException("--open-workers must be " + WORKERS_PER_REQUEST + ", " + WORKERS_POOL + "[:N] or "
@@ -151,9 +152,9 @@ record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, I
 		return profile.target().http() ? profile.target().httpConnections() : DEFAULT_RPC_POOL_SIZE;
 	}
 
-	/** 给了任何只对 http 有效的选项（rpc 卡给了就是用法错误）。 */
-	boolean httpIoOptionsGiven() {
-		return httpClient != null || ioThreads != null || ioBusyPoll != null;
+	/** 给了任何只对 http 有效的选项（{@code --http-client} / {@code --io-busy-poll}；rpc 卡与对比对象给了就是用法错误）。 */
+	boolean httpOnlyOptionsGiven() {
+		return httpClient != null || ioBusyPoll != null;
 	}
 
 	/**
@@ -180,6 +181,29 @@ record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, I
 		return ioBusyPoll != null ? ioBusyPoll : !profile.load().closed();
 	}
 
+	/**
+	 * {@code NioEventLoopGroup(0)} 的实际线程数：{@code io.netty.eventLoopThreads}，否则 2 × {@code NettyRuntime.availableProcessors()}（至少 1），
+	 * 与 Netty {@code MultithreadEventLoopGroup} 的缺省算法一致。用 NettyRuntime 而不是 {@code Runtime.availableProcessors()}：
+	 * Netty 在第一次建事件循环组时缓存核数，之后 {@code --pin-dispatcher} 把线程钉到更少的核上也不会改变已建好的线程数，
+	 * 这里读到的是同一个缓存值（直接用 JVM 的值会在绑核之后少算）。
+	 */
+	public static int nettyDefaultIoThreads() {
+		String configured = System.getProperty("io.netty.eventLoopThreads");
+		if (configured != null) {
+			try {
+				return Math.max(1, Integer.parseInt(configured.trim()));
+			} catch (NumberFormatException e) {
+				// 与 Netty 一样忽略非法值，退回缺省
+			}
+		}
+		return Math.max(1, io.netty.util.NettyRuntime.availableProcessors() * 2);
+	}
+
+	/** JSON / 报告里"没给 --io-threads"时的写法。 */
+	public static String nettyDefaultIoThreadsText() {
+		return "default (Netty: 2 x available cores = " + nettyDefaultIoThreads() + ")";
+	}
+
 	/** 实际的预热段时长（null = 卡片的 warmup）。 */
 	Duration effectivePreWarmup(Profile profile) {
 		return preWarmup == null ? profile.load().warmup() : preWarmup;
@@ -192,10 +216,18 @@ record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, I
 		json.put("open_workers", open ? effectiveOpenWorkers(profile) : "n/a (closed loop)");
 		json.put("open_pool_size", open && pool(profile) ? effectivePoolSize(profile) : null);
 		boolean http = profile.target().http();
-		json.put("http_client", http ? effectiveHttpClient(profile) : "n/a (rpc)");
+		String transport = profile.target().transport();
+		json.put("http_client", http ? effectiveHttpClient(profile) : "n/a (" + transport + ")");
 		boolean blocking = http && HTTP_CLIENT_BLOCKING.equals(effectiveHttpClient(profile));
-		json.put("io_threads", !http ? "n/a (rpc: RpcClient's own event loops)" : blocking ? "n/a (blocking client)" : effectiveIoThreads(profile));
-		json.put("io_busy_poll", !http ? "n/a (rpc)" : blocking ? "n/a (blocking client)" : effectiveIoBusyPoll(profile));
+		Object io;
+		if (http) {
+			io = blocking ? "n/a (blocking client)" : effectiveIoThreads(profile);
+		} else {
+			// rpc 卡与对比对象：给了就是客户端事件循环线程数，没给 = Netty 缺省（NioEventLoopGroup(0)）
+			io = ioThreads != null ? (Object) ioThreads : nettyDefaultIoThreadsText();
+		}
+		json.put("io_threads", io);
+		json.put("io_busy_poll", !http ? "n/a (" + transport + ")" : blocking ? "n/a (blocking client)" : effectiveIoBusyPoll(profile));
 		json.put("io_source", httpClient == null && ioThreads == null && ioBusyPoll == null ? "default" : "command line");
 		json.put("workers_source", openWorkers == null ? "default" : "command line");
 		json.put("pin_dispatcher", pinDispatcher == null ? "off" : pinDispatcher);

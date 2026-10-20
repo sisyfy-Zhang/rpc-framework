@@ -6,6 +6,8 @@
 # 环境变量：BENCH_CLIENT_JAVA_OPTS 覆盖 JVM 参数（原样记进报告的 environment.jvm_args）；
 #           BENCH_CLIENT_CPUS=<list>（如 5-9）且有 taskset 时绑核启动（报告的 environment.cpus_allowed 记录实际结果），
 #           Linux 上同时缺省加 --pin-dispatcher <列表的第一个核>（开环调度线程独占该核；给了 --pin-dispatcher 就不加）；
+#           BENCH_EXTRA_CP=<a:b:...> 加到 classpath 最前面（冒号分隔，相对仓库根；对比模块的 target/classes:target/lib/*，
+#           transport: grpc 等卡需要；放在前面的理由见 bench-server.sh）；
 #           BENCH_HARNESS_OPTS 追加 harness 实现选项（--open-workers / --io-threads / --io-busy-poll / --pin-dispatcher / --pre-warmup）；
 #           BENCH_GC_LOG=1 时追加 -Xlog:gc*:file=<dir>/gc-client-<yyyyMMdd-HHmmss>.log，<dir> 为 --out 的值，
 #           没有 --out 时为 BENCH_GC_LOG_DIR（缺省 <仓库>/target/gc-logs）。*.log 已被 .gitignore 忽略，不会随归档入库。
@@ -53,4 +55,4 @@ fi
 # 在仓库根目录运行：git sha / dirty 的采集与默认归档目录都相对仓库根
 cd "$ROOT"
 # shellcheck disable=SC2086
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" -cp "$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"

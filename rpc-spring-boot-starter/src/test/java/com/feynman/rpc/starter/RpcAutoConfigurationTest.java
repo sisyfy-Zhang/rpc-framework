@@ -144,7 +144,9 @@ class RpcAutoConfigurationTest {
 				Map.entry("rpc.client.empty-protection", "false"),
 				Map.entry("rpc.client.shutdown-timeout", "2s"),
 				Map.entry("rpc.client.exception-allowlist", "com.acme.common.,com.acme.errors."),
+				Map.entry("rpc.client.io-threads", "3"),
 				Map.entry("rpc.server.weight", "7"),
+				Map.entry("rpc.server.io-threads", "2"),
 				Map.entry("rpc.server.shutdown-timeout", "4s"),
 				Map.entry("rpc.server.deregister-grace", "1500ms"),
 				Map.entry("rpc.server.remote-stack-trace", "false"),
@@ -163,6 +165,7 @@ class RpcAutoConfigurationTest {
 		assertFalse(client.emptyProtection());
 		assertEquals(Duration.ofSeconds(2), client.shutdownTimeout());
 		assertEquals(List.of("com.acme.common.", "com.acme.errors."), client.exceptionAllowlist());
+		assertEquals(3, client.ioThreads());
 		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
 				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
 		assertEquals(expectedOptions, client.serializerOptions());
@@ -171,6 +174,7 @@ class RpcAutoConfigurationTest {
 		assertEquals(0, server.port());
 		assertEquals("127.0.0.1", server.host());
 		assertEquals(7, server.weight());
+		assertEquals(2, server.ioThreads());
 		assertEquals(new ExecutorConfig.VirtualThreads(64), server.executor());
 		assertEquals(Duration.ofSeconds(4), server.shutdownTimeout());
 		assertEquals(1024, server.remoteStackTraceMaxBytes());
@@ -204,6 +208,8 @@ class RpcAutoConfigurationTest {
 		assertTrue(server.remoteStackTrace());
 		assertEquals(RpcServerConfig.DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES, server.remoteStackTraceMaxBytes());
 		assertTrue(server.serializerOptions().isEmpty());
+		assertEquals(RpcClientConfig.DEFAULT_IO_THREADS, client.ioThreads());
+		assertEquals(RpcServerConfig.DEFAULT_IO_THREADS, server.ioThreads());
 	}
 
 	@Test

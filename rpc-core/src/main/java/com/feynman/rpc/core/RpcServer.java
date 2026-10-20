@@ -183,7 +183,7 @@ public final class RpcServer implements AutoCloseable {
 			registryFactory = ExtensionLoader.getExtensionLoader(RegistryFactory.class).getExtension(config.registry().type());
 		}
 		byte fallbackCode = serializers.preferred().code();
-		NettyServer server = new NettyServer(dispatcher, config.executor(), fallbackCode);
+		NettyServer server = new NettyServer(dispatcher, config.executor(), fallbackCode, config.ioThreads());
 		InetSocketAddress bound;
 		try {
 			bound = server.bind(config.port());

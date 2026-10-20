@@ -230,6 +230,21 @@ class ProfileLoaderTest {
 		assertProblem(problems, "target.providers", "does not apply to transport = http");
 	}
 
+	/** target.connections：可选，1 ~ 64；不写 = 各框架缺省（null）；http 卡不接受（它的连接池是 target.http.connections）。 */
+	@Test
+	void targetConnectionsIsOptionalAndBounded() {
+		String base = BRIEF_EXAMPLE;
+		assertEquals(null, ProfileLoader.parse(base, null, "test").target().connections());
+		String four = base.replace("  providers: 1\n", "  providers: 1\n  connections: 4\n");
+		Profile parsed = ProfileLoader.parse(four, null, "test");
+		assertEquals(4, parsed.target().connections());
+		assertEquals(4, ((java.util.Map<?, ?>) parsed.toJson().get("target")).get("connections"));
+		assertProblem(problems(base.replace("  providers: 1\n", "  providers: 1\n  connections: 0\n"), null), "target.connections",
+				"out of range [1, 64]");
+		assertProblem(problems(HTTP_CARD.replace("  payload: { kind: bytes, size: 1024 }\n", "  payload: { kind: bytes, size: 1024 }\n  connections: 2\n"),
+				null), "target.connections", "does not apply to transport = http");
+	}
+
 	@Test
 	void theCrossValidationCardsAreValid() throws Exception {
 		Path profiles = Path.of("..", "bench", "profiles");

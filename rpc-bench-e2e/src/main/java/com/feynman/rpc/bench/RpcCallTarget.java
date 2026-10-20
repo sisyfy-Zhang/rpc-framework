@@ -49,11 +49,14 @@ final class RpcCallTarget implements CallTarget {
 	}
 
 	static RpcCallTarget connect(Profile profile, Endpoint endpoint) {
-		return connect(profile, endpoint, null);
+		return connect(profile, endpoint, null, null);
 	}
 
-	/** @param metrics 非 null 时把 {@link MicrometerClientFilter} 加进客户端链并绑定在途 / 连接数 Gauge（{@code --metrics-port}） */
-	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics) {
+	/**
+	 * @param metrics   非 null 时把 {@link MicrometerClientFilter} 加进客户端链并绑定在途 / 连接数 Gauge（{@code --metrics-port}）
+	 * @param ioThreads {@code --io-threads}：{@code RpcClientConfig.ioThreads}；null = 0 = Netty 缺省（2 × 可用核数）
+	 */
+	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads) {
 		RegistryConfig registry = Endpoint.REGISTRY.equals(endpoint.mode())
 				? RegistryConfig.zookeeper(endpoint.address())
 				: DirectRegistryFactory.config(endpoint.address());
@@ -61,7 +64,11 @@ final class RpcCallTarget implements CallTarget {
 		var builder = RpcClient.builder()
 				.registry(registry)
 				.serializer(profile.target().serializer())
-				.defaultTimeout(timeout);
+				.defaultTimeout(timeout)
+				.ioThreads(ioThreads == null ? 0 : ioThreads);
+		if (profile.target().connections() != null) {
+			builder.connectionsPerNode(profile.target().connections());
+		}
 		if (metrics != null) {
 			builder.clientFilter(new MicrometerClientFilter(metrics));
 		}
@@ -82,6 +89,12 @@ final class RpcCallTarget implements CallTarget {
 			description.put("load_balance", client.config().loadBalance());
 			description.put("cluster", client.config().cluster());
 			description.put("connections_per_node", client.config().connectionsPerNode());
+			description.put("connection_model", client.config().connectionsPerNode() + " TCP connection(s) per provider, requests multiplexed by request id");
+			description.put("connections_meaning", "target.connections = RpcClientConfig.connectionsPerNode (default "
+					+ com.feynman.rpc.core.config.RpcClientConfig.DEFAULT_CONNECTIONS_PER_NODE + ")");
+			description.put("connections_source", profile.target().connections() == null ? "default" : "target.connections");
+			description.put("io_transport", "nio");
+			description.put("io_threads", client.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText() : client.config().ioThreads());
 			description.put("retries", 0);
 			description.put("call_style", "sync proxy method");
 			description.put("metrics_filter", metrics != null);

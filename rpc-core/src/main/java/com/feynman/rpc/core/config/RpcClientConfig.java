@@ -29,6 +29,9 @@ import com.feynman.rpc.core.serialize.Serializer;
  *
  * <p>{@code exceptionAllowlist}：服务端异常按类名还原成本地同类型时，额外允许的包前缀（规则见
  * {@link Builder#exceptionAllowlist(String...)}）。
+ *
+ * <p>{@code ioThreads}（默认 {@value #DEFAULT_IO_THREADS}）：客户端 IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），
+ * 见 {@link Builder#ioThreads(int)}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -41,9 +44,14 @@ public record RpcClientConfig(
 		List<Filter> clientFilters,
 		Map<String, String> serializerOptions,
 		Duration shutdownTimeout,
-		List<String> exceptionAllowlist) {
+		List<String> exceptionAllowlist,
+		int ioThreads) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
+	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
+	public static final int DEFAULT_IO_THREADS = 0;
+	/** IO 线程数上限：防止把"连接数"之类的数误填进来，一次起上万个线程。 */
+	public static final int MAX_IO_THREADS = 1024;
 	public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(20);
 	public static final Duration DEFAULT_SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
 
@@ -77,6 +85,13 @@ public record RpcClientConfig(
 				throw new IllegalArgumentException("exceptionAllowlist entries must not be blank");
 			}
 		}
+		checkIoThreads(ioThreads);
+	}
+
+	static void checkIoThreads(int ioThreads) {
+		if (ioThreads < 0 || ioThreads > MAX_IO_THREADS) {
+			throw new IllegalArgumentException("ioThreads must be 0 (Netty default) .. " + MAX_IO_THREADS + ": " + ioThreads);
+		}
 	}
 
 	public static Builder<RpcClientConfig> builder() {
@@ -108,6 +123,7 @@ public record RpcClientConfig(
 		private final Map<String, String> serializerOptions = new LinkedHashMap<>();
 		private Duration shutdownTimeout = DEFAULT_SHUTDOWN_TIMEOUT;
 		private final List<String> exceptionAllowlist = new ArrayList<>();
+		private int ioThreads = DEFAULT_IO_THREADS;
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -192,10 +208,20 @@ public record RpcClientConfig(
 			return this;
 		}
 
+		/**
+		 * 客户端 IO 事件循环（{@code rpc-client-io-*}）的线程数，默认 0 = Netty 缺省（2 × 可用核数）。每个 RpcClient 各有一组，
+		 * 只影响本客户端（不像 {@code -Dio.netty.eventLoopThreads} 那样改掉进程里所有缺省大小的 Netty 线程组）。
+		 * 一条连接固定在一个事件循环上，线程数多于"提供者数 × connectionsPerNode"的部分不会被用到。
+		 */
+		public Builder<T> ioThreads(int ioThreads) {
+			this.ioThreads = ioThreads;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
-					shutdownTimeout, exceptionAllowlist));
+					shutdownTimeout, exceptionAllowlist, ioThreads));
 		}
 	}
 }

@@ -1,0 +1,31 @@
+# 口径卡（对比对象）：Dubbo 3（triple 协议），同机 loopback、1KB、单提供者，开环 10000 req/s，直连（--direct，不经注册中心）。
+# 与 compare-open10k-rpc-v1, compare-open10k-grpc-v1 只差 target.transport / serializer / question：
+# 基础性能对比排除注册中心变量。serializer = hessian2：Dubbo triple 协议下 Java 接口模式的缺省序列化，由提供者声明。
+# 连接模型、线程与执行器的对等性说明见 docs/benchmarking.md「对比对象」；跑法：bench/bin/compare.sh。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: compare-open10k-dubbo-v1
+question: 同机 loopback、1KB、单提供者、直连，Dubbo 3（triple 协议） 开环 10000 req/s 下的延迟分布
+target:
+  transport: dubbo
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: hessian2
+  providers: 1
+load:
+  model: open
+  rate: 10000
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

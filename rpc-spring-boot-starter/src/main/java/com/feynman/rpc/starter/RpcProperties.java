@@ -26,8 +26,8 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer: protobuf
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
- *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.] }
- *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s,
+ *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0 }
+ *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
  *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192,
  *             executor: { type: fixed, threads: 16, queue-capacity: 1000 } }   # 或 { type: virtual, max-concurrent: 10000 }
  * </pre>
@@ -119,6 +119,9 @@ public class RpcProperties {
 		if (client.shutdownTimeout != null) {
 			builder.shutdownTimeout(client.shutdownTimeout);
 		}
+		if (client.ioThreads != null) {
+			builder.ioThreads(client.ioThreads);
+		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
 	}
 
@@ -145,6 +148,9 @@ public class RpcProperties {
 		}
 		if (server.remoteStackTraceMaxBytes != null) {
 			builder.remoteStackTraceMaxBytes(server.remoteStackTraceMaxBytes);
+		}
+		if (server.ioThreads != null) {
+			builder.ioThreads(server.ioThreads);
 		}
 		Executor executor = server.executor;
 		if (executor.type == ExecutorType.VIRTUAL) {
@@ -230,6 +236,17 @@ public class RpcProperties {
 		 */
 		private List<String> exceptionAllowlist = new ArrayList<>();
 
+		/** 客户端 IO 事件循环线程数（默认 0 = Netty 缺省，2 × 可用核数）；只影响本客户端。 */
+		private Integer ioThreads;
+
+		public Integer getIoThreads() {
+			return ioThreads;
+		}
+
+		public void setIoThreads(Integer ioThreads) {
+			this.ioThreads = ioThreads;
+		}
+
 		public String getLoadBalance() {
 			return loadBalance;
 		}
@@ -298,6 +315,17 @@ public class RpcProperties {
 
 		/** 本服务端所有服务的默认注册权重（默认 1），单个服务可用 @RpcService(weight=...) 覆盖。 */
 		private Integer weight;
+
+		/** IO 事件循环（worker）线程数（默认 0 = Netty 缺省，2 × 可用核数）；业务方法在 executor 上执行，与它无关。 */
+		private Integer ioThreads;
+
+		public Integer getIoThreads() {
+			return ioThreads;
+		}
+
+		public void setIoThreads(Integer ioThreads) {
+			this.ioThreads = ioThreads;
+		}
 
 		/** 优雅停机等待在途请求完成的上限（默认 10s），超时后中断仍在执行的业务并关闭连接。 */
 		private Duration shutdownTimeout;
