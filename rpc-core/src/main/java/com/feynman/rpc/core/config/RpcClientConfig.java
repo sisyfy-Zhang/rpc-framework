@@ -38,9 +38,6 @@ import com.feynman.rpc.core.serialize.Serializer;
  *
  * <p>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的 {@code FlushConsolidationHandler}，
  * 见 {@link Builder#flushConsolidation(boolean)}。
- *
- * <p>{@code writeQueue}（默认 {@value #DEFAULT_WRITE_QUEUE}）：调用方线程发出的请求经每连接写队列交给事件循环（每批一次任务、一次 flush），
- * 见 {@link Builder#writeQueue(boolean)}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -56,8 +53,7 @@ public record RpcClientConfig(
 		List<String> exceptionAllowlist,
 		int ioThreads,
 		Duration syncWaitGrace,
-		boolean flushConsolidation,
-		boolean writeQueue) {
+		boolean flushConsolidation) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
 	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
@@ -69,8 +65,6 @@ public record RpcClientConfig(
 	public static final Duration DEFAULT_SYNC_WAIT_GRACE = Duration.ofSeconds(1);
 	/** 缺省合并 flush（{@code FlushConsolidationHandler}），见 {@link Builder#flushConsolidation(boolean)}。 */
 	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = true;
-	/** 缺省走每连接写队列，见 {@link Builder#writeQueue(boolean)}（任务 15 的对照实验期间为 on，缺省值待实验数据裁定）。 */
-	public static final boolean DEFAULT_WRITE_QUEUE = true;
 
 	public RpcClientConfig {
 		if (registry == null) {
@@ -149,7 +143,6 @@ public record RpcClientConfig(
 		private int ioThreads = DEFAULT_IO_THREADS;
 		private Duration syncWaitGrace = DEFAULT_SYNC_WAIT_GRACE;
 		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
-		private boolean writeQueue = DEFAULT_WRITE_QUEUE;
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -271,21 +264,10 @@ public record RpcClientConfig(
 			return this;
 		}
 
-		/**
-		 * 是否经每连接写队列发出请求（默认 {@value RpcClientConfig#DEFAULT_WRITE_QUEUE}）：调用方线程把备好字节的请求放进连接的
-		 * MPSC 队列，只有把队列从"空闲"切到"已调度"的那个线程向事件循环投一次 drain 任务；drain 在事件循环上逐条做原有检查
-		 * （排队期间已超时 / 已失败的不写出、连接已断即失败）后写出，批末一次 flush。关掉时每个请求单独投一个写任务（此前的行为）。
-		 * 编码与缓冲区分配仍只在事件循环上。见 docs/probes/write-queue-and-context-switches.md。
-		 */
-		public Builder<T> writeQueue(boolean writeQueue) {
-			this.writeQueue = writeQueue;
-			return this;
-		}
-
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
-					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation, writeQueue));
+					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation));
 		}
 	}
 }

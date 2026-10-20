@@ -77,20 +77,4 @@ class HarnessOptionsTest {
 		assertThrows(IllegalArgumentException.class, () -> defaults.withFlushConsolidation("yes"));
 		assertEquals(defaults, new HarnessOptions(null, null, null, null, null, null, null), "the 7-argument form keeps it null");
 	}
-
-	@Test
-	void writeQueueIsAnOnOffOptionForRpcCardsIndependentOfFlushConsolidation() {
-		HarnessOptions defaults = HarnessOptions.parse(null, null, null, null);
-		assertEquals(null, defaults.writeQueue());
-		assertEquals(Boolean.FALSE, defaults.withWriteQueue("off").writeQueue());
-		assertEquals(Boolean.TRUE, defaults.withWriteQueue("on").writeQueue());
-		assertEquals(null, defaults.withWriteQueue(null).writeQueue());
-		assertThrows(IllegalArgumentException.class, () -> defaults.withWriteQueue("yes"));
-		HarnessOptions both = defaults.withFlushConsolidation("off").withWriteQueue("off");
-		assertEquals(Boolean.FALSE, both.flushConsolidation());
-		assertEquals(Boolean.FALSE, both.writeQueue());
-		assertEquals(Boolean.TRUE, both.withFlushConsolidation("on").flushConsolidation());
-		assertEquals(Boolean.FALSE, both.withFlushConsolidation("on").writeQueue(), "changing one keeps the other");
-		assertEquals(null, new HarnessOptions(null, null, null, null, null, null, null).writeQueue());
-	}
 }

@@ -31,7 +31,6 @@ import com.feynman.rpc.core.serialize.Serializer;
  *       {@link Builder#ioThreads(int)}。</li>
  *   <li>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的
  *       {@code FlushConsolidationHandler}（合并 flush），见 {@link Builder#flushConsolidation(boolean)}。</li>
- *   <li>{@code writeQueue}（默认 true）：业务线程的回包经每连接写队列交给事件循环，见 {@link Builder#writeQueue(boolean)}。</li>
  * </ul>
  */
 public record RpcServerConfig(
@@ -48,8 +47,7 @@ public record RpcServerConfig(
 		Duration shutdownTimeout,
 		Duration deregisterGrace,
 		int ioThreads,
-		boolean flushConsolidation,
-		boolean writeQueue) {
+		boolean flushConsolidation) {
 
 	public static final int DEFAULT_PORT = 9000;
 	public static final int DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES = 8192;
@@ -59,8 +57,6 @@ public record RpcServerConfig(
 	public static final int DEFAULT_IO_THREADS = RpcClientConfig.DEFAULT_IO_THREADS;
 	/** 同 {@link RpcClientConfig#DEFAULT_FLUSH_CONSOLIDATION}。 */
 	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = RpcClientConfig.DEFAULT_FLUSH_CONSOLIDATION;
-	/** 同 {@link RpcClientConfig#DEFAULT_WRITE_QUEUE}。 */
-	public static final boolean DEFAULT_WRITE_QUEUE = RpcClientConfig.DEFAULT_WRITE_QUEUE;
 	/** 堆栈被截断时追加的标记（计入字节上限）。 */
 	public static final String TRUNCATION_MARKER = "…(truncated)";
 	/** 上限至少能放下标记本身和一行有意义的内容。 */
@@ -123,7 +119,6 @@ public record RpcServerConfig(
 		private Duration deregisterGrace = DEFAULT_DEREGISTER_GRACE;
 		private int ioThreads = DEFAULT_IO_THREADS;
 		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
-		private boolean writeQueue = DEFAULT_WRITE_QUEUE;
 
 		public Builder(Function<RpcServerConfig, T> finisher) {
 			this.finisher = finisher;
@@ -237,20 +232,10 @@ public record RpcServerConfig(
 			return this;
 		}
 
-		/**
-		 * 业务线程的回包是否经每连接写队列写出（默认 true）：业务线程把回包放进连接的 MPSC 队列，只有把队列从"空闲"切到"已调度"的
-		 * 那个线程向事件循环投一次 drain 任务，drain 逐条写出、批末一次 flush。关掉时每个回包单独投一个写任务（此前的行为）。
-		 * direct 执行器的回包本来就在事件循环上，不经队列。见 docs/probes/write-queue-and-context-switches.md。
-		 */
-		public Builder<T> writeQueue(boolean writeQueue) {
-			this.writeQueue = writeQueue;
-			return this;
-		}
-
 		public T build() {
 			return finisher.apply(new RpcServerConfig(port, host, registry, serializer, executor, weight, serverFilters,
 					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace, ioThreads,
-					flushConsolidation, writeQueue));
+					flushConsolidation));
 		}
 	}
 }

@@ -219,23 +219,6 @@ class CompareReportTest {
 		assertTrue(axis.contains("| **2** | rpc（protobuf） | `io-2` | 120.0 | 1.20× |"), axis);
 	}
 
-	/** 写队列 A/B（run.target.write_queue / server_environment.server_write_queue）是一个对比轴，on 排在 off 前面。 */
-	@Test
-	void writeQueueIsAnAxis() {
-		Map<String, Object> on = result("wq", "rpc", "protobuf", "closed", 64, 110.0, 1.0, 10.0, 10.0, false, "2026-10-19T10:01:00Z");
-		Map<String, Object> off = result("wq", "rpc", "protobuf", "closed", 64, 100.0, 1.0, 10.0, 10.0, false, "2026-10-19T10:00:00Z");
-		for (Map.Entry<Map<String, Object>, String> e : List.of(Map.entry(on, "on"), Map.entry(off, "off"))) {
-			e.getKey().put("run", Map.of("target", Map.of("transport", "rpc", "write_queue", e.getValue()), "harness_options",
-					Map.of("io_threads", "default (x)", "io_source", "default")));
-			e.getKey().put("server_environment", Map.of("server_executor_kind", "fixed", "server_write_queue", e.getValue()));
-		}
-		String text = CompareReport.document(List.of(Map.entry("off.json", off), Map.entry("on.json", on)));
-		assertTrue(text.contains("> 对比轴：`write_queue`。"), text);
-		int onRow = text.indexOf("| **client on / server on** |");
-		int offRow = text.indexOf("| **client off / server off** |");
-		assertTrue(onRow > 0 && offRow > onRow, text);
-	}
-
 	/** 给 fixture 加上实际连接数（run.target.connections_per_node）与卡片是否显式写了 target.connections。 */
 	@SuppressWarnings("unchecked")
 	private static Map<String, Object> connections(Map<String, Object> json, int actual, boolean explicit) {

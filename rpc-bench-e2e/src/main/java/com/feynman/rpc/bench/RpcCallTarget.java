@@ -62,12 +62,6 @@ final class RpcCallTarget implements CallTarget {
 
 	/** @param flushConsolidation {@code --flush-consolidation}：{@code RpcClientConfig.flushConsolidation}；null = 框架缺省（开） */
 	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation) {
-		return connect(profile, endpoint, metrics, ioThreads, flushConsolidation, null);
-	}
-
-	/** @param writeQueue {@code --write-queue}：{@code RpcClientConfig.writeQueue}；null = 框架缺省 */
-	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation,
-			Boolean writeQueue) {
 		RegistryConfig registry = Endpoint.REGISTRY.equals(endpoint.mode())
 				? RegistryConfig.zookeeper(endpoint.address())
 				: DirectRegistryFactory.config(endpoint.address());
@@ -82,9 +76,6 @@ final class RpcCallTarget implements CallTarget {
 		}
 		if (flushConsolidation != null) {
 			builder.flushConsolidation(flushConsolidation);
-		}
-		if (writeQueue != null) {
-			builder.writeQueue(writeQueue);
 		}
 		if (metrics != null) {
 			builder.clientFilter(new MicrometerClientFilter(metrics));
@@ -112,7 +103,6 @@ final class RpcCallTarget implements CallTarget {
 			description.put("connections_source", profile.target().connections() == null ? "default" : "target.connections");
 			description.put("io_transport", "nio");
 			description.put("flush_consolidation", client.config().flushConsolidation() ? "on" : "off");
-			description.put("write_queue", client.config().writeQueue() ? "on" : "off");
 			description.put("server_executor_expected", profile.target().serverExecutor());
 			description.put("io_threads", client.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText() : client.config().ioThreads());
 			description.put("retries", 0);

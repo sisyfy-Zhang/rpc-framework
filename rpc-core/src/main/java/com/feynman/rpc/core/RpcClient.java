@@ -123,7 +123,7 @@ public final class RpcClient implements AutoCloseable {
 		this.registry = registryFactory.create(config.registry());
 		try {
 			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats, config.ioThreads(),
-					config.flushConsolidation(), config.writeQueue());
+					config.flushConsolidation());
 		} catch (RuntimeException e) {
 			registry.close();
 			cluster.close();

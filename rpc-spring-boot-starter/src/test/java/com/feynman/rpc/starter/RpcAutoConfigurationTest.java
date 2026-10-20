@@ -147,10 +147,8 @@ class RpcAutoConfigurationTest {
 				Map.entry("rpc.client.io-threads", "3"),
 				Map.entry("rpc.client.sync-wait-grace", "250ms"),
 				Map.entry("rpc.client.flush-consolidation", "false"),
-				Map.entry("rpc.client.write-queue", "false"),
 				Map.entry("rpc.server.weight", "7"),
 				Map.entry("rpc.server.flush-consolidation", "false"),
-				Map.entry("rpc.server.write-queue", "false"),
 				Map.entry("rpc.server.io-threads", "2"),
 				Map.entry("rpc.server.shutdown-timeout", "4s"),
 				Map.entry("rpc.server.deregister-grace", "1500ms"),
@@ -173,7 +171,6 @@ class RpcAutoConfigurationTest {
 		assertEquals(3, client.ioThreads());
 		assertEquals(Duration.ofMillis(250), client.syncWaitGrace());
 		assertFalse(client.flushConsolidation());
-		assertFalse(client.writeQueue());
 		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
 				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
 		assertEquals(expectedOptions, client.serializerOptions());
@@ -184,7 +181,6 @@ class RpcAutoConfigurationTest {
 		assertEquals(7, server.weight());
 		assertEquals(2, server.ioThreads());
 		assertFalse(server.flushConsolidation());
-		assertFalse(server.writeQueue());
 		assertEquals(new ExecutorConfig.VirtualThreads(64), server.executor());
 		assertEquals(Duration.ofSeconds(4), server.shutdownTimeout());
 		assertEquals(1024, server.remoteStackTraceMaxBytes());
@@ -223,8 +219,6 @@ class RpcAutoConfigurationTest {
 		assertEquals(RpcServerConfig.DEFAULT_IO_THREADS, server.ioThreads());
 		assertTrue(client.flushConsolidation(), "flush consolidation is on by default");
 		assertTrue(server.flushConsolidation(), "flush consolidation is on by default");
-		assertTrue(client.writeQueue(), "write queue is on by default");
-		assertTrue(server.writeQueue(), "write queue is on by default");
 	}
 
 	@Test

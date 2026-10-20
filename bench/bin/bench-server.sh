@@ -12,7 +12,7 @@
 #           （缺省 <仓库>/target/gc-logs）。*.log 已被 .gitignore 忽略。
 #           BENCH_JFR=1 时追加 -XX:StartFlightRecording=filename=<dir>/jfr-server-<yyyyMMdd-HHmmss>.jfr,settings=profile，<dir> 为
 #           BENCH_JFR_DIR（缺省 <仓库>/target/jfr；compare.sh / sweep.sh 设为结果目录）。*.jfr 已被 .gitignore 忽略。
-# 业务执行器与 flush 合并（对照实验用，非缺省）：--executor fixed|virtual|direct（缺省 fixed = 框架缺省）、--flush-consolidation on|off（缺省 on）、--write-queue on|off（缺省 = RpcServerConfig.writeQueue 的缺省）。
+# 业务执行器与 flush 合并（对照实验用，非缺省）：--executor fixed|virtual|direct（缺省 fixed = 框架缺省）、--flush-consolidation on|off（缺省 on）。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

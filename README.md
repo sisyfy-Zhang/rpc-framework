@@ -264,7 +264,6 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `io-threads` | `ioThreads` | 0 | IO 事件循环线程数；0 = Netty 缺省（2 × 可用核数），只影响本客户端 |
 | `sync-wait-grace` | `syncWaitGrace` | 1s | 同步调用等待的第二道上界：最多等 deadline 剩余时间 + 该值，定时器没按时触发时也不会无限挂住（docs/pitfalls.md 第 34 条）；异步方法不受约束 |
 | `flush-consolidation` | `flushConsolidation` | true | 连接 pipeline 首位加 Netty 的 `FlushConsolidationHandler`（合并 flush，不改协议字节、不加定时器）；关掉只用于对照实验 |
-| `write-queue` | `writeQueue` | true | 调用方线程发出的请求经每连接写队列交给事件循环（每批一次任务、一次 flush；编码与缓冲区分配仍在事件循环上）；关掉时每请求一个写任务 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
 引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。
@@ -282,7 +281,6 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `remote-stack-trace-max-bytes` | `remoteStackTraceMaxBytes` | 8192 | 回传堆栈上限（最小 256） |
 | `io-threads` | `ioThreads` | 0 | IO 事件循环（worker）线程数；0 = Netty 缺省（2 × 可用核数）。业务方法在 executor 上执行，与它无关 |
 | `flush-consolidation` | `flushConsolidation` | true | 同客户端：业务线程并发回包时多个回包合成一次写出；关掉只用于对照实验 |
-| `write-queue` | `writeQueue` | true | 同客户端：业务线程的回包经每连接写队列写出（direct 执行器的回包本来就在事件循环上，不经队列） |
 | `executor.type` | `executor(ExecutorConfig)` | `fixed` | `fixed` / `virtual` / `direct`（opt-in：业务方法在 IO 线程上执行。**业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类**） |
 | `executor.threads` | `ExecutorConfig.fixed(threads, queue)` | CPU 核数 × 2 | 固定池线程数 |
 | `executor.queue-capacity` | 同上 | 1000 | 固定池排队上限，满了回 `SERVER_OVERLOADED` |

@@ -27,9 +27,9 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
  *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s,
- *             flush-consolidation: true, write-queue: true }
+ *             flush-consolidation: true }
  *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
- *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192, flush-consolidation: true, write-queue: true,
+ *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192, flush-consolidation: true,
  *             executor: { type: fixed, threads: 16, queue-capacity: 1000 } }   # 或 { type: virtual, max-concurrent: 10000 }
  *                                                                          # 或 { type: direct, max-concurrent: 10000 }（见 ExecutorConfig.direct 的警示）
  * </pre>
@@ -130,9 +130,6 @@ public class RpcProperties {
 		if (client.flushConsolidation != null) {
 			builder.flushConsolidation(client.flushConsolidation);
 		}
-		if (client.writeQueue != null) {
-			builder.writeQueue(client.writeQueue);
-		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
 	}
 
@@ -165,9 +162,6 @@ public class RpcProperties {
 		}
 		if (server.flushConsolidation != null) {
 			builder.flushConsolidation(server.flushConsolidation);
-		}
-		if (server.writeQueue != null) {
-			builder.writeQueue(server.writeQueue);
 		}
 		Executor executor = server.executor;
 		if (executor.type == ExecutorType.VIRTUAL) {
@@ -271,20 +265,6 @@ public class RpcProperties {
 		 */
 		private Boolean flushConsolidation;
 
-		/**
-		 * 是否经每连接写队列发出请求（默认 true）：调用方线程的请求进连接的 MPSC 队列，每批只向事件循环投一次任务、批末一次 flush。
-		 * 关掉时每个请求单独投一个写任务。
-		 */
-		private Boolean writeQueue;
-
-		public Boolean getWriteQueue() {
-			return writeQueue;
-		}
-
-		public void setWriteQueue(Boolean writeQueue) {
-			this.writeQueue = writeQueue;
-		}
-
 		public Boolean getFlushConsolidation() {
 			return flushConsolidation;
 		}
@@ -386,19 +366,6 @@ public class RpcProperties {
 		 * 关掉只用于对照实验。
 		 */
 		private Boolean flushConsolidation;
-
-		/**
-		 * 业务线程的回包是否经每连接写队列写出（默认 true）：每批只向事件循环投一次任务、批末一次 flush。关掉时每个回包单独投一个写任务。
-		 */
-		private Boolean writeQueue;
-
-		public Boolean getWriteQueue() {
-			return writeQueue;
-		}
-
-		public void setWriteQueue(Boolean writeQueue) {
-			this.writeQueue = writeQueue;
-		}
 
 		public Boolean getFlushConsolidation() {
 			return flushConsolidation;

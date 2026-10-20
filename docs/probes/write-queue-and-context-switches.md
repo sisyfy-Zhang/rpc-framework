@@ -1,32 +1,31 @@
 # 每连接写队列的前后对照与上下文切换按线程组归因（任务 15，阶段 2b 第二项）
 
+**结论：每连接写队列在 flush 合并之上没有收益、反而变慢（闭环 2 连接 −5.6% / −10.6%、1 连接 −11.8% / −6.8%，开环 p99 回退），已回退；
+任务 14 之后每请求剩下的约 0.25 次上下文切换，主体是客户端虚拟线程的唤醒（约 0.22）与服务端业务池的接活（约 0.19），不在写出路径上。**
+
 回答阶段 2a 调研（[transport-path-comparison.md](../research/transport-path-comparison.md)）候选 #2——每连接写队列（T3-b，gRPC `WriteQueue` /
-Dubbo `BatchExecutorQueue` 的共同设计）——在 flush 合并（任务 14，[flush-and-executor.md](flush-and-executor.md)）之上还值多少；
-并回答"任务 14 之后每请求还剩约 0.25 次上下文切换，是谁的"。数据来自 `bench/bin/sweep.sh`，每组的原始 JSON / Markdown 在 WSL 的
-`~/t15/out/formal/`（不入库）；表格由那些 JSON 机械整理（`extract15.py`：每份结果取正式轮），数字未改动。
-**本文只给数据与建议，是否保留、缺省值由主模型裁定。**
+Dubbo `BatchExecutorQueue` 的共同设计）——在 flush 合并（任务 14，[flush-and-executor.md](flush-and-executor.md)）之上还值多少，
+并回答"剩下的上下文切换是谁的"。数据来自 `bench/bin/sweep.sh`，原始 JSON / Markdown 在 WSL 的 `~/t15/out/formal/`（不入库）；
+表格由那些 JSON 机械整理（每份结果取正式轮），数字未改动。
 
-> 草稿状态：按"保留"起草了配置文档（`RpcClientConfig.writeQueue` / `RpcServerConfig.writeQueue`，缺省 on），但下面的实测结果是
-> **写队列 on 在全部闭环对照里都慢于 off、开环 p99 也变差**，未达预先登记的门槛。
+## 复现
 
-## 目的与预先登记的门槛
+- 写队列的实现、两端开关（`RpcClientConfig/RpcServerConfig.writeQueue`、`--write-queue on|off`、`write_queue` 对比轴）与它的测试见提交 **`fd95e1e`**，
+  已在下一提交回退。复现：检出 `fd95e1e`，按下文"方法"跑 `sweep.sh`。
+- 线程组归因（`rounds[].io.<端>.by_group`，口径见 [benchmarking.md](../benchmarking.md#统计口径)）与写队列无关，保留在主线上。
 
-- 写队列能省的是：每请求一个 `Runnable` / `WriteTask` + 一次事件循环任务队列入队，以及客户端（与服务端业务线程回包）每批一次
-  FlushConsolidationHandler 为"事件循环外来的 flush"提交的 flush 任务。事件循环的唤醒 Netty 自己已经合并（`nextWakeupNanos`），
-  所以事先不确定有没有可测的收益。
-- 门槛（简报预先登记）：闭环 `compare-closed64-rpc-v1`（2 连接）与 `sweep-c1-closed64-rpc-v1`（1 连接）两张卡都 **≥ +5%**，
-  交替各 2 组、**每组都成立**；且开环 `compare-open10k-rpc-v1` 的 p50 / p99 **不回退**。
+## 门槛（预先登记）
 
-## 实现（被测对象）
+闭环 `compare-closed64-rpc-v1`（2 连接）与 `sweep-c1-closed64-rpc-v1`（1 连接）两张卡都 **≥ +5%**，交替各 2 组、**每组都成立**；
+且开环 `compare-open10k-rpc-v1` 的 p50 / p99 **不回退**。结果：**两卡四组全部为负，开环 p99 回退——不成立**。
 
-- `internal/ConnectionWriteQueue`：每连接一个；`PlatformDependent.newMpscQueue()`（Netty 内置 JCTools，未加依赖）+ `AtomicBoolean scheduled`，
-  只有把它从 false CAS 到 true 的生产者投一次 `eventLoop.execute(drain)`。drain 在事件循环上取空队列，逐条交给条目的检查后 `channel.write`
-  （不 flush），每 128 条与批末各 flush 一次——批末的 flush 从 FlushConsolidationHandler 自己的 context 发出（直接到 head，不再经它提交 flush 任务）；
-  置 false 后再查一次队列，非空且 CAS 成功就在同一个任务里接着取；单次超过 1024 条才让出事件循环、重新投递。生产者已在该事件循环上时不入队、直接写。
-- 条目即 promise 即监听器（`DefaultChannelPromise` 子类实现 `ChannelFutureListener`）：客户端 `RequestWrite` 保留原有逐条语义（排队期间已超时 /
-  已失败不写出、连接已断即失败、事件循环已关时失败、写失败立即失败）；服务端 `ReplyWrite` 携带 requestId / status，写失败计数与告警（F2）不变，
-  不再每回包另配监听器 lambda。**off 一侧也用同样的条目对象**（只是每条单独 `execute` 一个写任务），所以 A/B 的差别只有"是否经队列"。
-- 分配原则不变：队列里是只带 `byte[]` 的 `RpcMessage`，帧缓冲区仍由编码器在事件循环上分配；ArchUnit 规则与两条运行时分配测试通过。
+## 被测实现（`fd95e1e`）
+
+- 每连接一个 MPSC 队列（Netty 内置 JCTools）+ `AtomicBoolean scheduled`：只有把它从 false CAS 到 true 的生产者投一次 `eventLoop.execute(drain)`；
+  drain 在事件循环上取空队列、逐条检查后 `channel.write`，每 128 条与批末各 flush 一次（批末从 FlushConsolidationHandler 的 context 直接冲刷）；
+  置 false 后复查队列，非空就在同一任务里接着取；生产者已在该事件循环上时直接写。客户端请求与服务端业务线程的回包都经它。
+- 条目即 promise 即监听器，逐条保留"排队期间已超时不写出、连接已断即失败、事件循环已关即失败、写失败立即失败"；off 一侧用同样的条目对象、
+  每条单独 `execute` 一个写任务，所以 A/B 的差别只有"是否经队列"。分配原则不变（队列里只有 `byte[]` 体，帧缓冲区由编码器在事件循环上分配）。
 
 ## 方法
 
@@ -47,7 +46,7 @@ Dubbo `BatchExecutorQueue` 的共同设计）——在 flush 合并（任务 14�
 
 - WSL2 Ubuntu（10 vCPU），内核 6.18.33.2-microsoft-standard-WSL2，宿主 Windows 11、AMD Ryzen 5 4600H（6 核 12 线程），接通电源；宿主同时运行桌面应用，不受控
 - Temurin JDK 21.0.12，Netty 4.1.136；两端 `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`、G1；服务端绑 0-4、压测端绑 5-9（开环调度线程钉 cpu5）；两端 IO 线程 Netty 缺省
-- 代码：8508668 + 本任务的工作区改动（未提交，`git_dirty = true`，探针口径）
+- 代码：8508668 + 本任务的工作区改动（即提交 `fd95e1e` 的树，跑数时未提交，`git_dirty = true`，探针口径）
 - 时间：2026-10-20 20:39 ~ 21:26（正式卡 14 次运行，全部窗口内 0 错误、`client_bound` 全为否；开环第 2 组 off 有 1 轮因调度线程被推迟判无效，
   正式轮从其余两轮选出，见下）
 
@@ -134,37 +133,32 @@ Dubbo `BatchExecutorQueue` 的共同设计）——在 flush 合并（任务 14�
 - 开环 10000 req/s 下每请求约 3 次（客户端）/ 2.2 次（服务端）切换：每个请求单独一批，IO 线程、载体、业务线程各睡醒一次以上。
 - `timers`（`CompletableFuture` 的 `orTimeout` 延迟调度线程与虚拟线程 unparker）为 0：每请求的超时定时器不制造上下文切换。
 
-## 为什么没有收益、反而变慢（分析，含推断）
+## 为什么没有收益
 
-1. **它省的东西本来就不贵**。Netty 的事件循环已经合并唤醒：队列外每请求一次 `execute` 只是一次 MPSC 入队，只有 IO 线程在 `select` 里时才写 eventfd，
-   而任务 14 之后 flush 已经按批。写队列把"N 个任务入队 + 1 个 flush 任务"换成"1 个 drain 任务 + N 次队列操作"，这部分 CPU 本来就很小——
-   数据里每请求 CPU 基本不变（两组核的 CPU 与吞吐同比例下降）。上下文切换的主体（载体、业务池的 park / unpark）它根本碰不到（见上表）。
-2. **多出来的是等待，不是计算**：on 时 `write`/请求更少、两端 CPU 更低、`netty_io` 的自愿切换更多、p50 更高——符合"批更大、IO 线程更常睡下、
-   请求在出站前多等一会儿"的图景。一个可能的机制（推断，未直接测）：off 时每个调用方提交的写任务都会让 IO 线程在本轮任务里多处理一条、
-   FlushConsolidationHandler 的 flush 任务排在这些写任务之后，形成"边收边写、本轮末一次 flush"的流水；on 时第一个 CAS 胜者投出 drain 后，
-   后来者只入队、不再"推"事件循环，drain 在批末自己 flush 后就退出，IO 线程更快回到 `epoll_wait`，下一批要靠新的唤醒——批数变少、每批等待变长。
-   `syscw`（含 eventfd 唤醒）的下降无法区分是 flush 少了还是唤醒少了，要 `strace -c` / `perf` 分开计数才能确认。
-3. **局部化探针（不作数）**：用 20s 短卡（`~/t14/profiles/*-short`）把两端拆开各跑 2 次（`~/t15/out/sides/`，21:27 ~ 21:43）。这段时间环境明显更嘈杂
-   （第一次 off/off 的 1 连接只有 36k，轮间极差 20% 以上），只能看方向：1 连接卡上"客户端 on"的两种组合（63k / 81k、74k / 82k）低于"客户端 off"的
-   两种组合（87k / 89k、90k），服务端单开时与 off/off 看不出差别；2 连接卡上四种组合都在 90 ~ 101k、分不开。**倾向于回退主要来自客户端一侧**
-   （客户端只有一个事件循环同时负责读响应与写请求、调用方是 64 个虚拟线程），但样本少、噪声大，不作结论。
-4. 冒烟（20s 短卡、单次、2 连接）曾是 on 110.7k vs off 104.2k——与正式卡方向相反。单次短卡不足以判定，这也是为什么门槛要求交替多组。
+1. **gRPC `WriteQueue` / Dubbo `BatchExecutorQueue` 解决的是"每请求一次 flush"**——跨线程写出时每条消息各自 flush、各自一次 `write` 系统调用。
+   这个问题我们在任务 14 已经由 FlushConsolidationHandler 解决（`write` 系统调用/请求 1.0 → 0.17）；Netty 的事件循环又已经合并了唤醒
+   （`nextWakeupNanos`），队列外每请求一次 `execute` 只是一次 MPSC 入队。再叠一层写队列，剩下的只有排队本身的成本：数据里 `write`/请求
+   进一步下降（批更大）、两端 CPU 与吞吐同比例下降（每请求 CPU 不变），多出来的是请求在出站前的等待——p50 +4% ~ +15%、开环 p99 +0.1 ~ +0.3ms。
+2. **剩余的上下文切换不在写出路径上**（见上方归因表）：客户端约 0.22 是虚拟线程调用方 park / 被 IO 线程 unpark 后载体线程被唤醒，服务端约 0.19
+   是固定池线程在队列上 park / 被 IO 线程投递唤醒；两端 IO 线程合计只有 0.05 ~ 0.08，写队列能碰到的只有这一组，开了以后它反而略升。
+   前两项分别是**同步 API**（调用方阻塞等结果）与**服务端隔离语义**（业务不在 IO 线程上跑）的价格；要省它们的把手已经存在——服务端
+   `ExecutorConfig.direct()`（opt-in，任务 14：服务端切换 0.27 → 0.04、吞吐 +35%）与客户端的异步 API（返回 `CompletableFuture`，调用方不阻塞）。
+3. **缺省路径的吞吐优化到此收手**。调研里余下的候选——#4 超时定时器、#5 合并客户端完成依赖链、#6 同步路径延迟解码——各自的收益上限都低于上面
+   这两项结构性成本（定时器线程 `timers` 组实测每请求 0 次切换；#5 / #6 只省 IO 线程上的少量 CPU，不改变"一次唤醒调用方、一次唤醒业务线程"），
+   不再单独立项；需要更高单连接吞吐的使用者用 direct 执行器 + 异步 API。
 
-## 结论与建议（裁定权在主模型）
+## 未定论的观察
 
-1. **未达门槛，且是反方向**：闭环 2 连接 −5.6% / −10.6%、1 连接 −11.8% / −6.8%（每组都低于 off，轮次区间不重叠），开环 p99 回退约 0.1 ~ 0.3ms；
-   direct 下 −4.4%（单次、区间重叠，不判定）。
-2. **建议**：不保留为缺省。两个选项供裁定——
-   - (a) 整体回退：删 `ConnectionWriteQueue` 与 `writeQueue` 开关，回到任务 14 的写出路径；只保留本任务与它无关的部分（线程组归因、`ReplyWrite`
-     消除 F2 每回包一个监听器 lambda、单测思路）。代码最少，与"不追前沿、先库级可用"一致。
-   - (b) 保留实现、缺省改 off（只作 A/B 开关），文档写明本探针的数字；代价是多一条要维护的写出路径与测试。
-3. 上下文切换的主体在两端的 park / unpark（客户端载体 ~0.22、服务端业务池 ~0.19），下一步若还要动它，对象应是交接本身——服务端是已有的 direct（opt-in），
-   客户端是调研候选 #6（同步路径在调用方线程上解码，减少 IO 线程 → 载体的交接负担）或 #5（合并完成依赖链），而不是写出路径。
-4. 线程组归因（`rounds[].io.<端>.by_group` + Markdown 小表）与写队列成败无关，建议保留。
+- 正式实验前的冒烟（20s 短卡、单次、2 连接）是 on 110.7k vs off 104.2k，与正式卡方向相反。单次短卡不足以判定，这也是门槛要求交替多组的原因。
+- 局部化探针（不作数）：20s 短卡把两端拆开各跑 2 次（`~/t15/out/sides/`，2026-10-20 21:27 ~ 21:43）。环境明显更嘈杂（第一次 off/off 的 1 连接
+  只有 36k，轮间极差 20% 以上），只能看方向：1 连接卡上"客户端 on"的两种组合（63k / 81k、74k / 82k）低于"客户端 off"的两种组合
+  （87k / 89k、90k），服务端单开时与 off/off 看不出差别；2 连接卡上四种组合都在 90 ~ 101k、分不开。倾向于回退主要来自客户端一侧
+  （客户端每条连接只有一个事件循环、同时负责读响应与写请求，调用方是 64 个虚拟线程）。一个可能的机制：off 时每个调用方提交的写任务都把
+  事件循环"推"着多处理一条，FlushConsolidationHandler 的 flush 任务排在这些写任务之后，形成边收边写、本轮末一次 flush 的流水；on 时 CAS 胜者
+  投出 drain 后后来者只入队，drain 批末冲刷后 IO 线程更快回到 `epoll_wait`，下一批要靠新的唤醒。`syscw` 含 eventfd 唤醒，分不开 flush 与唤醒，
+  这个机制未用 `strace` / JFR 证实，没有继续追（结论已不依赖它）。
 
 ## 局限
 
-- 单机、单时段、宿主有桌面负载；每组 2 次（E4 1 次）。闭环的 on / off 差距大于轮间极差，开环的差距在可疑轮次去掉后才清楚。
+- 单机、单时段、宿主有桌面负载；每组 2 次（E4 1 次）。闭环的 on / off 差距大于轮间极差（on 最好的轮次低于 off 最差的轮次），开环的差距在两个可疑轮次去掉后才清楚。
 - 分组按线程名前缀，`comm` 截断到 15 字节；窗口内退出又新建的线程（JIT 的动态编译线程）会让 `jvm` 组出现绝对值 ≤ 0.001 的负值。
-- `syscw` 含 eventfd 唤醒，没有把套接字写与唤醒分开计数；"批更大、等待更长"的机制是推断，未用 `strace` / JFR 证实。
-- 局部化探针用的是短卡、且环境噪声大，只作方向参考。

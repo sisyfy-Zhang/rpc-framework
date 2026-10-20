@@ -209,9 +209,6 @@ class BenchEndToEndTest {
 		assertEquals(Boolean.TRUE, path(json, "validity", "server_executor", "matches"));
 		assertEquals("default (on)", path(json, "run", "harness_options", "flush_consolidation"));
 		assertEquals("on", path(json, "run", "target", "flush_consolidation"));
-		assertEquals("default (on)", path(json, "run", "harness_options", "write_queue"));
-		assertEquals("on", path(json, "run", "target", "write_queue"));
-		assertEquals("on", path(json, "server_environment", "server_write_queue"));
 		if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")) {
 			assertTrue(md.contains("上下文切换按线程组") && md.contains("| netty_io |"), md);
 		}
@@ -277,19 +274,6 @@ class BenchEndToEndTest {
 		assertEquals("off", path(r.json(), "run", "harness_options", "flush_consolidation"));
 		assertEquals("off", path(r.json(), "run", "target", "flush_consolidation"));
 		assertEquals("on", path(r.json(), "server_environment", "server_flush_consolidation"));
-	}
-
-	/** {@code --write-queue off}：rpc 卡的 RpcClientConfig.writeQueue，如实记进 harness_options 与 run.target；服务端不受影响。 */
-	@Test
-	void writeQueueCanBeTurnedOffForAnABRun(@TempDir Path dir) throws Exception {
-		String id = "it-write-queue-off";
-		Result r = run(dir, id, card(id, "closed", "concurrency: 2", "1s", "200ms", "[200ms, 800ms]", 1, "1s", "{ kind: bytes, size: 64 }", ""),
-				"--direct", "127.0.0.1:" + server.port(), "--write-queue", "off");
-		assertEquals(Bench.OK, r.code(), r.err());
-		assertEquals("off", path(r.json(), "run", "harness_options", "write_queue"));
-		assertEquals("off", path(r.json(), "run", "target", "write_queue"));
-		assertEquals("default (on)", path(r.json(), "run", "harness_options", "flush_consolidation"));
-		assertEquals("on", path(r.json(), "server_environment", "server_write_queue"));
 	}
 
 	@Test

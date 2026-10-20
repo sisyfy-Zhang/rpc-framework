@@ -14,7 +14,6 @@ import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
 import com.feynman.rpc.core.config.ExecutorConfig;
-import com.feynman.rpc.core.config.RpcServerConfig;
 import com.feynman.rpc.core.internal.FlushConsolidation;
 import com.feynman.rpc.core.internal.InFlightGate;
 
@@ -68,16 +67,14 @@ public final class NettyServer implements AutoCloseable {
 	private final boolean flushConsolidation;
 	/** 回包写失败的次数（全部连接），见 ServerHandler 类注释。 */
 	private final LongAdder replyWriteFailures = new LongAdder();
-	/** 业务线程的回包是否经每连接写队列（{@code RpcServerConfig.writeQueue}），见 ServerHandler 类注释。 */
-	private final boolean writeQueue;
 
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, 0, null, true, RpcServerConfig.DEFAULT_WRITE_QUEUE);
+		this(dispatcher, executorConfig, fallbackSerializerCode, 0, null, true);
 	}
 
 	/** @param ioThreads worker 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcServerConfig.ioThreads} */
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, true, RpcServerConfig.DEFAULT_WRITE_QUEUE);
+		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, true);
 	}
 
 	/**
@@ -87,34 +84,17 @@ public final class NettyServer implements AutoCloseable {
 	 */
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads,
 			boolean flushConsolidation) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, flushConsolidation, RpcServerConfig.DEFAULT_WRITE_QUEUE);
-	}
-
-	/**
-	 * @param ioThreads          worker 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcServerConfig.ioThreads}
-	 * @param flushConsolidation 见 {@code RpcServerConfig.flushConsolidation}
-	 * @param writeQueue         业务线程的回包是否经每连接写队列，见 {@code RpcServerConfig.writeQueue}
-	 */
-	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads,
-			boolean flushConsolidation, boolean writeQueue) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, flushConsolidation, writeQueue);
+		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, flushConsolidation);
 	}
 
 	NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode,
 			ByteBufAllocator childAllocator) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, 0, childAllocator, true, RpcServerConfig.DEFAULT_WRITE_QUEUE);
-	}
-
-	/** 测试用：指定分配器（可为 null）与写队列开关。 */
-	NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode,
-			ByteBufAllocator childAllocator, boolean writeQueue) {
-		this(dispatcher, executorConfig, fallbackSerializerCode, 0, childAllocator, true, writeQueue);
+		this(dispatcher, executorConfig, fallbackSerializerCode, 0, childAllocator, true);
 	}
 
 	private NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads,
-			ByteBufAllocator childAllocator, boolean flushConsolidation, boolean writeQueue) {
+			ByteBufAllocator childAllocator, boolean flushConsolidation) {
 		this.dispatcher = dispatcher;
-		this.writeQueue = writeQueue;
 		this.fallbackSerializerCode = fallbackSerializerCode;
 		this.childAllocator = childAllocator;
 		this.flushConsolidation = flushConsolidation;
@@ -145,8 +125,7 @@ public final class NettyServer implements AutoCloseable {
 				ch.pipeline().addLast(new RpcMessageDecoder());
 				ch.pipeline().addLast(new IdleStateHandler(30, 20, 0, TimeUnit.SECONDS));
 				ch.pipeline().addLast(new RpcEncoder());
-				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures,
-						writeQueue));
+				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures));
 			}
 		});
 		try {

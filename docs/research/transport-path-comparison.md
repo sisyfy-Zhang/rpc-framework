@@ -520,6 +520,7 @@ WSL2、同机 loopback、1KB 回显、闭环 64（P1 对比对象节与任务简
    P2 又已证明唤醒/系统调用是固定开销的大头。做完它就能量化"flush 占多少"，为 #2 是否值得做提供直接数据。
 2. **#2 每连接写队列**：在 #1 之上再去掉"每请求一次跨线程任务 + 可能的 eventfd 唤醒"，这是 gRPC `WriteQueue` 与 Dubbo `BatchExecutorQueue` 的共同设计，
    不违背我们任何原则（编码与分配仍在事件循环上，调用方不碰分配器，过载/超时检查逐条保留）。改动集中在两个方法，可控。
+   （后记：任务 15 实测否定，见 [docs/probes/write-queue-and-context-switches.md](../probes/write-queue-and-context-switches.md)。）
 3. **#3 服务端 direct（opt-in）**：上限收益最大的单项（gRPC 缺省→direct 为 4.4×，且 gRPC direct 单连接已高于我们每连接），但它牺牲隔离性，
    只能作为显式选项 + 文档警示，不改变缺省数字；所以排在两个"缺省就受益"的改动之后。它同时给对比报告提供一个与 gRPC direct 同口径的上界对照点。
 

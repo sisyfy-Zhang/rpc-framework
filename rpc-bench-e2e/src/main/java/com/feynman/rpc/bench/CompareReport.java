@@ -18,7 +18,7 @@ import java.util.Set;
  *   <li><b>分组</b>：负载模型、服务、payload（kind + size）、时长 / 预热 / 统计窗口 / 轮数 / 超时、是否同机，全部相同的结果为一组。</li>
  *   <li><b>对比轴</b>：组内取值不止一种的 {@code transport}（连同序列化方式）、{@code concurrency}（闭环）、{@code rate}（开环）、
  *       {@code io_threads}（harness 的 {@code --io-threads}）、{@code server_executor}（服务端业务执行器）、{@code flush_consolidation}
- *       （本框架两端是否合并 flush）、{@code write_queue}（本框架两端是否经每连接写队列写出）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
+ *       （本框架两端是否合并 flush）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
  *       表内其余轴取值相同（例如 rpc vs grpc 的 64 并发一张、rpc 的 64 / 128 / 256 并发一张）。没有轴在变（同一张卡跑了多次）→ 一张"重复运行"表。</li>
  *   <li>只读 JSON（与 {@link MarkdownReport} 同一原则）：表里每个数字都能在对应的结果文件里找到。</li>
  * </ul>
@@ -34,10 +34,8 @@ final class CompareReport {
 	static final String AXIS_SERVER_EXECUTOR = "server_executor";
 	/** 本框架两端的 flush 合并（{@code run.target.flush_consolidation} / {@code server_environment.server_flush_consolidation}）；其余为 —。 */
 	static final String AXIS_FLUSH = "flush_consolidation";
-	/** 本框架两端的写队列（{@code run.target.write_queue} / {@code server_environment.server_write_queue}）；其余与旧结果为 —。 */
-	static final String AXIS_WRITE_QUEUE = "write_queue";
 	private static final List<String> AXES = List.of(AXIS_TRANSPORT, AXIS_CONNECTIONS, AXIS_CONCURRENCY, AXIS_RATE, AXIS_IO_THREADS,
-			AXIS_SERVER_EXECUTOR, AXIS_FLUSH, AXIS_WRITE_QUEUE);
+			AXIS_SERVER_EXECUTOR, AXIS_FLUSH);
 	/** transport 列的排序：本框架在前，对比对象按接入顺序，其余按字母。 */
 	private static final List<String> TRANSPORT_ORDER = List.of("rpc", "grpc", "dubbo", "http");
 
@@ -261,9 +259,6 @@ final class CompareReport {
 		Object clientFlush = MarkdownReport.path(json, "run", "target", "flush_consolidation");
 		Object serverFlush = serverEnv.get("server_flush_consolidation");
 		axes.put(AXIS_FLUSH, clientFlush == null && serverFlush == null ? "—" : "client " + str(clientFlush) + " / server " + str(serverFlush));
-		Object clientQueue = MarkdownReport.path(json, "run", "target", "write_queue");
-		Object serverQueue = serverEnv.get("server_write_queue");
-		axes.put(AXIS_WRITE_QUEUE, clientQueue == null && serverQueue == null ? "—" : "client " + str(clientQueue) + " / server " + str(serverQueue));
 		String payloadText = "bytes".equals(payload.get("kind")) ? str(payload.get("size")) + " B" : str(payload.get("kind"));
 		List<Object> key = List.of(str(load.get("model")), str(target.get("service")), str(payload.get("kind")), str(payload.get("size")),
 				str(load.get("duration_ms")), str(load.get("warmup_ms")), str(load.get("steady_window_ms")), str(load.get("rounds")),
@@ -284,7 +279,6 @@ final class CompareReport {
 				.thenComparing(r -> r.axes().get(AXIS_IO_THREADS))
 				.thenComparing(r -> r.axes().get(AXIS_SERVER_EXECUTOR))
 				.thenComparing(r -> r.axes().get(AXIS_FLUSH), Comparator.reverseOrder())
-				.thenComparing(r -> r.axes().get(AXIS_WRITE_QUEUE), Comparator.reverseOrder())
 				.thenComparing(Run::startedAt);
 	}
 
@@ -311,7 +305,6 @@ final class CompareReport {
 			case AXIS_CONNECTIONS -> "连接数";
 			case AXIS_SERVER_EXECUTOR -> "服务端执行器";
 			case AXIS_FLUSH -> "flush 合并";
-			case AXIS_WRITE_QUEUE -> "写队列";
 			default -> axis;
 		};
 	}
