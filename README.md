@@ -262,6 +262,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `shutdown-timeout` | `shutdownTimeout` | 10s | close 时等在途调用的上限 |
 | `exception-allowlist` | `exceptionAllowlist(String...)` | — | 追加允许按类名还原的异常包前缀 |
 | `io-threads` | `ioThreads` | 0 | IO 事件循环线程数；0 = Netty 缺省（2 × 可用核数），只影响本客户端 |
+| `sync-wait-grace` | `syncWaitGrace` | 1s | 同步调用等待的第二道上界：最多等 deadline 剩余时间 + 该值，定时器没按时触发时也不会无限挂住（docs/pitfalls.md 第 34 条）；异步方法不受约束 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
 引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。

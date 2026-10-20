@@ -5,6 +5,8 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import com.feynman.rpc.core.filter.Invocation;
@@ -26,6 +28,13 @@ import com.feynman.rpc.core.filter.Result;
  * </ul>
  * 返回 {@code CompletableFuture<T>}（或 {@code CompletionStage<T>}）的方法：future 以同样的异常对象异常完成（不再包 CompletionException）。
  *
+ * <p>同步方法的等待有两道上界：第一道是在途表的 deadline 定时器（超时后 future 以超时完成，正常情况总是它先到）；
+ * 第二道是这里的有界等待——最多等"本次调用 deadline 的剩余时间 + {@code syncWaitGrace}"（{@code RpcClientConfig}，
+ * 默认 1s）。定时器没有按时触发时（运行时内存事故等，见 docs/pitfalls.md 第 34 条），调用方线程不会无限期挂住：
+ * 抛 {@link RpcDeadlineExceededException}（"deadline timer did not fire within grace"），并让本次调用已发出的请求失败
+ * （在途表、在途闸门、连接上的请求记录随之释放）。等待不响应中断，与此前的 {@code join()} 一致（中断标志保留）。
+ * <b>异步方法不受第二道上界约束</b>：返回的 future 只由定时器 / 响应完成，调用方应自带 {@code orTimeout} 之类的上界。
+ *
  * <p>停机：每次调用先过所属客户端的在途闸门（{@link InFlightGate}），客户端 close() 关闸之后新调用直接抛
  * {@link IllegalStateException}——这是调用方的使用错误（用了已关闭的客户端），不是一次远程失败；已经发出的调用
  * 计入在途，close() 会等它们完成。
@@ -40,13 +49,16 @@ final class ReferenceProxy implements InvocationHandler {
 	private final Duration timeout;
 	private final boolean inheritDeadline;
 	private final InFlightGate gate;
+	private final long syncWaitGraceNanos;
 
-	ReferenceProxy(ServiceKey key, Invoker chain, Duration timeout, boolean inheritDeadline, InFlightGate gate) {
+	ReferenceProxy(ServiceKey key, Invoker chain, Duration timeout, boolean inheritDeadline, InFlightGate gate,
+			Duration syncWaitGrace) {
 		this.key = key;
 		this.chain = chain;
 		this.timeout = timeout;
 		this.inheritDeadline = inheritDeadline;
 		this.gate = gate;
+		this.syncWaitGraceNanos = syncWaitGrace.toNanos();
 	}
 
 	@Override
@@ -96,7 +108,7 @@ final class ReferenceProxy implements InvocationHandler {
 
 		Result result;
 		try {
-			result = future.join();
+			result = awaitSync(future, invocation);
 		} catch (CompletionException e) {
 			throw translate(unwrap(e), invocation);
 		}
@@ -108,6 +120,59 @@ final class ReferenceProxy implements InvocationHandler {
 			throw new RpcException("Remote method returned null for primitive return type " + method.getReturnType() + ": " + invocation);
 		}
 		return value;
+	}
+
+	/**
+	 * 同步等待：最多等 deadline 剩余时间 + grace（见类注释）。不响应中断（与 {@code join()} 相同），中断标志在返回前恢复。
+	 * 失败时抛 {@link CompletionException}（cause 为原因），由调用处统一翻译。
+	 */
+	private Result awaitSync(CompletableFuture<Result> future, Invocation invocation) {
+		long remaining = invocation.remainingNanos();
+		if (remaining == Long.MAX_VALUE) {
+			// timeout = 0（不限）：没有 deadline 也就没有定时器，只能等结果
+			return future.join();
+		}
+		long waitNanos = Math.max(0, remaining) + syncWaitGraceNanos;
+		if (waitNanos < 0) {
+			waitNanos = Long.MAX_VALUE;
+		}
+		long until = System.nanoTime() + waitNanos;
+		boolean interrupted = false;
+		try {
+			while (true) {
+				try {
+					return future.get(waitNanos, TimeUnit.NANOSECONDS);
+				} catch (ExecutionException e) {
+					throw new CompletionException(e.getCause());
+				} catch (InterruptedException e) {
+					interrupted = true;
+					waitNanos = until - System.nanoTime();
+					if (waitNanos > 0) {
+						continue;
+					}
+				} catch (TimeoutException e) {
+					// 落到下面
+				}
+				return abandon(future, invocation);
+			}
+		} finally {
+			if (interrupted) {
+				Thread.currentThread().interrupt();
+			}
+		}
+	}
+
+	/**
+	 * deadline + grace 已过、定时器仍没让 future 完成：让本次调用已发出的请求失败（在途表移除、连接与负载统计释放），
+	 * 并直接让 future 失败（在途闸门随之退出）。两步之间若真实结果恰好到达，以 future 最终的状态为准。
+	 */
+	private Result abandon(CompletableFuture<Result> future, Invocation invocation) {
+		RpcDeadlineExceededException cause = new RpcDeadlineExceededException("RPC call exceeded its deadline of "
+				+ invocation.timeout().toMillis() + "ms and the deadline timer did not fire within grace "
+				+ TimeUnit.NANOSECONDS.toMillis(syncWaitGraceNanos) + "ms: " + invocation);
+		invocation.abandon(cause);
+		future.completeExceptionally(cause);
+		return future.join();
 	}
 
 	/**

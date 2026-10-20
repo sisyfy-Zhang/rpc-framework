@@ -176,7 +176,7 @@ public final class RpcClient implements AutoCloseable {
 		int retries = options.retries();
 		Invoker chain = FilterChain.build(filters, invocation -> invokeCluster(directory, invocation, retries));
 		Object proxy = Proxy.newProxyInstance(itf.getClassLoader(), new Class<?>[] { itf },
-				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate));
+				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate, config.syncWaitGrace()));
 		return itf.cast(proxy);
 	}
 
@@ -311,6 +311,10 @@ public final class RpcClient implements AutoCloseable {
 		} catch (RuntimeException e) {
 			response = CompletableFuture.failedFuture(e);
 		}
+		// 同步代理放弃等待（deadline 定时器没有按时触发）时让这次请求失败：在途表的登记随之移除（register 的
+		// whenComplete），连接上的请求记录、负载统计也沿下面的回调链释放，与 pending.fail 的效果相同
+		CompletableFuture<RpcMessage> sent = response;
+		invocation.onAbandon(cause -> sent.completeExceptionally(cause));
 		return response
 				.whenComplete((r, e) -> loadStats.end(address))
 				.handle((message, error) -> {
@@ -330,7 +334,8 @@ public final class RpcClient implements AutoCloseable {
 						return Result.exception(new RpcDeadlineExceededException("no response within "
 								+ invocation.timeout().toMillis() + "ms from " + address + ": " + invocation, cause));
 					}
-					if (cause instanceof RpcSerializationException) {
+					if (cause instanceof RpcSerializationException || cause instanceof RpcDeadlineExceededException) {
+						// 后者只来自调用方放弃等待（见上）：deadline 已过，进结果通道、不重试
 						return Result.exception(cause);
 					}
 					// 传输失败：让 future 异常完成，Cluster 据此决定是否换节点重试

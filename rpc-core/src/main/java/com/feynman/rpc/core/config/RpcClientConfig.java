@@ -32,6 +32,9 @@ import com.feynman.rpc.core.serialize.Serializer;
  *
  * <p>{@code ioThreads}（默认 {@value #DEFAULT_IO_THREADS}）：客户端 IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），
  * 见 {@link Builder#ioThreads(int)}。
+ *
+ * <p>{@code syncWaitGrace}（默认 1s）：同步代理方法在"本次调用 deadline 的剩余时间 + grace"之后不再等待，
+ * 见 {@link Builder#syncWaitGrace(Duration)}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -45,7 +48,8 @@ public record RpcClientConfig(
 		Map<String, String> serializerOptions,
 		Duration shutdownTimeout,
 		List<String> exceptionAllowlist,
-		int ioThreads) {
+		int ioThreads,
+		Duration syncWaitGrace) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
 	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
@@ -54,6 +58,7 @@ public record RpcClientConfig(
 	public static final int MAX_IO_THREADS = 1024;
 	public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(20);
 	public static final Duration DEFAULT_SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
+	public static final Duration DEFAULT_SYNC_WAIT_GRACE = Duration.ofSeconds(1);
 
 	public RpcClientConfig {
 		if (registry == null) {
@@ -86,6 +91,12 @@ public record RpcClientConfig(
 			}
 		}
 		checkIoThreads(ioThreads);
+		if (syncWaitGrace == null) {
+			syncWaitGrace = DEFAULT_SYNC_WAIT_GRACE;
+		}
+		if (syncWaitGrace.isNegative()) {
+			throw new IllegalArgumentException("syncWaitGrace must not be negative: " + syncWaitGrace);
+		}
 	}
 
 	static void checkIoThreads(int ioThreads) {
@@ -124,6 +135,7 @@ public record RpcClientConfig(
 		private Duration shutdownTimeout = DEFAULT_SHUTDOWN_TIMEOUT;
 		private final List<String> exceptionAllowlist = new ArrayList<>();
 		private int ioThreads = DEFAULT_IO_THREADS;
+		private Duration syncWaitGrace = DEFAULT_SYNC_WAIT_GRACE;
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -218,10 +230,26 @@ public record RpcClientConfig(
 			return this;
 		}
 
+		/**
+		 * 同步代理方法等待结果的第二道上界（默认 1s）：调用方线程最多等"本次调用 deadline 的剩余时间 + grace"。
+		 *
+		 * <p>正常情况下超时由在途表的 deadline 定时器负责，同步等待总会先被它唤醒，grace 不起作用。它只防一种情况：
+		 * 定时器没有按时触发（例如进程提交内存耗尽时运行时线程建不起来、定时任务里分配失败被线程池吞掉），调用方线程
+		 * 若无界地等下去就会永远挂住。超过 grace 时抛 {@code RpcDeadlineExceededException}（消息含
+		 * "deadline timer did not fire within grace"），并让该次调用的在途请求失败。
+		 *
+		 * <p>取 0 也合法（等到 deadline 就放弃），但会与正常的定时器抢先后，异常消息因此不稳定；不建议小于几十毫秒。
+		 * 返回 {@code CompletableFuture} 的异步方法不受它约束，调用方应自带 {@code orTimeout}。
+		 */
+		public Builder<T> syncWaitGrace(Duration syncWaitGrace) {
+			this.syncWaitGrace = syncWaitGrace;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
-					shutdownTimeout, exceptionAllowlist, ioThreads));
+					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace));
 		}
 	}
 }

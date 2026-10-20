@@ -145,6 +145,7 @@ class RpcAutoConfigurationTest {
 				Map.entry("rpc.client.shutdown-timeout", "2s"),
 				Map.entry("rpc.client.exception-allowlist", "com.acme.common.,com.acme.errors."),
 				Map.entry("rpc.client.io-threads", "3"),
+				Map.entry("rpc.client.sync-wait-grace", "250ms"),
 				Map.entry("rpc.server.weight", "7"),
 				Map.entry("rpc.server.io-threads", "2"),
 				Map.entry("rpc.server.shutdown-timeout", "4s"),
@@ -166,6 +167,7 @@ class RpcAutoConfigurationTest {
 		assertEquals(Duration.ofSeconds(2), client.shutdownTimeout());
 		assertEquals(List.of("com.acme.common.", "com.acme.errors."), client.exceptionAllowlist());
 		assertEquals(3, client.ioThreads());
+		assertEquals(Duration.ofMillis(250), client.syncWaitGrace());
 		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
 				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
 		assertEquals(expectedOptions, client.serializerOptions());
@@ -209,6 +211,7 @@ class RpcAutoConfigurationTest {
 		assertEquals(RpcServerConfig.DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES, server.remoteStackTraceMaxBytes());
 		assertTrue(server.serializerOptions().isEmpty());
 		assertEquals(RpcClientConfig.DEFAULT_IO_THREADS, client.ioThreads());
+		assertEquals(RpcClientConfig.DEFAULT_SYNC_WAIT_GRACE, client.syncWaitGrace());
 		assertEquals(RpcServerConfig.DEFAULT_IO_THREADS, server.ioThreads());
 	}
 

@@ -499,6 +499,11 @@ logging:
 `rpc.client.default-timeout`）、`retries`（缺省 0；只对传输失败重试，只给幂等方法开）、`inheritDeadline`（缺省 true：
 在服务端业务里发起的下游调用自动取上游剩余时间与自身超时的较小者）、`awaitProvidersMs`（缺省 0，见下一小节）。
 
+超时由每个请求的 deadline 定时器给出。同步方法另有第二道上界 `rpc.client.sync-wait-grace`（缺省 1s）：调用方线程最多等
+"deadline 剩余时间 + grace"，定时器没有按时触发（如进程提交内存耗尽，见 pitfalls 第 34 条）时也会抛 `RpcDeadlineExceededException`
+（消息含 `deadline timer did not fire within grace`），不会无限挂住。返回 `CompletableFuture` 的异步方法不受它约束，调用方应自带
+`orTimeout`。
+
 ### 6.1 启动时等待提供者出现（awaitProvidersMs）
 
 provider 的"注册完成"不等于 consumer 的"已经看到它"：consumer 若比 provider 先启动、先订阅，新节点要靠注册中心推送才进入
@@ -619,6 +624,7 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
 | consumer 调用抛 `RpcException: No available provider for: ...` | 订阅到的提供者为空：provider 没启动 / 还没注册成功 / `version`、`group` 与 provider 不一致 / 注册中心不可达 | 确认 provider 已注册（日志 `Registered ... at ...`）；核对 `@RpcReference` 与 `@RpcService` 的 version / group |
 | `RpcException: SERVICE_NOT_FOUND from server for ...: no such method: ...`（或 `no such service: ...`） | 两端接口版本不一致（方法名或参数类型不同） | 两端使用同一版本的 API 包；需要兼容时用新的 `version` 并行暴露 |
 | `RpcDeadlineExceededException: RPC call timed out after 5000ms: ...` 或 `server rejected expired request ...` | 调用在预算内没有完成（慢、排队、网络）；后者表示请求在服务端排队时已经过期、业务方法没执行 | 加大 `@RpcReference(timeout=)` 或 `rpc.client.default-timeout`；检查服务端执行器是否打满（`queue-capacity`、`threads`） |
+| `RpcDeadlineExceededException: ... the deadline timer did not fire within grace ...` | deadline 过后又等了 `sync-wait-grace` 仍没有任何结果：客户端进程的定时 / 调度没有按时运行（提交内存耗尽、长时间 STW、CPU 饿死） | 查进程与机器的内存（Windows 看提交内存 / 页面文件，Linux 看 OOM 与 swap）、GC 日志；不要靠调大 grace 掩盖 |
 | `RpcOverloadedException: SERVER_OVERLOADED from ...` | 服务端执行器满载，或该节点正在停机（消息里有 `shutting down`）；业务没执行 | 扩容 / 调整执行器；停机期间的拒绝配合 `retries` 会自动换节点 |
 | 拿到 `RpcRemoteException: com.acme.xxx.SomeException: ...` 而不是 `SomeException` | 异常类不在还原白名单内（默认只有接口所在包、`java.`、`javax.`、框架包），或 consumer 的 classpath 上没有这个类、它没有 `(String)` 构造器 | 把异常放到接口所在包，或配置 `rpc.client.exception-allowlist: [com.acme.xxx.]`；`remoteClassName()` 可取原类名 |
 | `RpcSerializationException: ... class not allowed by protostuff allowlist: com.acme.dto.Foo ...` | DTO 里有接口 / 抽象类 / `Object` 声明的字段，实际类型不在 Protostuff 白名单内 | `rpc.serializer-options.protobuf.allowed-packages: "com.acme.dto."`（两端都配） |

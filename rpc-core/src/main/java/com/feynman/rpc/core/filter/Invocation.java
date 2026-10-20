@@ -2,9 +2,12 @@ package com.feynman.rpc.core.filter;
 
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import com.feynman.rpc.core.Deadline;
@@ -34,6 +37,9 @@ public final class Invocation {
 	private final long startNanos;
 	private final boolean inbound;
 	private volatile boolean targetInvoked;
+	/** 客户端：放弃本次调用时要执行的动作（null / 单个 Consumer / List）；放弃之后记下原因。见 {@link #onAbandon}。 */
+	private Object abandonHooks;
+	private Throwable abandonCause;
 
 	/** 客户端（以及测试）使用：参数已知，起始时间为现在。 */
 	public Invocation(ServiceKey serviceKey, Method method, Object[] args, Map<String, String> attachments, Duration timeout) {
@@ -129,6 +135,57 @@ public final class Invocation {
 	/** 框架内部使用：链尾在调用业务方法之前调用。 */
 	public void markTargetInvoked() {
 		this.targetInvoked = true;
+	}
+
+	/**
+	 * 框架内部使用（客户端发送层）：登记"调用方放弃本次调用时，如何让已发出的请求失败"。每次发送尝试登记一次；
+	 * 调用已被放弃时立即以放弃原因执行（迟到的重试同样立即失败）。hook 不应抛异常，也不应阻塞。
+	 */
+	public void onAbandon(Consumer<? super Throwable> hook) {
+		Throwable cause;
+		synchronized (this) {
+			cause = abandonCause;
+			if (cause == null) {
+				if (abandonHooks == null) {
+					abandonHooks = hook;
+				} else if (abandonHooks instanceof List<?> list) {
+					@SuppressWarnings("unchecked")
+					List<Object> hooks = (List<Object>) list;
+					hooks.add(hook);
+				} else {
+					List<Object> hooks = new ArrayList<>(2);
+					hooks.add(abandonHooks);
+					hooks.add(hook);
+					abandonHooks = hooks;
+				}
+				return;
+			}
+		}
+		hook.accept(cause);
+	}
+
+	/**
+	 * 框架内部使用（同步代理）：调用方不再等待本次调用（deadline 定时器没有按时触发，见
+	 * {@code RpcClientConfig.syncWaitGrace}），以 {@code cause} 执行所有已登记的 {@link #onAbandon} 动作。只生效一次。
+	 */
+	@SuppressWarnings("unchecked")
+	public void abandon(Throwable cause) {
+		Object hooks;
+		synchronized (this) {
+			if (abandonCause != null) {
+				return;
+			}
+			abandonCause = cause;
+			hooks = abandonHooks;
+			abandonHooks = null;
+		}
+		if (hooks instanceof List<?> list) {
+			for (Object hook : list) {
+				((Consumer<? super Throwable>) hook).accept(cause);
+			}
+		} else if (hooks != null) {
+			((Consumer<? super Throwable>) hooks).accept(cause);
+		}
 	}
 
 	/** 距 {@code startNanos + timeout} 的剩余纳秒，可能为负；timeout 为 0（不限）时返回 {@link Long#MAX_VALUE}。 */

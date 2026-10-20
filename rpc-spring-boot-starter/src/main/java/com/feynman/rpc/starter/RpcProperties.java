@@ -26,7 +26,7 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer: protobuf
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
- *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0 }
+ *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s }
  *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
  *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192,
  *             executor: { type: fixed, threads: 16, queue-capacity: 1000 } }   # 或 { type: virtual, max-concurrent: 10000 }
@@ -121,6 +121,9 @@ public class RpcProperties {
 		}
 		if (client.ioThreads != null) {
 			builder.ioThreads(client.ioThreads);
+		}
+		if (client.syncWaitGrace != null) {
+			builder.syncWaitGrace(client.syncWaitGrace);
 		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
 	}
@@ -238,6 +241,20 @@ public class RpcProperties {
 
 		/** 客户端 IO 事件循环线程数（默认 0 = Netty 缺省，2 × 可用核数）；只影响本客户端。 */
 		private Integer ioThreads;
+
+		/**
+		 * 同步调用等待的第二道上界（默认 1s）：最多等"deadline 剩余时间 + 该值"，超过即抛 RpcDeadlineExceededException
+		 * 并让该次请求失败。只在 deadline 定时器没有按时触发时起作用；异步方法不受约束。
+		 */
+		private Duration syncWaitGrace;
+
+		public Duration getSyncWaitGrace() {
+			return syncWaitGrace;
+		}
+
+		public void setSyncWaitGrace(Duration syncWaitGrace) {
+			this.syncWaitGrace = syncWaitGrace;
+		}
 
 		public Integer getIoThreads() {
 			return ioThreads;

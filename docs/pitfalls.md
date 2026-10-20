@@ -520,3 +520,47 @@ harness 的服务时间（从实际执行）p50 0.22ms，发出滞后 p99 只有
 - 生产上同一个窗口也存在：ZK 服务端重启的那一瞬间连进来的客户端，可能被吊住一个会话超时（缺省 30s）才重连。它有界、会自愈，
   缩短它的办法是调小 `session-timeout-ms`（代价是 GC / 网络抖动更容易误判会话过期）。
 - 计时断言只框住被测的那一段：构造期的类加载与"订阅等多久"是两件事，混在一起的上界会在慢机器上误报。
+
+## 34. 同步调用过了 deadline 仍无界挂住：超时定时器在运行时内存事故里会"丢"，只有一道上界不够
+
+**现象**：阶段 2 任务 11 的全量构建里，`rpc-bench-e2e` 的 `BenchEndToEndTest.anAssertionThatCannotHoldFailsTheRunWithExitCode2`
+（1MiB 回显 × 16 并发、1ms 超时、`--direct`）挂了 80 分钟。线程转储：唯一没退出的发压虚拟线程停在 `ReferenceProxy.invoke` 的
+`CompletableFuture.join()`；`CompletableFutureDelayScheduler` 与 `VirtualThread-unparker` 空闲、队列为空；IO / 业务线程全部空闲；
+没有任何 ForkJoinPool 载体线程。同一时段 Windows 提交内存耗尽：Git Bash fork 报 `STATUS_COMMITMENT_LIMIT`，另一个测试 JVM 的
+hs_err 是 `G1 virtual space` mmap 失败。
+
+**根因**（分类实验 + 确定性探针；现场属于哪一种仍有不确定性）：
+1. **这张卡自己就能把整机提交内存打满**。默认堆（16GB 机器，MaxHeap 3936MiB）下单个测试 JVM 的私有提交峰值 5.9~6.3GB
+   （13 份 hs_err 的 `peak`）：1MiB 的数组全是 G1 humongous 对象；服务端出站没有背压，负载结束数秒后服务端两个 IO 线程仍在
+   `write0`，窗口末尾发出的 30s 元数据调用排在积压后面迟迟拿不到响应。本机空闲提交约 6GB，于是：默认堆循环 50 次，13 次 JVM
+   直接 native OOM 崩溃（G1 mmap / C2 arena malloc），0 次挂起；另起进程预占到空闲提交约 0.9GB 后 12 次全部崩溃，第 12 次之后
+   发压脚本自己的 fork 也报 `0xC000012D`——与现场同一症状。
+2. **堆耗尽跨过到期时刻时，超时定时器会丢**。`-Xmx1g` 循环 28 次，28 次都出现 `OutOfMemoryError: Java heap space`，0 次挂起
+   （碰上的概率低）。确定性探针（`-Xmx64m`，在定时器到期前后把堆填满 600ms，各 10 次）：JDK `orTimeout` 10/10 次 future 永不完成，
+   调度线程本身也死于 OOM（`OutOfMemoryError thrown from the UncaughtExceptionHandler in thread "CompletableFutureDelayScheduler"`）；
+   换成"预构造无栈异常、到期不分配"的自有定时器同样 10/10 不完成（线程池工作线程在取任务时分配失败就死了）。而用
+   `get(deadline 剩余 + grace)` 等待的平台线程与虚拟线程 **10/10 按时返回**——等待者自己的定时 park 不依赖那个出事的线程。
+3. 现场是"超时任务分配失败被吞、虚拟线程一直 parked"（堆耗尽），还是"已经 unpark、但提交耗尽时 ForkJoinPool 建不出载体去跑
+   continuation"，从现有材料分不出来：JDK 21 的 `Thread.dump_to_file`（文本与 JSON）都不输出虚拟线程状态，现场也没有堆转储。
+   共同点是同一个：**唯一的上界是"别的线程会来完成这个 future"，而那个线程在内存事故里跑不起来**。按代码审查，1ms 超时与
+   1MiB 写出的竞态没有能让 future 永不完成的路径（定时器在等连接之前登记，覆盖全过程）。
+
+**修法**：
+- 同步代理的等待改为有界：最多等"本次调用 deadline 的剩余时间 + `syncWaitGrace`"（`RpcClientConfig.syncWaitGrace`，缺省 1s，
+  starter 属性 `rpc.client.sync-wait-grace`）。超出抛 `RpcDeadlineExceededException`（消息含 `deadline timer did not fire within grace`），
+  并经 `Invocation.abandon` 让本次调用已发出的请求失败：在途表移除、在途闸门退出、连接上的请求记录与负载统计释放，不进 Cluster 重试。
+  等待不响应中断（与原来的 `join()` 一致，中断标志保留）。正常情况下定时器总是先到，超时语义不变。
+- 评估过、**没有采用**的方案：在途表定时器改为自有调度池 + 预构造的无栈超时实例（到期不再 `new TimeoutException()`）。
+  上面的探针里它与 `orTimeout` 一样 10/10 丢超时（死的是线程池工作线程，不只是那次分配），且进程级静态调度池违反
+  "core 不持有静态可变状态"的架构规则；它挡不住的场景第二道上界都能挡住，于是保持 `orTimeout`。
+- 返回 `CompletableFuture` 的异步方法不受第二道上界约束（future 只由定时器 / 响应完成），javadoc 写明调用方应自带 `orTimeout`。
+- 测试：占住定时器线程模拟"定时器不触发"，断言同步调用（平台线程与虚拟线程）在 deadline + grace 内抛出、在途归零、
+  恢复后调用正常且正常超时仍由定时器给出；grace 配置生效（耗时上界小于缺省 grace）。
+
+**教训**：
+- **同步等待必须有第二道上界**。"会有别的线程来完成 future"在运行时内存事故（提交耗尽、堆耗尽）里不成立：定时器线程会死于
+  OOM，超时任务里的分配失败会被线程池吞掉，虚拟线程可能拿不到载体。第二道上界要靠等待者自己的定时 park。
+- 测试 / 压测卡的内存足迹也是被测对象：1MiB × 16 并发在默认堆下单进程峰值 6GB 提交，足以拖垮整机（连 shell 的 fork 都失败），
+  这时出现的任何"怪现象"先看提交内存，再看代码。
+- JDK 21 的线程转储不带虚拟线程状态；要区分"没人唤醒"与"唤醒了但没载体"，挂住时要留堆转储（看 `VirtualThread.state` 与
+  future 的 result），只有线程转储不够。

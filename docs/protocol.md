@@ -170,6 +170,7 @@ attachments 格式错误或超限**不关连接**：帧边界由头部长度字�
 | 每次发送时刷新 | 每一次实际发送（含 failover 重试）都按那一刻的剩余时间重写 `rpc.timeout`；`rpc.deadline` 不刷新 |
 | 取整 | 剩余纳秒向上取整到毫秒，最小为 1（未过期的调用不会因取整被服务端判死） |
 | 预算耗尽 | 剩余 ≤ 0 时不再发送，直接以 `RpcDeadlineExceededException` 结束 |
+| 同步等待的第二道上界 | 超时由在途表的定时器给出；同步代理方法另外最多只等"deadline 剩余时间 + `syncWaitGrace`"（`rpc.client.sync-wait-grace`，缺省 1s），定时器没按时触发时也抛 `RpcDeadlineExceededException`（消息含 "deadline timer did not fire within grace"）并让该请求失败。正常情况下定时器总是先到，grace 不改变超时语义；异步方法（返回 `CompletableFuture`）不受它约束，调用方自带 `orTimeout`。见 pitfalls 第 34 条 |
 
 **服务端**
 
@@ -527,7 +528,7 @@ serializer 字节是各实现的稳定标识，一旦分配不再更改。
 | 客户端匹配 | 按 requestId 在本客户端的在途表中查找等待者；找不到（已超时、已失败）则丢弃该响应 |
 | 心跳 | PING 当前填 0；PONG 原样回带 PING 的 requestId |
 | 协商 | NEGOTIATE_REQUEST / NEGOTIATE_RESPONSE 填 0，按消息类型而非 requestId 处理 |
-| 超时 | 每个请求只有一个定时器：本次调用 deadline 的剩余时间，覆盖等连接、写出、等响应全过程；到期即从在途表移除 |
+| 超时 | 每个请求只有一个定时器：本次调用 deadline 的剩余时间，覆盖等连接、写出、等响应全过程；到期即从在途表移除。同步调用方另有"deadline + grace"的兜底等待上界（见 5.4），兜底触发时同样从在途表移除 |
 
 ---
 
