@@ -15,6 +15,8 @@ import com.feynman.rpc.core.codec.AttachmentsCodec;
 import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
+import com.feynman.rpc.core.config.RpcClientConfig;
+import com.feynman.rpc.core.internal.ConnectionWriteQueue;
 import com.feynman.rpc.core.internal.FlushConsolidation;
 import com.feynman.rpc.core.loadbalance.LoadStats;
 import com.feynman.rpc.core.protocol.OutboundBody;
@@ -27,6 +29,7 @@ import com.feynman.rpc.core.serialize.Serializers;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoop;
@@ -35,6 +38,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.FastThreadLocalThread;
@@ -51,22 +55,26 @@ public final class NettyClient implements AutoCloseable {
 
 	/** 建连超时：远短于 Netty 默认的 30s，宕掉的节点应该尽快让位给 Cluster 的重试。 */
 	private static final int CONNECT_TIMEOUT_MS = 3000;
+	/** 每条连接的写队列（{@code writeQueue} 开时在 initChannel 里建）。 */
+	static final AttributeKey<ConnectionWriteQueue> WRITE_QUEUE = AttributeKey.valueOf("rpc-client-write-queue");
 
 	private final EventLoopGroup ioGroup;
 	private final PendingRequests pending = new PendingRequests();
 	private final ConnectionManager connections;
 	private final Serializers serializers;
+	/** 事件循环外发出的请求是否经每连接写队列（{@code RpcClientConfig.writeQueue}），见 {@link ConnectionWriteQueue}。 */
+	private final boolean writeQueue;
 
 	/**
 	 * @param loadStats 所属客户端的每地址在途统计：下线节点的连接据此判断何时排空（见 ConnectionManager）
 	 */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats) {
-		this(serializers, connectionsPerNode, loadStats, 0, null, true);
+		this(serializers, connectionsPerNode, loadStats, 0, null, true, RpcClientConfig.DEFAULT_WRITE_QUEUE);
 	}
 
 	/** @param ioThreads IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads} */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads) {
-		this(serializers, connectionsPerNode, loadStats, ioThreads, null, true);
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null, true, RpcClientConfig.DEFAULT_WRITE_QUEUE);
 	}
 
 	/**
@@ -75,17 +83,33 @@ public final class NettyClient implements AutoCloseable {
 	 *                           见 {@code RpcClientConfig.flushConsolidation}
 	 */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, boolean flushConsolidation) {
-		this(serializers, connectionsPerNode, loadStats, ioThreads, null, flushConsolidation);
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null, flushConsolidation, RpcClientConfig.DEFAULT_WRITE_QUEUE);
+	}
+
+	/**
+	 * @param ioThreads          IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads}
+	 * @param flushConsolidation 见 {@code RpcClientConfig.flushConsolidation}
+	 * @param writeQueue         事件循环外发出的请求是否经每连接写队列（{@link ConnectionWriteQueue}），见 {@code RpcClientConfig.writeQueue}
+	 */
+	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, boolean flushConsolidation,
+			boolean writeQueue) {
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null, flushConsolidation, writeQueue);
 	}
 
 	/** @param allocator 非 null 时作为连接的 {@link ChannelOption#ALLOCATOR}（测试用它记录分配发生在哪些线程上） */
 	NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, ByteBufAllocator allocator) {
-		this(serializers, connectionsPerNode, loadStats, 0, allocator, true);
+		this(serializers, connectionsPerNode, loadStats, 0, allocator, true, RpcClientConfig.DEFAULT_WRITE_QUEUE);
+	}
+
+	/** 测试用：指定分配器（可为 null）与写队列开关。 */
+	NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, ByteBufAllocator allocator, boolean writeQueue) {
+		this(serializers, connectionsPerNode, loadStats, 0, allocator, true, writeQueue);
 	}
 
 	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator,
-			boolean flushConsolidation) {
+			boolean flushConsolidation, boolean writeQueue) {
 		this.serializers = serializers;
+		this.writeQueue = writeQueue;
 		byte[] supportedCodes = serializers.codesByPriority();
 
 		this.ioGroup = new NioEventLoopGroup(ioThreads, new DefaultThreadFactory("rpc-client-io"));
@@ -111,6 +135,9 @@ public final class NettyClient implements AutoCloseable {
 				ch.pipeline().addLast(new IdleStateHandler(40, 20, 0, TimeUnit.SECONDS));
 				ch.pipeline().addLast(new RpcEncoder());
 				ch.pipeline().addLast(new ClientHandler(pending, supportedCodes));
+				if (writeQueue) {
+					ch.attr(WRITE_QUEUE).set(new ConnectionWriteQueue(ch));
+				}
 			}
 		});
 		this.connections = new ConnectionManager(bootstrap, connectionsPerNode, loadStats);
@@ -190,41 +217,69 @@ public final class NettyClient implements AutoCloseable {
 		Set<Long> onChannel = ChannelRequests.of(channel);
 		onChannel.add(requestId);
 		response.whenComplete((r, e) -> onChannel.remove(requestId));
+		RequestWrite entry = new RequestWrite(channel, message, requestId, onChannel);
 		EventLoop loop = channel.eventLoop();
 		if (loop.inEventLoop()) {
-			writeOnEventLoop(channel, requestId, message, onChannel);
+			ConnectionWriteQueue.writeNow(channel, entry);
+			return;
+		}
+		ConnectionWriteQueue queue = writeQueue ? channel.attr(WRITE_QUEUE).get() : null;
+		if (queue != null) {
+			// 入队；只有把队列切到"已调度"的那个调用方投一次 drain 任务（见 ConnectionWriteQueue）
+			queue.enqueue(entry);
 			return;
 		}
 		try {
-			loop.execute(() -> writeOnEventLoop(channel, requestId, message, onChannel));
+			loop.execute(() -> ConnectionWriteQueue.writeNow(channel, entry));
 		} catch (RejectedExecutionException e) {
-			// 事件循环已关闭（客户端正在关闭）
-			onChannel.remove(requestId);
-			pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent", e));
+			entry.notWritten(e);
 		}
 	}
 
 	/**
-	 * 在连接的事件循环上写出：编码器（同一线程）分配帧缓冲区。排队期间已超时 / 已失败的请求不再写出——
-	 * 超时的调用方早已放弃，再编码、再占发送缓冲区只会在过载时把内存越堆越高。
+	 * 一个待写出的请求（同时是它的 promise 与写完成监听器）。在连接的事件循环上写出：编码器（同一线程）分配帧缓冲区。
+	 * 排队期间已超时 / 已失败的请求不再写出——超时的调用方早已放弃，再编码、再占发送缓冲区只会在过载时把内存越堆越高。
 	 */
-	private void writeOnEventLoop(Channel channel, long requestId, RpcMessage message, Set<Long> onChannel) {
-		if (!pending.isWaiting(requestId)) {
-			onChannel.remove(requestId);
-			return;
+	private final class RequestWrite extends ConnectionWriteQueue.Entry {
+		private final long requestId;
+		private final Set<Long> onChannel;
+
+		RequestWrite(Channel channel, RpcMessage message, long requestId, Set<Long> onChannel) {
+			super(channel, message);
+			this.requestId = requestId;
+			this.onChannel = onChannel;
 		}
-		if (!channel.isActive()) {
-			// 拿到连接与写出之间连接已断：channelInactive 可能已经跑过，不会再替我们失败这个请求
-			onChannel.remove(requestId);
-			pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent"));
-			return;
-		}
-		channel.writeAndFlush(message).addListener(f -> {
-			if (!f.isSuccess()) {
-				// 写失败（含编码失败）立即让这次请求失败，而不是挂到超时
-				pending.fail(requestId, new RpcException("Failed to send request to " + channel.remoteAddress(), f.cause()));
+
+		@Override
+		protected boolean beforeWrite(Channel channel) {
+			if (!pending.isWaiting(requestId)) {
+				onChannel.remove(requestId);
+				return false;
 			}
-		});
+			if (!channel.isActive()) {
+				// 拿到连接与写出之间连接已断：channelInactive 可能已经跑过，不会再替我们失败这个请求
+				onChannel.remove(requestId);
+				pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent"));
+				return false;
+			}
+			return true;
+		}
+
+		@Override
+		protected void written(ChannelFuture future) {
+			if (!future.isSuccess()) {
+				// 写失败（含编码失败）立即让这次请求失败，而不是挂到超时
+				pending.fail(requestId, new RpcException("Failed to send request to " + channel().remoteAddress(), future.cause()));
+			}
+		}
+
+		@Override
+		protected void notWritten(RejectedExecutionException cause) {
+			// 事件循环已关闭（客户端正在关闭）
+			onChannel.remove(requestId);
+			pending.fail(requestId, new RpcException("Connection to " + channel().remoteAddress() + " closed before the request was sent",
+					cause));
+		}
 	}
 
 	/** 整帧超限（或 attachments 本身不合法）时返回让本次请求失败的异常，否则 null。阈值与编码器相同。 */

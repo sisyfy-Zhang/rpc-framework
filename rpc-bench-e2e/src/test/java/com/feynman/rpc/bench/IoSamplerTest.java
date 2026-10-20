@@ -8,6 +8,7 @@ import java.util.Locale;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -53,6 +54,77 @@ class IoSamplerTest {
 	}
 
 	@Test
+	void threadNamesAreGroupedByPrefix() {
+		// comm 是线程名的前 15 字节：rpc-server-worker-3-1 → rpc-server-work
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("rpc-client-io-1"));
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("rpc-server-work"));
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("rpc-server-boss"));
+		assertEquals(IoSampler.GROUP_BIZ, IoSampler.group("rpc-server-biz-"));
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("grpc-server-wor"));
+		assertEquals(IoSampler.GROUP_BIZ, IoSampler.group("grpc-default-ex"));
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("NettyClientWork"));
+		assertEquals(IoSampler.GROUP_BIZ, IoSampler.group("DubboServerHand"));
+		assertEquals(IoSampler.GROUP_FJP, IoSampler.group("ForkJoinPool-1-"));
+		assertEquals(IoSampler.GROUP_FJP, IoSampler.group("ForkJoinPool.co"));
+		assertEquals(IoSampler.GROUP_TIMERS, IoSampler.group("CompletableFutu"));
+		assertEquals(IoSampler.GROUP_TIMERS, IoSampler.group("VirtualThread-u"));
+		assertEquals(IoSampler.GROUP_HARNESS, IoSampler.group("bench-dispatch"));
+		assertEquals(IoSampler.GROUP_HARNESS, IoSampler.group("bench-open-work"));
+		assertEquals(IoSampler.GROUP_NETTY_IO, IoSampler.group("bench-http-work"), "the HTTP card's event loops are IO, not harness");
+		assertEquals(IoSampler.GROUP_JVM, IoSampler.group("GC Thread#3"));
+		assertEquals(IoSampler.GROUP_JVM, IoSampler.group("G1 Refine#0"));
+		assertEquals(IoSampler.GROUP_JVM, IoSampler.group("C2 CompilerThre"));
+		assertEquals(IoSampler.GROUP_JVM, IoSampler.group("VM Periodic Tas"));
+		assertEquals(IoSampler.GROUP_OTHER, IoSampler.group("java"));
+		assertEquals(IoSampler.GROUP_OTHER, IoSampler.group("something-else"));
+		assertEquals(IoSampler.GROUP_OTHER, IoSampler.group(null));
+	}
+
+	@Test
+	void groupsRoundTripThroughStringsAndDeltaPerGroup() {
+		IoSampler.Snapshot before = new IoSampler.Snapshot(100, 200, 1000, 10, 4, Map.of(
+				IoSampler.GROUP_NETTY_IO, new IoSampler.GroupCounts(600, 6, 2),
+				IoSampler.GROUP_BIZ, new IoSampler.GroupCounts(400, 4, 2)));
+		IoSampler.Snapshot after = new IoSampler.Snapshot(1100, 700, 3000, 30, 5, Map.of(
+				IoSampler.GROUP_NETTY_IO, new IoSampler.GroupCounts(1600, 16, 2),
+				IoSampler.GROUP_BIZ, new IoSampler.GroupCounts(1400, 4, 2),
+				IoSampler.GROUP_FJP, new IoSampler.GroupCounts(0, 10, 1)));
+		Map<String, String> flat = after.toStrings();
+		assertEquals("1600", flat.get("io.group.netty_io.vol_cs"));
+		assertEquals(after, IoSampler.Snapshot.fromStrings(flat));
+		Map<String, String> old = new LinkedHashMap<>(flat);
+		old.keySet().removeIf(k -> k.startsWith("io.group."));
+		assertTrue(IoSampler.Snapshot.fromStrings(old).groups().isEmpty(), "an old server without groups still parses");
+
+		Map<String, Object> delta = IoSampler.delta(before, after);
+		IoSampler.perRequest(delta, 1000);
+		Map<?, ?> byGroup = (Map<?, ?>) delta.get("by_group");
+		assertEquals(List.of(IoSampler.GROUP_NETTY_IO, IoSampler.GROUP_BIZ, IoSampler.GROUP_FJP), List.copyOf(byGroup.keySet()),
+				"report order, only groups that exist");
+		Map<?, ?> io = (Map<?, ?>) byGroup.get(IoSampler.GROUP_NETTY_IO);
+		assertEquals(1000L, io.get("vol_cs"));
+		assertEquals(10L, io.get("nonvol_cs"));
+		assertEquals("2 -> 2", io.get("threads"));
+		assertEquals(1.0, io.get("vol_cs_per_request"));
+		assertEquals(1.01, io.get("cs_per_request"));
+		Map<?, ?> fjp = (Map<?, ?>) byGroup.get(IoSampler.GROUP_FJP);
+		assertEquals("0 -> 1", fjp.get("threads"), "a group that appeared inside the window counts from 0");
+		assertEquals(0.01, fjp.get("cs_per_request"));
+		assertNull(IoSampler.delta(new IoSampler.Snapshot(1, 1, 1, 1, 1), after).get("by_group"), "no groups on one side: no by_group");
+
+		Map<String, Object> round = Map.of("io", Map.of("client", delta, "server", "unknown"));
+		assertTrue(IoSampler.hasGroups(round));
+		assertFalse(IoSampler.hasGroups(Map.of("io", "n/a")));
+		assertEquals(1.01, IoSampler.groupPerRequest(round, "client", IoSampler.GROUP_NETTY_IO));
+		assertNull(IoSampler.groupPerRequest(round, "server", IoSampler.GROUP_NETTY_IO));
+		StringBuilder md = new StringBuilder();
+		IoSampler.groupTable(md, round);
+		String table = md.toString();
+		assertTrue(table.contains("| netty_io | 2 -> 2 | 1.010（1.000 / 0.010） | — | — |"), table);
+		assertTrue(table.contains("| 合计 | | 2.020 | | — |"), table);
+	}
+
+	@Test
 	void markdownCellsShowPerRequestValuesOrWhatWasRecorded() {
 		Map<String, Object> client = new LinkedHashMap<>(Map.of("syscw", 1200L));
 		IoSampler.perRequest(client, 1000);
@@ -69,6 +141,10 @@ class IoSamplerTest {
 		if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux")) {
 			assertNotNull(now, "/proc/self/io must be readable on Linux");
 			assertTrue(now.threads() > 1 && now.volCs() > 0, now.toString());
+			assertEquals(now.volCs(), now.groups().values().stream().mapToLong(IoSampler.GroupCounts::volCs).sum(), "groups sum to the total");
+			assertEquals(now.threads(), now.groups().values().stream().mapToInt(IoSampler.GroupCounts::threads).sum());
+			assertTrue(now.groups().containsKey(IoSampler.GROUP_JVM), now.groups().toString());
+			assertTrue(ServerProbes.stats().containsKey("io.group.jvm.vol_cs"));
 			assertTrue(ServerProbes.stats().containsKey("io.syscw"));
 		} else {
 			assertNull(now);

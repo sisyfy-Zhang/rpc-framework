@@ -171,11 +171,11 @@ YAML 只用 SnakeYAML 的 `SafeConstructor` 加载成 Map（`!!java...` 这类�
 
 ```text
 server   --port <p> [--host <公布地址>] (--registry zk://host:port | --no-registry) [--serializer protobuf] [--metrics-port <p>] [--http-port <p>]
-         [--io-threads <n>] [--executor fixed|virtual|direct] [--flush-consolidation on|off]
+         [--io-threads <n>] [--executor fixed|virtual|direct] [--flush-consolidation on|off] [--write-queue on|off]
 server   --transport <grpc|dubbo|...> --port <p> ...      （对比对象的服务端，见“对比对象”）
 run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>] [--metrics-port <p>]
          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>] [--io-busy-poll on|off]
-         [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0] [--flush-consolidation on|off]
+         [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0] [--flush-consolidation on|off] [--write-queue on|off]
          （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文）
 report   --in <目录 | 结果.json> [--out <file.md>]
 compare  --in <目录 | 结果.json> [--out <file.md>]
@@ -187,9 +187,10 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...
   `bench-server ready port=... pid=...`；收到 SIGTERM / Ctrl-C 后按框架的优雅停机顺序关闭。`--host` 是注册时公布的地址（同机压测用 `127.0.0.1`）。
   `--io-threads <n>` 即 `RpcServerConfig.ioThreads`（worker 事件循环数，缺省 0 = Netty 缺省 2 × 可用核数）；实际值与业务执行器的描述写进服务端环境的
   `server_io_threads` / `server_executor`（对比表的"服务端配置"列）。
-  对照实验用的两个非缺省开关：`--executor fixed|virtual|direct`（缺省 `fixed` = `ExecutorConfig.defaults()`；`direct` = `ExecutorConfig.direct()`，
-  业务方法在 IO 线程上执行）与 `--flush-consolidation on|off`（缺省 `on` = `RpcServerConfig.flushConsolidation`）。实际取值写进服务端环境的
-  `server_executor_kind` / `server_flush_consolidation`，ready 行末尾也有 `executor=... flush_consolidation=...`。
+  对照实验用的非缺省开关：`--executor fixed|virtual|direct`（缺省 `fixed` = `ExecutorConfig.defaults()`；`direct` = `ExecutorConfig.direct()`，
+  业务方法在 IO 线程上执行）、`--flush-consolidation on|off`（缺省 `on` = `RpcServerConfig.flushConsolidation`）与 `--write-queue on|off`
+  （缺省 = `RpcServerConfig.writeQueue` 的缺省值，业务线程的回包是否经每连接写队列）。实际取值写进服务端环境的
+  `server_executor_kind` / `server_flush_consolidation` / `server_write_queue`，ready 行末尾也有 `executor=... flush_consolidation=... write_queue=...`。
 - **`server --transport <name> ...`**：对比对象的服务端。除 `--transport <name>` 外的参数原样交给该 transport 的 `ServerLauncher`
   （classpath 上的 `CallTargetProvider` 提供；gRPC 是 `GrpcBenchServer`，Dubbo 是 `DubboBenchServer`），它同样打印 `bench-server ready ...` 并阻塞到关闭。
 - **compare**：读目录下（递归）全部结果 JSON，把同一负载模型、负载大小与时长口径、只在 transport / 连接数 / 并发 / 速率 / `--io-threads` 上不同的结果
@@ -232,6 +233,7 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...
 | `--io-busy-poll` | netty 客户端：开环卡 **`on`**；闭环卡 **`off`** | 事件循环每圈非阻塞 `epoll_wait` / `selectNow`，从不阻塞：调用方提交写出任务时不需要唤醒它（省掉一次跨线程唤醒），代价是占满一个核。rpc 卡不适用 | 唯一能消掉 harness 固定开销的一项：服务时间 p50 从约 0.225ms 降到 0.147ms（wrk2 未修正 0.149ms），p99 与 wrk2 的差从约 120µs 降到约 85µs |
 | `--pin-dispatcher` | `<cpu>` · `off`（**命令行缺省 off；`bench-run.sh` 在 Linux 绑核启动时缺省加上压测端核列表的第一个核**） | Linux：开环调度线程（`bench-dispatch`）钉到该核，进程里其余线程钉到进程亲和里剩下的核（`taskset -cp`，按 `/proc/self/task/*/comm` 找线程）；每轮计时开始前钉一次，轮末核对是否有线程又落到该核（`rounds[].scheduler.pin.stray_threads_at_end`）。非 Linux 记 `unsupported`、不报错 | 发出滞后 p99 从 0.09~0.18ms 降到 0.02~0.04ms；服务时间 p99.9 / max 明显收窄（短卡 0.66 / 3.2ms vs 5.5 / 20ms）。调度线程忙等，不钉时与 IO 线程、载体线程抢核 |
 | `--flush-consolidation` | **不给 = 框架缺省（on）** · `on` · `off` | 只用于 rpc 卡：`RpcClientConfig.flushConsolidation`（客户端连接 pipeline 首位的 `FlushConsolidationHandler`）。同一构建内做 flush 合并 A/B 时与 `server --flush-consolidation` 一起改；实际取值进 `run.harness_options.flush_consolidation` 与 `run.target.flush_consolidation`。对比对象给了就是用法错误 | 见 [docs/probes/flush-and-executor.md](probes/flush-and-executor.md) |
+| `--write-queue` | **不给 = 框架缺省** · `on` · `off` | 只用于 rpc 卡：`RpcClientConfig.writeQueue`（调用方线程发出的请求经每连接 MPSC 写队列、每批一次事件循环任务与一次 flush；关时每请求一个写任务）。同一构建内做 A/B 时与 `server --write-queue` 一起改；实际取值进 `run.harness_options.write_queue` 与 `run.target.write_queue`。对比对象给了就是用法错误 | 见 [docs/probes/write-queue-and-context-switches.md](probes/write-queue-and-context-switches.md) |
 | `--pre-warmup` | **卡片的 `load.warmup`** · 时长 · `0`（关闭） | 第 1 轮之前以同样负载跑一段，不计入任何一轮；摘要（发出数、错误、延迟、发出滞后、最大在途）进 `run.pre_warmup`，`run.harness_options.pre_warmup_ms` 记时长 | 冷 JVM 的第一段（JIT、连接）在预热段里消化。`loopback-latency-v1`：第 1 轮 p99 52.6 → 3.5ms、最大在途 4220 → 387（预热段自己 p99 512ms、最大在途 5515）；HTTP 卡上的改善小于环境噪声，详见探针 |
 
 `bench-run.sh` 另读 `BENCH_HARNESS_OPTS`（追加在命令行参数之后，`crossval.sh` 经它启动 harness，同样生效），对照实验就是这样改选项的：
@@ -368,8 +370,16 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
   上下文切换是 `/proc/self/task/*/status` 的 `voluntary_ctxt_switches` / `nonvoluntary_ctxt_switches` 对存活线程求和
   （`/proc/self/status` 的这两项只是主线程的值，不能用；窗口内退出的线程其计数会丢失，`threads` 记录两次快照的线程数以便核对）。
   服务端经 `BenchService.stats()`（gRPC 的 `Stats`、HTTP 卡 `GET /stats`）返回同一份。结果进 `rounds[].io = {source, window_requests,
-  client: {syscr, syscw, vol_cs, nonvol_cs, threads, *_per_request}, server: {...}}`，每请求值 = 差值 / 窗口内完成的请求数（成功 + 失败，即 `window.requests`）。
+  client: {syscr, syscw, vol_cs, nonvol_cs, threads, *_per_request, by_group}, server: {...}}`，每请求值 = 差值 / 窗口内完成的请求数（成功 + 失败，即 `window.requests`）。
   Markdown 轮次表多一列"write 系统调用/请求 客户端/服务端"，对比表另有"上下文切换/请求"。
+- **上下文切换按线程组**（`rounds[].io.<端>.by_group`，Linux）：同一次遍历里再读每个线程的 `/proc/self/task/<tid>/comm`（线程名的前 15 字节），
+  按前缀归组：`netty_io`（`rpc-client-io` / `rpc-server-work` / `rpc-server-boss`，对比对象与 HTTP 卡的事件循环）、`biz_pool`（`rpc-server-biz`、
+  gRPC / Dubbo 的业务线程）、`fjp`（`ForkJoinPool*`：虚拟线程载体与 commonPool）、`timers`（`CompletableFutu`——`orTimeout` 的延迟调度线程、
+  `VirtualThread-u`——虚拟线程 unparker）、`harness`（`bench-*`：开环调度与工作者线程）、`jvm`（GC / JIT / VM 内部线程）、`other`（其余，含名为
+  `java` 的主线程）。每组记 `threads`（两次快照的存活线程数）、`vol_cs` / `nonvol_cs` 差值与 `vol_cs_per_request` / `nonvol_cs_per_request` /
+  `cs_per_request`。各组之和等于该端的 `vol_cs` / `nonvol_cs`（同一批线程）。窗口内退出又新建的线程（例如 JIT 的动态编译线程）会让所在组出现
+  小的负值，与总数的口径相同。服务端经同一个统计端点返回（键 `io.group.<组>.vol_cs` 等），旧服务端没有这些键时该端不出 `by_group`。
+  Markdown 报告在轮次表后给正式轮的分组小表。
 - **JFR**：`BENCH_JFR=1` 时 `bench-server.sh` / `bench-run.sh` 给 JVM 追加 `-XX:StartFlightRecording=filename=<dir>/jfr-<server|client>-<yyyyMMdd-HHmmss>.jfr,settings=profile`
   （服务端 `<dir>` = `BENCH_JFR_DIR`，缺省 `target/jfr`，`compare.sh` / `sweep.sh` 设为结果目录；压测端 = `--out`）。`*.jfr` 已被 `.gitignore` 忽略，不随归档入库；
   `settings=profile` 有可见的开销，录了 JFR 的运行不作正式数字。
@@ -395,9 +405,9 @@ JSON 顶层（`schema_version: 1`）：
 | `run` | `command`（完整命令行）、`target`（直连 / 注册中心、实际提供者地址、序列化器、负载均衡、每节点连接数） |
 | `run.target`（rpc 卡与对比对象） | `transport`、`mode`、`address`、`providers`、`serializer`、`connections_per_node`（实际连接数：rpc 每节点连接、gRPC channel 数、Dubbo 客户端实例数）、`connection_model`（一句话的连接与多路复用方式）、`connections_meaning` / `connections_source`（`target.connections` 在这个 transport 上的含义、取自卡片还是缺省）、`io_transport`、`io_threads`（客户端事件循环的实际线程数）、`retries`、`call_style`；对比对象另有 `grpc_version` / `dubbo_version`、`retry_policy`、`url` 等 |
 | `environment` | 压测端：OS、`wsl`、CPU、`available_cpus`（JVM 可用核数 = `availableProcessors`，受 taskset 影响）、`host_cpus`（主机逻辑核数：Linux 数 `/proc/cpuinfo` 的 processor 行、读不到用 `nproc --all`，Windows 读 `NUMBER_OF_PROCESSORS`）、`cpus_allowed`、内存、JDK、`jvm_args`、GC、Netty、`git_sha` / `git_dirty` / `git_dirty_files`、主机名、`power_supply`、`cpu_governor`、开始 / 结束时间、`harness_version`、`pid`、`metrics_enabled`（`--metrics-port` 是否开启）。`available_cpus` 原名 `logical_cpus`，旧结果文件照常渲染 |
-| `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http`。rpc 服务端与对比对象的服务端另有 `transport`、`server_io_threads`（worker 事件循环的实际线程数）、`server_executor`（业务方法在哪执行）、`server_executor_kind`（机器可读：rpc 为 `fixed` / `virtual` / `direct`，gRPC 为 `grpc-default` / `fixed` / `direct`）；rpc 服务端另有 `server_flush_consolidation`（`on` / `off`）；gRPC 另有 `grpc_version` / `grpc_netty_version`，Dubbo 另有 `dubbo_version` |
+| `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http`。rpc 服务端与对比对象的服务端另有 `transport`、`server_io_threads`（worker 事件循环的实际线程数）、`server_executor`（业务方法在哪执行）、`server_executor_kind`（机器可读：rpc 为 `fixed` / `virtual` / `direct`，gRPC 为 `grpc-default` / `fixed` / `direct`）；rpc 服务端另有 `server_flush_consolidation` / `server_write_queue`（`on` / `off`）；gRPC 另有 `grpc_version` / `grpc_netty_version`，Dubbo 另有 `dubbo_version` |
 | `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads` / `io_busy_poll`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
-| `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads`（rpc 卡与对比对象取 `run.target.io_threads`）/ `io_busy_poll`（只对 http 卡）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source`、`flush_consolidation`（rpc 卡：`default (on)` / `on` / `off`） |
+| `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads`（rpc 卡与对比对象取 `run.target.io_threads`）/ `io_busy_poll`（只对 http 卡）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source`、`flush_consolidation` / `write_queue`（rpc 卡：`default (on)` / `on` / `off`） |
 | `run.pre_warmup` | 预热段的摘要（`duration_ms`、`issued`、`successes`、`errors`、`latency_ms`、`service_time_ms`、`dispatch_lag_ms`、`backlog_dropped`、`scheduler`）；关闭时为 `"off"` |
 | `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况：节拍、`max_inflight`、`workers` / `pool_size`、`dispatcher_thread`、`pin`——绑核读回的结果与轮末的 `stray_threads_at_end`）、`warmup_completed`、`dispatcher_delayed`（开环）、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上）、`io`（统计窗口内两端的读写系统调用与上下文切换及其每请求值，同上） |
 | `summary` | `official_round`、`selection_rule`、`official`（正式轮的数字）、`spread`（各指标的 min / max / range / range_pct） |
@@ -593,7 +603,7 @@ bash bench/bin/compare.sh --transports rpc-direct --out <dir>   # 本框架服�
 `compare --in <dir>`（`report` 汇总时也附上）把结果分组：负载模型、服务、payload、时长 / 预热 / 窗口 / 轮数 / 超时、是否同机全部相同的为一组；
 组内取值不止一种的 `transport`（连同序列化）、`connections`（实际连接数，卡片没写 `target.connections` 的标"缺省"）、`concurrency`、`rate`、
 `io_threads`（只有命令行显式给了 `--io-threads` 才算，各 transport 的缺省写法不同、不算对比轴）、`server_executor`（服务端环境的 `server_executor_kind`）、
-`flush_consolidation`（本框架两端的 flush 合并）自动成为对比轴，每个轴一张表、表内其余轴取值相同。
+`flush_consolidation`（本框架两端的 flush 合并）、`write_queue`（本框架两端的写队列）自动成为对比轴，每个轴一张表、表内其余轴取值相同。
 每行取该结果的正式轮：吞吐（及相对首行的倍数）、p50 / p99 / p99.9 / max、开环的服务时间 p99、两组核的 CPU、client_bound、两端 GC 停顿、
 两端每请求的 write 系统调用与上下文切换、窗口错误、判定、连接方式、客户端 IO 线程、服务端配置（IO 线程与执行器）、结果文件。
 
@@ -607,6 +617,7 @@ bash bench/bin/sweep.sh --connections 2,4,8   # 连接数扫描：closed 128，�
 bash bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-v1,compare-closed64-rpc-v1                 # 单连接上限：同一个服务端上 1 vs 2 条连接
 bash bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-direct-v1,compare-closed64-rpc-direct-v1   # 同上，服务端 direct（取自卡片的 target.server_executor）
 SWEEP_SERVER_ARGS="--flush-consolidation off" BENCH_HARNESS_OPTS="--flush-consolidation off" bash bench/bin/sweep.sh --cards ...   # flush 合并 A/B 的 off 一侧
+SWEEP_SERVER_ARGS="--write-queue off" BENCH_HARNESS_OPTS="--write-queue off" bash bench/bin/sweep.sh --cards ...                   # 写队列 A/B 的 off 一侧
 ```
 
 `--cards <id,id,...>` 只跑列出的卡（`<profiles>/<id>.yaml`，不加后缀），各卡的 `target.server_executor` 必须一致。

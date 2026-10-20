@@ -270,6 +270,14 @@ final class MarkdownReport {
 			md.append("各轮极差：").append(String.join("，", spreads)).append("。");
 		}
 		md.append("\n\n");
+		for (Object r : list(json.get("rounds"))) {
+			Map<?, ?> round = map(r);
+			if (official != null && official.equals(round.get("round")) && IoSampler.hasGroups(round)) {
+				md.append("上下文切换按线程组（正式轮，统计窗口内；按线程名前缀归组，口径见 docs/benchmarking.md）：\n\n");
+				IoSampler.groupTable(md, round);
+				md.append('\n');
+			}
+		}
 
 		md.append(sub).append(" 断言\n\n");
 		List<Object> asserts = list(validity.get("asserts"));

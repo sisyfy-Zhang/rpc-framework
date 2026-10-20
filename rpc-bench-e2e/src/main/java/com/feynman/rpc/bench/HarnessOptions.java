@@ -24,9 +24,10 @@ import java.util.Map;
  * @param preWarmup   第 1 轮之前以同样负载跑的预热段（不计入任何一轮）；null = 卡片的 {@code load.warmup}，{@link Duration#ZERO} = 不跑
  * @param flushConsolidation rpc 卡：{@code RpcClientConfig.flushConsolidation}（{@code --flush-consolidation on|off}）；null = 框架缺省（开）。
  *                    只用于同一构建内的 A/B 对照；其它 transport 给了就是用法错误
+ * @param writeQueue  rpc 卡：{@code RpcClientConfig.writeQueue}（{@code --write-queue on|off}）；null = 框架缺省（开）。用法同 flushConsolidation
  */
 public record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
-		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation) {
+		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation, Boolean writeQueue) {
 
 	static final String WORKERS_PER_REQUEST = "per-request";
 	static final String WORKERS_POOL = "pool";
@@ -38,25 +39,35 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 	static final int OPEN_HTTP_IO_THREADS = 1;
 
 	/** 不带任何选项时的行为。 */
-	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null);
+	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null, null);
 
-	/** 不含 {@code flushConsolidation} 的旧形式（对比模块与既有测试用），等价于它为 null。 */
+	/** 不含 {@code flushConsolidation} / {@code writeQueue} 的旧形式（对比模块与既有测试用），等价于它们为 null。 */
 	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
 			Integer pinDispatcher, Duration preWarmup) {
-		this(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, null);
+		this(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, null, null);
 	}
 
 	/** 同一组选项，{@code flushConsolidation} 换成给定值（{@code on} / {@code off} 文本，null = 缺省）。 */
 	HarnessOptions withFlushConsolidation(String onOff) {
-		Boolean flush = null;
-		if (onOff != null) {
-			flush = switch (onOff.trim()) {
-				case "on" -> true;
-				case "off" -> false;
-				default -> throw new IllegalArgumentException("--flush-consolidation must be on or off, got \"" + onOff + "\"");
-			};
+		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup,
+				onOff("--flush-consolidation", onOff), writeQueue);
+	}
+
+	/** 同一组选项，{@code writeQueue} 换成给定值（{@code on} / {@code off} 文本，null = 缺省）。 */
+	HarnessOptions withWriteQueue(String onOff) {
+		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation,
+				onOff("--write-queue", onOff));
+	}
+
+	private static Boolean onOff(String option, String onOff) {
+		if (onOff == null) {
+			return null;
 		}
-		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flush);
+		return switch (onOff.trim()) {
+			case "on" -> true;
+			case "off" -> false;
+			default -> throw new IllegalArgumentException(option + " must be on or off, got \"" + onOff + "\"");
+		};
 	}
 
 	public HarnessOptions {
@@ -258,6 +269,9 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 		json.put("pre_warmup_source", preWarmup == null ? "load.warmup" : "--pre-warmup");
 		json.put("flush_consolidation", !profile.target().rpc() ? "n/a (" + transport + ")"
 				: flushConsolidation == null ? "default (on)" : flushConsolidation ? "on" : "off");
+		json.put("write_queue", !profile.target().rpc() ? "n/a (" + transport + ")"
+				: writeQueue == null ? "default (" + (com.feynman.rpc.core.config.RpcClientConfig.DEFAULT_WRITE_QUEUE ? "on" : "off") + ")"
+						: writeQueue ? "on" : "off");
 		return json;
 	}
 }

@@ -7,7 +7,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.client.NettyClient;
@@ -28,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 缺陷 F2：回包写失败不再静默。业务方法执行期间客户端断开，业务线程随后写回包必然失败（连接已关闭）——
  * 每次失败计入服务端的 {@code replyWriteFailures}（同时记 debug；每条连接的第一次另记一行 warn），在途计数照常归零。
+ * 写队列开（业务线程的回包经 ConnectionWriteQueue）与关（每个回包一个写任务）两条路径都要成立。
  */
 class ReplyWriteFailureTest {
 
@@ -35,8 +37,9 @@ class ReplyWriteFailureTest {
 		String slow(String s);
 	}
 
-	@Test
-	void replyWritesOnAClosedConnectionAreCountedAndTheGateStillDrains() throws Exception {
+	@ParameterizedTest(name = "writeQueue={0}")
+	@ValueSource(booleans = { true, false })
+	void replyWritesOnAClosedConnectionAreCountedAndTheGateStillDrains(boolean writeQueue) throws Exception {
 		CountDownLatch entered = new CountDownLatch(2);
 		CountDownLatch release = new CountDownLatch(1);
 		ServiceKey key = ServiceKey.of(Slow.class);
@@ -51,7 +54,7 @@ class ReplyWriteFailureTest {
 			}
 			return s;
 		});
-		NettyServer server = new NettyServer(dispatcher, ExecutorConfig.fixed(4), new SimpleTestSerializer().code());
+		NettyServer server = new NettyServer(dispatcher, ExecutorConfig.fixed(4), new SimpleTestSerializer().code(), null, writeQueue);
 		NettyClient client = new NettyClient(Serializers.load(SimpleTestSerializer.NAME, Map.of()), 1, new LoadStats());
 		try {
 			int port = server.bind(0).getPort();

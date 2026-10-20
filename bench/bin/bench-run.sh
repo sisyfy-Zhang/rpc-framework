@@ -13,7 +13,7 @@
 #           没有 --out 时为 BENCH_GC_LOG_DIR（缺省 <仓库>/target/gc-logs）。*.log 已被 .gitignore 忽略，不会随归档入库。
 #           BENCH_JFR=1 时追加 -XX:StartFlightRecording=filename=<dir>/jfr-client-<yyyyMMdd-HHmmss>.jfr,settings=profile，<dir> 为 --out 的值，
 #           没有 --out 时为 BENCH_JFR_DIR（缺省 <仓库>/target/jfr）。*.jfr 已被 .gitignore 忽略。
-#           rpc 卡的 flush 合并 A/B：--flush-consolidation on|off（或放进 BENCH_HARNESS_OPTS），见 docs/benchmarking.md。
+#           rpc 卡的 flush 合并 / 写队列 A/B：--flush-consolidation on|off、--write-queue on|off（或放进 BENCH_HARNESS_OPTS），见 docs/benchmarking.md。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

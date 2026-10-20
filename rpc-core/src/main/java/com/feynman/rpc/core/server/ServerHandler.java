@@ -1,10 +1,12 @@
 package com.feynman.rpc.core.server;
 
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.feynman.rpc.core.internal.ConnectionWriteQueue;
 import com.feynman.rpc.core.internal.InFlightGate;
 import com.feynman.rpc.core.protocol.MessageType;
 import com.feynman.rpc.core.protocol.RpcMessage;
@@ -12,6 +14,7 @@ import com.feynman.rpc.core.protocol.Status;
 import com.feynman.rpc.core.serialize.Serializers;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -39,7 +42,11 @@ import io.netty.util.ReferenceCountUtil;
  *
  * <p>回包写失败（连接已断、编码器拒绝）不会静默：每次记 debug（requestId、状态、原因类名）并计入所属服务端的
  * {@code replyWriteFailures}，每条连接的第一次另记一行 warn（之后的同连接失败只记 debug，避免断连时刷屏）。
- * 客户端那一侧此时只能等到超时或连接关闭，服务端日志是唯一的线索。
+ * 客户端那一侧此时只能等到超时或连接关闭，服务端日志是唯一的线索。回包对象本身就是它的 promise 与写完成监听器（{@link ReplyWrite}），
+ * 不再每次另配监听器 lambda。
+ *
+ * <p>写队列（{@code RpcServerConfig.writeQueue}，缺省开）：业务线程的回包进本连接的 {@link ConnectionWriteQueue}，每批只向事件循环投
+ * 一次 drain 任务、批末一次 flush；IO 线程上的回包（direct 执行器、协商、拒绝）不经队列，直接写出。关掉时每个回包单独投一个写任务。
  *
  * <p>引用计数：REQUEST 的所有权交给业务线程上的分发器（由它释放）；投递失败、被拒绝、attachments 非法时在这里释放；
  * 其余消息处理完即释放。
@@ -56,18 +63,31 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 	private final LongAdder replyWriteFailures;
 	/** 本连接是否已经为回包写失败记过 warn。只在事件循环上写；偶发重复一行 warn 无害，不需要更强的同步。 */
 	private volatile boolean replyWriteFailureWarned;
+	/** 是否为本连接建写队列（{@code RpcServerConfig.writeQueue}）。 */
+	private final boolean useWriteQueue;
+	/** 本连接的写队列；{@code useWriteQueue} 关时为 null。handlerAdded（事件循环上、第一条消息之前）里建。 */
+	private volatile ConnectionWriteQueue writeQueue;
 
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode) {
-		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, new LongAdder());
+		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, new LongAdder(), true);
 	}
 
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode,
-			LongAdder replyWriteFailures) {
+			LongAdder replyWriteFailures, boolean writeQueue) {
 		this.dispatcher = dispatcher;
 		this.bizExecutor = bizExecutor;
 		this.gate = gate;
 		this.fallbackSerializerCode = fallbackSerializerCode;
 		this.replyWriteFailures = replyWriteFailures;
+		this.useWriteQueue = writeQueue;
+	}
+
+	@Override
+	public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+		if (useWriteQueue) {
+			writeQueue = new ConnectionWriteQueue(ctx.channel());
+		}
+		super.handlerAdded(ctx);
 	}
 
 	@Override
@@ -183,25 +203,56 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 			reply.release();
 			return;
 		}
-		long requestId = request.requestId();
-		Status status = reply.status();
-		ctx.writeAndFlush(reply).addListener((ChannelFuture f) -> {
-			if (!f.isSuccess()) {
-				replyWriteFailed(f, requestId, status);
-			}
-		});
+		ReplyWrite entry = new ReplyWrite(ctx.channel(), reply, request.requestId(), reply.status());
+		ConnectionWriteQueue queue = writeQueue;
+		if (queue != null) {
+			// 在事件循环上（direct 执行器、协商、拒绝）直接写出；业务线程上入队，每批一次 drain 任务
+			queue.enqueue(entry);
+			return;
+		}
+		entry.addListener(entry);
+		ctx.writeAndFlush(reply, entry);
 	}
 
-	private void replyWriteFailed(ChannelFuture f, long requestId, Status status) {
+	/** 一个回包：同时是它的 promise 与写完成监听器，携带写失败时要报告的 requestId 与状态。 */
+	private final class ReplyWrite extends ConnectionWriteQueue.Entry {
+		private final long requestId;
+		private final Status status;
+
+		ReplyWrite(Channel channel, RpcMessage reply, long requestId, Status status) {
+			super(channel, reply);
+			this.requestId = requestId;
+			this.status = status;
+		}
+
+		@Override
+		protected boolean beforeWrite(Channel channel) {
+			// 连接已断也照常交给 Netty：写失败计数与告警由 written 统一报告（与不经队列时一致）
+			return true;
+		}
+
+		@Override
+		protected void written(ChannelFuture future) {
+			if (!future.isSuccess()) {
+				replyWriteFailed(future.cause(), channel(), requestId, status);
+			}
+		}
+
+		@Override
+		protected void notWritten(RejectedExecutionException cause) {
+			replyWriteFailed(cause, channel(), requestId, status);
+		}
+	}
+
+	private void replyWriteFailed(Throwable cause, Channel channel, long requestId, Status status) {
 		replyWriteFailures.increment();
-		Throwable cause = f.cause();
 		String causeName = cause == null ? "unknown" : cause.getClass().getName();
 		if (!replyWriteFailureWarned) {
 			replyWriteFailureWarned = true;
 			log.warn("Failed to write reply for request {} (status {}) to {}: {}: {}; further reply write failures on this connection"
-					+ " are logged at DEBUG", requestId, status, f.channel().remoteAddress(), causeName, cause == null ? "" : cause.getMessage());
+					+ " are logged at DEBUG", requestId, status, channel.remoteAddress(), causeName, cause == null ? "" : cause.getMessage());
 		} else if (log.isDebugEnabled()) {
-			log.debug("Failed to write reply for request {} (status {}) to {}: {}", requestId, status, f.channel().remoteAddress(), causeName);
+			log.debug("Failed to write reply for request {} (status {}) to {}: {}", requestId, status, channel.remoteAddress(), causeName);
 		}
 	}
 

@@ -29,12 +29,13 @@ import io.micrometer.core.instrument.MeterRegistry;
  * <pre>
  *   server --port &lt;p&gt; [--host &lt;h&gt;] [--registry zk://host:port | --no-registry] [--serializer protobuf] [--metrics-port &lt;p&gt;]
  *          [--http-port &lt;p&gt;] [--io-threads &lt;n&gt;] [--executor fixed|virtual|direct] [--flush-consolidation on|off]
+ *          [--write-queue on|off]
  *   server --transport &lt;name&gt; ...     （对比对象的服务端：参数交给该 transport 的 {@link ServerLauncher}）
  *   run    --profile &lt;file.yaml&gt; (--registry zk://host:port | --direct host:port[,host:port]) [--out &lt;dir&gt;] [--label &lt;text&gt;]
  *          [--metrics-port &lt;p&gt;]       （transport: http 的卡不带 --registry / --direct：目标是卡上的 target.http.url）
  *          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads &lt;n&gt;] [--io-busy-poll on|off]
  *                                       （--io-threads 对 rpc 卡 = RpcClientConfig.ioThreads，对比对象由其提供者使用）
- *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0] [--flush-consolidation on|off]
+ *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0] [--flush-consolidation on|off] [--write-queue on|off]
  *                                       （harness 实现选项，见 {@link HarnessOptions}；--flush-consolidation 只用于 rpc 卡）
  *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总，含对比表）
  *   compare --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]  （同一负载 / 负载大小、不同 transport 或并发的结果并排成表，见 {@link CompareReport}）
@@ -102,11 +103,13 @@ public final class Bench {
 			return pluginServer(transport, rawArgs, out);
 		}
 		options.allowOnly("transport", "port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port", "io-threads",
-				"executor", "flush-consolidation");
+				"executor", "flush-consolidation", "write-queue");
 		int port = options.intValue("port");
 		int ioThreads = options.has("io-threads") ? options.intValue("io-threads") : 0;
 		ExecutorConfig executor = executor(options.value("executor", BenchServer.EXECUTOR_FIXED));
 		boolean flushConsolidation = onOff("flush-consolidation", options.value("flush-consolidation", "on"));
+		boolean writeQueue = onOff("write-queue", options.value("write-queue",
+				com.feynman.rpc.core.config.RpcServerConfig.DEFAULT_WRITE_QUEUE ? "on" : "off"));
 		Integer metricsPort = options.has("metrics-port") ? options.intValue("metrics-port") : null;
 		Integer httpPort = options.has("http-port") ? options.intValue("http-port") : null;
 		String host = options.value("host", null);
@@ -121,7 +124,7 @@ public final class Bench {
 		MeterRegistry metrics = metricsPort == null ? null : PrometheusEndpoint.newRegistry();
 		BenchServer server;
 		try {
-			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation);
+			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation, writeQueue);
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -152,7 +155,7 @@ public final class Bench {
 				+ (registry == null ? " registry=none" : " registry=zk://" + registry.address()) + " serializer=" + serializer
 				+ (http == null ? "" : " http_port=" + http.port()) + " transport=rpc io_threads=" + server.environment().get("server_io_threads")
 				+ " executor=" + server.environment().get("server_executor_kind") + " flush_consolidation="
-				+ server.environment().get("server_flush_consolidation"));
+				+ server.environment().get("server_flush_consolidation") + " write_queue=" + server.environment().get("server_write_queue"));
 		out.flush();
 		stopped.await();
 		return OK;
@@ -206,13 +209,14 @@ public final class Bench {
 
 	private static int run(Options options, String[] rawArgs, PrintStream out) throws Exception {
 		options.allowOnly("profile", "out", "registry", "direct", "label", "metrics-port", "open-workers", "http-client", "io-threads", "io-busy-poll",
-				"pin-dispatcher", "pre-warmup", "flush-consolidation");
+				"pin-dispatcher", "pre-warmup", "flush-consolidation", "write-queue");
 		HarnessOptions harnessOptions;
 		try {
 			harnessOptions = HarnessOptions.parse(options.value("open-workers", null), options.value("http-client", null),
 					options.value("io-threads", null),
 					options.value("io-busy-poll", null), options.value("pin-dispatcher", null), options.value("pre-warmup", null))
-					.withFlushConsolidation(options.value("flush-consolidation", null));
+					.withFlushConsolidation(options.value("flush-consolidation", null))
+					.withWriteQueue(options.value("write-queue", null));
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -227,6 +231,9 @@ public final class Bench {
 		Profile profile = ProfileLoader.load(profileFile);
 		if (harnessOptions.flushConsolidation() != null && !profile.target().rpc()) {
 			throw new UsageException("--flush-consolidation is RpcClientConfig.flushConsolidation and applies to transport: rpc cards only");
+		}
+		if (harnessOptions.writeQueue() != null && !profile.target().rpc()) {
+			throw new UsageException("--write-queue is RpcClientConfig.writeQueue and applies to transport: rpc cards only");
 		}
 		CallTarget.Endpoint endpoint;
 		if (profile.target().http()) {
@@ -438,13 +445,14 @@ public final class Bench {
 				usage:
 				  server --port <p> [--host <advertised-host>] (--registry zk://host:port | --no-registry) [--serializer protobuf]
 				         [--metrics-port <p>] [--http-port <p>] [--io-threads <n>] [--executor fixed|virtual|direct]
-				         [--flush-consolidation on|off]
+				         [--flush-consolidation on|off] [--write-queue on|off]
 				  server --transport <name> --port <p> ...   (comparison server from a CallTargetProvider on the classpath)
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)
 				         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>]
 				         [--io-busy-poll on|off] [--pin-dispatcher <cpu>|off] [--pre-warmup <duration>|0]
 				         [--flush-consolidation on|off]   (rpc cards only: RpcClientConfig.flushConsolidation)
+				         [--write-queue on|off]           (rpc cards only: RpcClientConfig.writeQueue)
 				  report --in <dir|result.json> [--out <file.md>]
 				  compare --in <dir|result.json> [--out <file.md>]
 				  crossval --harness <result.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] --out <dir>
