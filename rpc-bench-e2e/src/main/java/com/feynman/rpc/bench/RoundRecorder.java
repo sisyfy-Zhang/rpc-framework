@@ -22,7 +22,8 @@ import org.HdrHistogram.Histogram;
  *   <li>延迟的起点由驱动决定：闭环 = 调用前的 nanoTime；开环 = 计划发出时刻（修正 coordinated omission），
  *       开环另记"实际发出 → 完成"的服务时间。</li>
  *   <li>每秒成功数 / 错误数的时间序列覆盖全程（含预热），按完成时刻归桶，用来看降频、GC 停顿与抖动。</li>
- *   <li>统计窗口内两端（压测端 / 服务端）的 GC 次数与停顿时间（{@link GcSampler}），进 {@code gc}。</li>
+ *   <li>统计窗口内两端（压测端 / 服务端）的 GC 次数与停顿时间（{@link GcSampler}），进 {@code gc}；读写系统调用与上下文切换
+ *       （{@link IoSampler}），进 {@code io}。</li>
  *   <li>超出直方图上限（{@code measure.histogram.max}）的值按上限记录并计入 {@code histogram_clamped}。</li>
  * </ul>
  * 写入方是多个虚拟线程：直方图用 {@link ConcurrentHistogram}，计数用 {@link LongAdder}；读取只在本轮所有调用结束之后。
@@ -75,6 +76,11 @@ final class RoundRecorder {
 	 * 采样线程没能完成（例如本轮提前结束）时整项为 unknown。
 	 */
 	private volatile Object gc = EnvironmentProbe.UNKNOWN;
+	/**
+	 * 统计窗口内两端的读写系统调用与上下文切换：{@code {source, client: {...}, server: {...}}}（{@link IoSampler#delta}），
+	 * 每请求值在 {@link #toJson()} 里按窗口内完成的请求数补上；非 Linux 一端记 n/a，采样线程没能完成时整项为 unknown。
+	 */
+	private volatile Object io = EnvironmentProbe.UNKNOWN;
 
 	RoundRecorder(int round, Profile profile) {
 		this.round = round;
@@ -158,6 +164,10 @@ final class RoundRecorder {
 		this.gc = gc;
 	}
 
+	void io(Object io) {
+		this.io = io;
+	}
+
 	void finish() {
 		this.endNanos = System.nanoTime();
 		this.endedAt = Instant.now();
@@ -238,6 +248,7 @@ final class RoundRecorder {
 		json.put("scheduler", schedulerInfo);
 		json.put("cpu", cpu);
 		json.put("gc", gc);
+		json.put("io", ioWithPerRequest(windowSuccess.sum() + windowErrors.sum()));
 		boolean warmup = warmupCompleted();
 		List<String> reasons = new ArrayList<>();
 		if (!warmup) {
@@ -266,6 +277,28 @@ final class RoundRecorder {
 		series.put("errors", toList(seriesErrors));
 		json.put("timeseries", series);
 		return json;
+	}
+
+	/** io 差值加上每请求值（窗口内完成的请求数 = 成功 + 失败，与 window.requests 同一个数）。 */
+	private Object ioWithPerRequest(long requests) {
+		if (!(io instanceof Map<?, ?> m)) {
+			return io;
+		}
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("source", m.get("source"));
+		out.put("window_requests", requests);
+		for (String side : List.of("client", "server")) {
+			Object value = m.get(side);
+			if (value instanceof Map<?, ?> sideMap) {
+				Map<String, Object> copy = new LinkedHashMap<>();
+				sideMap.forEach((k, v) -> copy.put(String.valueOf(k), v));
+				IoSampler.perRequest(copy, requests);
+				out.put(side, copy);
+			} else {
+				out.put(side, value);
+			}
+		}
+		return out;
 	}
 
 	private static Map<String, Object> quantiles(Histogram h) {

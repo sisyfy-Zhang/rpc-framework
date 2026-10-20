@@ -109,8 +109,8 @@ final class LoadDriver {
 	}
 
 	/**
-	 * 窗口起止各采一次：先 CPU（读文件，最便宜、对时刻最敏感）、再本进程 GC、再服务端统计（一次 RPC / HTTP 调用）。
-	 * 三者互不影响：任何一项失败只把那一项记为 unknown。
+	 * 窗口起止各采一次：先 CPU（读文件，最便宜、对时刻最敏感）、再本进程 GC 与系统调用 / 上下文切换（{@link IoSampler}）、
+	 * 再服务端统计（一次 RPC / HTTP 调用，GC 与 io 同一份）。互不影响：任何一项失败只把那一项记为 unknown。
 	 */
 	private static void sampleWindow(CpuSampler cpu, CallTarget target, Profile profile, RoundRecorder recorder) {
 		long windowMs = profile.load().window().toMillis();
@@ -120,18 +120,28 @@ final class LoadDriver {
 			sleepUntil(windowStart);
 			Map<Integer, long[]> cpuBefore = cpu == null ? null : cpuSnapshot();
 			GcSampler.Snapshot clientBefore = GcSampler.snapshot();
-			GcSampler.Snapshot serverBefore = serverStats(target);
+			IoSampler.Snapshot clientIoBefore = IoSampler.snapshot();
+			Map<String, String> serverBefore = serverStats(target);
 			sleepUntil(windowEnd);
 			Map<Integer, long[]> cpuAfter = cpu == null ? null : cpuSnapshot();
 			GcSampler.Snapshot clientAfter = GcSampler.snapshot();
-			GcSampler.Snapshot serverAfter = serverBefore == null ? null : serverStats(target);
+			IoSampler.Snapshot clientIoAfter = IoSampler.snapshot();
+			Map<String, String> serverAfter = serverBefore == null ? null : serverStats(target);
 			if (cpu != null) {
 				recorder.cpu(cpuBefore == null || cpuAfter == null ? EnvironmentProbe.UNKNOWN : cpu.measure(cpuBefore, cpuAfter, windowMs));
 			}
+			GcSampler.Snapshot serverGcBefore = gcOf(serverBefore);
+			GcSampler.Snapshot serverGcAfter = gcOf(serverAfter);
 			Map<String, Object> gc = new LinkedHashMap<>();
 			gc.put("client", GcSampler.delta(clientBefore, clientAfter, windowMs));
-			gc.put("server", serverAfter == null ? EnvironmentProbe.UNKNOWN : GcSampler.delta(serverBefore, serverAfter, windowMs));
+			gc.put("server", serverGcBefore == null || serverGcAfter == null ? EnvironmentProbe.UNKNOWN
+					: GcSampler.delta(serverGcBefore, serverGcAfter, windowMs));
 			recorder.gc(gc);
+			Map<String, Object> io = new LinkedHashMap<>();
+			io.put("source", IoSampler.SOURCE);
+			io.put("client", clientIoBefore == null || clientIoAfter == null ? EnvironmentProbe.NA : IoSampler.delta(clientIoBefore, clientIoAfter));
+			io.put("server", ioSide(serverBefore, serverAfter));
+			recorder.io(io);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		} catch (RuntimeException e) {
@@ -150,12 +160,30 @@ final class LoadDriver {
 	}
 
 	/** 服务端统计（{@code BenchService.stats()} / {@code GET /stats}）；取不到（旧服务端、外部目标）时 null，记 unknown。 */
-	private static GcSampler.Snapshot serverStats(CallTarget target) {
+	private static Map<String, String> serverStats(CallTarget target) {
 		try {
-			return GcSampler.Snapshot.fromStrings(target.serverStats());
+			return target.serverStats();
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	private static GcSampler.Snapshot gcOf(Map<String, String> stats) {
+		try {
+			return stats == null ? null : GcSampler.Snapshot.fromStrings(stats);
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	/** 服务端 io 差值：统计取不到记 unknown；取到了但没有 io 字段（非 Linux 服务端、旧服务端）记 n/a。 */
+	private static Object ioSide(Map<String, String> before, Map<String, String> after) {
+		if (before == null || after == null) {
+			return EnvironmentProbe.UNKNOWN;
+		}
+		IoSampler.Snapshot b = IoSampler.Snapshot.fromStrings(before);
+		IoSampler.Snapshot a = IoSampler.Snapshot.fromStrings(after);
+		return a == null || b == null ? EnvironmentProbe.NA : IoSampler.delta(b, a);
 	}
 
 	private static void sleepUntil(long nanoTime) throws InterruptedException {

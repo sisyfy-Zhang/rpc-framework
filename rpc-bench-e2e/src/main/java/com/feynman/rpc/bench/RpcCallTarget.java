@@ -57,6 +57,11 @@ final class RpcCallTarget implements CallTarget {
 	 * @param ioThreads {@code --io-threads}：{@code RpcClientConfig.ioThreads}；null = 0 = Netty 缺省（2 × 可用核数）
 	 */
 	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads) {
+		return connect(profile, endpoint, metrics, ioThreads, null);
+	}
+
+	/** @param flushConsolidation {@code --flush-consolidation}：{@code RpcClientConfig.flushConsolidation}；null = 框架缺省（开） */
+	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation) {
 		RegistryConfig registry = Endpoint.REGISTRY.equals(endpoint.mode())
 				? RegistryConfig.zookeeper(endpoint.address())
 				: DirectRegistryFactory.config(endpoint.address());
@@ -68,6 +73,9 @@ final class RpcCallTarget implements CallTarget {
 				.ioThreads(ioThreads == null ? 0 : ioThreads);
 		if (profile.target().connections() != null) {
 			builder.connectionsPerNode(profile.target().connections());
+		}
+		if (flushConsolidation != null) {
+			builder.flushConsolidation(flushConsolidation);
 		}
 		if (metrics != null) {
 			builder.clientFilter(new MicrometerClientFilter(metrics));
@@ -94,6 +102,8 @@ final class RpcCallTarget implements CallTarget {
 					+ com.feynman.rpc.core.config.RpcClientConfig.DEFAULT_CONNECTIONS_PER_NODE + ")");
 			description.put("connections_source", profile.target().connections() == null ? "default" : "target.connections");
 			description.put("io_transport", "nio");
+			description.put("flush_consolidation", client.config().flushConsolidation() ? "on" : "off");
+			description.put("server_executor_expected", profile.target().serverExecutor());
 			description.put("io_threads", client.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText() : client.config().ioThreads());
 			description.put("retries", 0);
 			description.put("call_style", "sync proxy method");

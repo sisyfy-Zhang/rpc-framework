@@ -20,6 +20,9 @@ Thumbs.db
 # Logs
 *.log
 
+# JDK Flight Recorder（BENCH_JFR=1 时压测脚本写进结果目录；体积大、含进程细节，不随归档入库）
+*.jfr
+
 # Design notes (local only)
 /DESIGN.md
 /DECISIONS.md

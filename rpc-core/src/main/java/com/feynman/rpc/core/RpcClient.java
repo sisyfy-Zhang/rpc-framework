@@ -122,7 +122,8 @@ public final class RpcClient implements AutoCloseable {
 				.getExtension(config.registry().type());
 		this.registry = registryFactory.create(config.registry());
 		try {
-			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats, config.ioThreads());
+			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats, config.ioThreads(),
+					config.flushConsolidation());
 		} catch (RuntimeException e) {
 			registry.close();
 			cluster.close();
@@ -176,7 +177,7 @@ public final class RpcClient implements AutoCloseable {
 		int retries = options.retries();
 		Invoker chain = FilterChain.build(filters, invocation -> invokeCluster(directory, invocation, retries));
 		Object proxy = Proxy.newProxyInstance(itf.getClassLoader(), new Class<?>[] { itf },
-				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate, config.syncWaitGrace()));
+				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate, config.syncWaitGrace(), this::inClientEventLoop));
 		return itf.cast(proxy);
 	}
 
@@ -192,6 +193,14 @@ public final class RpcClient implements AutoCloseable {
 			throw new RpcException("No provider of " + directory.key() + " discovered within " + wait.toMillis()
 					+ "ms (ReferenceOptions.awaitProviders)");
 		}
+	}
+
+	/**
+	 * 当前线程是否是本客户端的 IO 事件循环线程（异步方法的回调默认就在这里执行）。同步代理方法据此拒绝在事件循环上阻塞等待：
+	 * 那会让这条事件循环上所有连接停摆，嵌套调用的响应若恰好也由它读取则永远读不到（见 ReferenceProxy）。
+	 */
+	boolean inClientEventLoop() {
+		return transport.inEventLoop();
 	}
 
 	/** 经代理发起、尚未完成的调用数（含重试中的）。close() 等它归零；也可作为泄漏断言。 */

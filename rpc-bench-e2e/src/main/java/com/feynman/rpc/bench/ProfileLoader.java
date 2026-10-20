@@ -98,7 +98,7 @@ final class ProfileLoader {
 		if (s == null) {
 			return null;
 		}
-		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http");
+		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http", "server_executor");
 		// 内置 rpc / http + classpath 上的 CallTargetProvider（对比对象）；不认识的名字报错并列出可用的全部 transport
 		Map<String, CallTargetProvider> plugins;
 		try {
@@ -152,8 +152,16 @@ final class ProfileLoader {
 		Integer providers = s.integer("providers", true, 1, 1024);
 		// 可选：到每个提供者的连接数（rpc = connectionsPerNode，grpc = ManagedChannel 数，dubbo = 独立客户端实例数）；不写 = 各框架缺省
 		Integer connections = s.has("connections") ? s.integer("connections", false, 1, MAX_CONNECTIONS) : null;
+		// 被压服务端的业务执行器：只有本框架的卡声明它（对比对象的服务端执行器由各自的服务端参数决定，记在服务端环境里）
+		String serverExecutor = null;
+		if (Profile.TRANSPORT_RPC.equals(transport)) {
+			serverExecutor = s.has("server_executor") ? s.oneOf("server_executor", false, Profile.SERVER_EXECUTORS)
+					: Profile.DEFAULT_SERVER_EXECUTOR;
+		} else if (s.has("server_executor")) {
+			problems.add("target.server_executor: only applies to transport = rpc (a comparison server's executor is its own server option)");
+		}
 		return new Profile.Target(transport, service, method, kind, size, serializer, providers == null ? 0 : providers, null, 0,
-				connections);
+				connections, serverExecutor);
 	}
 
 	/**
@@ -168,6 +176,9 @@ final class ProfileLoader {
 		}
 		if (s.has("providers")) {
 			problems.add("target.providers: does not apply to transport = http (the target is a single URL)");
+		}
+		if (s.has("server_executor")) {
+			problems.add("target.server_executor: does not apply to transport = http");
 		}
 		if (s.has("connections")) {
 			problems.add("target.connections: does not apply to transport = http (the connection pool is target.http.connections)");

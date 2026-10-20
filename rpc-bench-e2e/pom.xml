@@ -117,6 +117,15 @@
           </execution>
         </executions>
       </plugin>
+      <!-- 测试 JVM 的堆上限 1g：端到端测试在进程内起服务端与压测端，不设上限时 JVM 按物理内存的 1/4 定堆，测试机内存紧张时
+           会吃掉大量提交内存。@{argLine}（JaCoCo agent）与 ${argLine}（命令行 -DargLine=...）的拼接方式同父 pom（pitfalls 第 25 条）。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <argLine>@{argLine} -Xmx1g ${argLine}</argLine>
+        </configuration>
+      </plugin>
       <!-- bench/bin/*.sh 的 classpath = target/classes + target/lib/*（不用 shade：报告里的 JVM 参数与类路径一目了然） -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

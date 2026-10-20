@@ -245,6 +245,25 @@ class ProfileLoaderTest {
 				null), "target.connections", "does not apply to transport = http");
 	}
 
+	/** target.server_executor：只用于 rpc 卡，取值 fixed | virtual | direct，缺省 fixed；对比对象与 http 卡不接受。 */
+	@Test
+	void serverExecutorIsAnRpcOnlyEnumDefaultingToFixed() {
+		Profile defaults = ProfileLoader.parse(BRIEF_EXAMPLE, null, "test");
+		assertEquals("fixed", defaults.target().serverExecutor());
+		assertEquals("fixed", ((java.util.Map<?, ?>) defaults.toJson().get("target")).get("server_executor"));
+		for (String kind : List.of("fixed", "virtual", "direct")) {
+			Profile p = ProfileLoader.parse(BRIEF_EXAMPLE.replace("  providers: 1\n", "  providers: 1\n  server_executor: " + kind + "\n"), null,
+					"test");
+			assertEquals(kind, p.target().serverExecutor());
+		}
+		assertProblem(problems(BRIEF_EXAMPLE.replace("  providers: 1\n", "  providers: 1\n  server_executor: grpc-default\n"), null),
+				"target.server_executor", "grpc-default");
+		assertProblem(problems(HTTP_CARD.replace("  payload: { kind: bytes, size: 1024 }\n",
+				"  payload: { kind: bytes, size: 1024 }\n  server_executor: direct\n"), null), "target.server_executor",
+				"does not apply to transport = http");
+		assertNull(ProfileLoader.parse(HTTP_CARD, null, "test").target().serverExecutor());
+	}
+
 	@Test
 	void theCrossValidationCardsAreValid() throws Exception {
 		Path profiles = Path.of("..", "bench", "profiles");

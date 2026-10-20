@@ -78,6 +78,8 @@ class ComparisonCardsTest {
 			}
 		}
 		pairs.add(new String[] { "sweep-closed128-rpc-v1", "sweep-c4-closed128-rpc-v1", "4" });
+		pairs.add(new String[] { "compare-closed64-rpc-v1", "sweep-c1-closed64-rpc-v1", "1" });
+		pairs.add(new String[] { "compare-closed64-rpc-direct-v1", "sweep-c1-closed64-rpc-direct-v1", "1" });
 		pairs.add(new String[] { "sweep-closed128-rpc-v1", "sweep-c8-closed128-rpc-v1", "8" });
 		for (String[] pair : pairs) {
 			List<String> base = keyLines(PROFILES.resolve(pair[0] + ".yaml"));
@@ -97,6 +99,30 @@ class ComparisonCardsTest {
 		assertEquals(128, c8.load().concurrency());
 		assertEquals(null, ProfileLoader.load(PROFILES.resolve("compare-closed64-rpc-v1.yaml")).target().connections(),
 				"the out-of-the-box cards leave connections to each framework's default");
+	}
+
+	/** 执行器对照卡（-direct）与对应的缺省卡只差 {@code target.server_executor: direct}（以及 id、问题）。 */
+	@Test
+	void directExecutorVariantsDifferOnlyInServerExecutor() throws Exception {
+		List<String[]> pairs = List.of(new String[] { "compare-closed64-rpc-v1", "compare-closed64-rpc-direct-v1" },
+				new String[] { "compare-open10k-rpc-v1", "compare-open10k-rpc-direct-v1" },
+				new String[] { "sweep-c1-closed64-rpc-v1", "sweep-c1-closed64-rpc-direct-v1" });
+		for (String[] pair : pairs) {
+			List<String> base = keyLines(PROFILES.resolve(pair[0] + ".yaml"));
+			List<String> variant = new ArrayList<>(keyLines(PROFILES.resolve(pair[1] + ".yaml")));
+			assertTrue(variant.remove("  server_executor: direct"), pair[1] + " declares target.server_executor: direct");
+			assertEquals(base.size(), variant.size(), pair[1]);
+			for (int i = 0; i < base.size(); i++) {
+				String a = base.get(i);
+				if (a.startsWith("profile:") || a.startsWith("question:")) {
+					continue;
+				}
+				assertEquals(a, variant.get(i), pair[1] + " must match " + pair[0] + " except target.server_executor");
+			}
+			assertEquals("direct", ProfileLoader.load(PROFILES.resolve(pair[1] + ".yaml")).target().serverExecutor());
+			assertEquals("fixed", ProfileLoader.load(PROFILES.resolve(pair[0] + ".yaml")).target().serverExecutor());
+		}
+		assertEquals(1, ProfileLoader.load(PROFILES.resolve("sweep-c1-closed64-rpc-v1.yaml")).target().connections());
 	}
 
 	/** 卡片的非注释、非空行。 */

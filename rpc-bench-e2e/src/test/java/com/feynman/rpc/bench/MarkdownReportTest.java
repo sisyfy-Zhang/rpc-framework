@@ -67,12 +67,12 @@ class MarkdownReportTest {
 	@Test
 	void roundTableFollowsMeasureReportAndBoldsTheOfficialRound() throws Exception {
 		String md = MarkdownReport.render(fixture(), "f.json");
-		assertTrue(md.contains("| 轮 | 窗口内请求 | 吞吐 (req/s) | p50 (ms) | p99 (ms) | 错误（窗口内） | 服务时间 p99 (ms) | 发出滞后 p99 (ms) | 客户端核 CPU | 服务端核 CPU | GC 停顿 客户端/服务端 (ms) | 有效 |"),
+		assertTrue(md.contains("| 轮 | 窗口内请求 | 吞吐 (req/s) | p50 (ms) | p99 (ms) | 错误（窗口内） | 服务时间 p99 (ms) | 发出滞后 p99 (ms) | 客户端核 CPU | 服务端核 CPU | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 有效 |"),
 				"columns follow measure.report (+ open-loop extras):\n" + md);
 		assertFalse(md.contains("p95 (ms)"), "p95 is not in measure.report");
-		assertTrue(md.contains("| 1 | 7000 | 1000.0 | 0.410 | 0.950 | 0 | 0.900 | 0.004 | 42.5% | 13.0% | 84 / 7 | 是 |"), md);
-		assertTrue(md.contains("| **2（正式）** | **7001** | **999.7** | **0.420** | **1.250** | **3（timeout×3）** | **1.200** | **0.005** | **n/a** | **n/a** | **0 / unknown** | **是** |"), md);
-		assertTrue(md.contains("| 0.006 | — | — | — | 是 |"), "a result file without rounds[].cpu / rounds[].gc renders —");
+		assertTrue(md.contains("| 1 | 7000 | 1000.0 | 0.410 | 0.950 | 0 | 0.900 | 0.004 | 42.5% | 13.0% | 84 / 7 | 1.20 / 0.34 | 是 |"), md);
+		assertTrue(md.contains("| **2（正式）** | **7001** | **999.7** | **0.420** | **1.250** | **3（timeout×3）** | **1.200** | **0.005** | **n/a** | **n/a** | **0 / unknown** | **n/a / unknown** | **是** |"), md);
+		assertTrue(md.contains("| 0.006 | — | — | — | — | 是 |"), "a result file without rounds[].cpu / rounds[].gc / rounds[].io renders —");
 		assertTrue(md.contains("正式轮：第 2 轮（开环：窗口 p99 的中位数那一轮）"));
 		assertTrue(md.contains("p99_ms 0.800（84.2%）"));
 	}

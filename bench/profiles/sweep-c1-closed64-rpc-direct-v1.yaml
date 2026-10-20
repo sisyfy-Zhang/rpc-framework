@@ -1,0 +1,33 @@
+# 口径卡（单连接上限，执行器对照，非缺省配置）：本框架，同机 loopback、1KB、单提供者，闭环 64 并发，直连（--direct），每节点 1 条连接，
+# 服务端业务执行器 direct（ExecutorConfig.direct()，opt-in）。与 sweep-c1-closed64-rpc-v1 只差 target.server_executor、
+# 与 compare-closed64-rpc-direct-v1 只差 target.connections：与 gRPC --executor direct 的单 channel 对位。
+# 跑法：bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-direct-v1,compare-closed64-rpc-direct-v1（sweep.sh 读 target.server_executor 给服务端传 --executor）。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: sweep-c1-closed64-rpc-direct-v1
+question: 同机 loopback、1KB、单提供者、直连，本框架 闭环 64 并发下的吞吐与两侧 CPU（每节点 1 条连接：单连接上限；服务端执行器 direct，非缺省）
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  connections: 1
+  server_executor: direct
+load:
+  model: closed
+  concurrency: 64
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

@@ -8,6 +8,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 
 import com.feynman.rpc.core.filter.Invocation;
 import com.feynman.rpc.core.internal.InFlightGate;
@@ -39,6 +40,11 @@ import com.feynman.rpc.core.filter.Result;
  * {@link IllegalStateException}——这是调用方的使用错误（用了已关闭的客户端），不是一次远程失败；已经发出的调用
  * 计入在途，close() 会等它们完成。
  *
+ * <p><b>不能在本客户端的 IO 事件循环线程上调用同步方法</b>：异步方法返回的 future 的回调（{@code thenApply} 等）
+ * 缺省就在这些线程上执行，在里面再调同步方法会阻塞事件循环——这条事件循环上所有连接停摆，嵌套调用的响应若恰好也由它读取则永远读不到，
+ * 只能等到超时。同步入口检测到这种情况直接抛 {@link IllegalStateException}（一次线程类型判断，普通线程上几乎零成本）；
+ * 异步方法不受影响（不等待，可以在回调里链式发起）。
+ *
  * <p>deadline 继承：{@code inheritDeadline} 打开时（默认），本次调用的超时取引用配置的超时与
  * {@link RpcContext} 上可继承的截止时间（服务端业务方法的入站 deadline、或 {@code withDeadline} 作用域）的较小者。
  */
@@ -50,15 +56,18 @@ final class ReferenceProxy implements InvocationHandler {
 	private final boolean inheritDeadline;
 	private final InFlightGate gate;
 	private final long syncWaitGraceNanos;
+	/** 当前线程是否是所属客户端的 IO 事件循环线程（RpcClient.inClientEventLoop）。 */
+	private final BooleanSupplier inClientEventLoop;
 
 	ReferenceProxy(ServiceKey key, Invoker chain, Duration timeout, boolean inheritDeadline, InFlightGate gate,
-			Duration syncWaitGrace) {
+			Duration syncWaitGrace, BooleanSupplier inClientEventLoop) {
 		this.key = key;
 		this.chain = chain;
 		this.timeout = timeout;
 		this.inheritDeadline = inheritDeadline;
 		this.gate = gate;
 		this.syncWaitGraceNanos = syncWaitGrace.toNanos();
+		this.inClientEventLoop = inClientEventLoop;
 	}
 
 	@Override
@@ -73,6 +82,14 @@ final class ReferenceProxy implements InvocationHandler {
 			};
 		}
 
+		boolean async = ServiceDispatcher.isAsync(method);
+		if (!async && inClientEventLoop.getAsBoolean()) {
+			// 在发出请求之前拒绝：此时什么都还没登记，没有需要回滚的状态
+			throw new IllegalStateException("Synchronous RPC " + key + "#" + method.getName() + " called on this RpcClient's IO event-loop thread "
+					+ Thread.currentThread().getName() + " (e.g. inside a callback of an async method's CompletableFuture). Blocking here would"
+					+ " stall every connection on this event loop, and the nested reply could never be read. In an async callback, call the async"
+					+ " variant of the method, or switch to your own executor first (thenApplyAsync / thenComposeAsync with an executor).");
+		}
 		if (!gate.tryEnter()) {
 			throw new IllegalStateException("RpcClient is closed; cannot call " + key + "#" + method.getName());
 		}
@@ -91,7 +108,7 @@ final class ReferenceProxy implements InvocationHandler {
 		}
 		future.whenComplete((result, error) -> gate.exit());
 
-		if (ServiceDispatcher.isAsync(method)) {
+		if (async) {
 			// CompletableFuture 本身就是 CompletionStage：声明为任一种都直接交还这个 future
 			CompletableFuture<Object> out = new CompletableFuture<>();
 			future.whenComplete((result, error) -> {

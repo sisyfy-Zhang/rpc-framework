@@ -38,9 +38,19 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	 * @param connections {@code target.connections}：到每个提供者的连接数，null = 各框架缺省（rpc 2、gRPC 1 个 channel、Dubbo triple 1 条）。
 	 *                    含义随 transport：rpc = {@code RpcClientConfig.connectionsPerNode}，grpc = ManagedChannel 数（每个一条 HTTP/2 连接，
 	 *                    调用轮询取用），dubbo = 独立客户端实例数（各一条 triple 连接，轮询取用；triple 忽略 reference 的 connections 参数）；http 卡不用它（连接池是 {@code target.http.connections}）
+	 * @param serverExecutor {@code target.server_executor}：被压服务端的业务执行器（{@code fixed} | {@code virtual} | {@code direct}），
+	 *                    只用于 rpc 卡，缺省 {@code fixed}（框架缺省）；其它 transport 为 null。卡片据此声明"这张卡压的是哪种服务端配置"，
+	 *                    {@code compare.sh} 据此给 bench server 传 {@code --executor}，压测端核对服务端环境里的实际执行器，不符则判定不通过
 	 */
 	public record Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
-			int providers, String httpUrl, int httpConnections, Integer connections) {
+			int providers, String httpUrl, int httpConnections, Integer connections, String serverExecutor) {
+
+		/** 不含 {@code serverExecutor} 的旧形式：rpc 卡记缺省 {@code fixed}，其余为 null。 */
+		public Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
+				int providers, String httpUrl, int httpConnections, Integer connections) {
+			this(transport, service, method, payloadKind, payloadSize, serializer, providers, httpUrl, httpConnections, connections,
+					TRANSPORT_RPC.equals(transport) ? DEFAULT_SERVER_EXECUTOR : null);
+		}
 
 		public boolean http() {
 			return TRANSPORT_HTTP.equals(transport);
@@ -58,6 +68,9 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	}
 
 	static final String TRANSPORT_RPC = "rpc";
+	/** {@code target.server_executor} 的取值与缺省。 */
+	static final java.util.Set<String> SERVER_EXECUTORS = java.util.Set.of("fixed", "virtual", "direct");
+	static final String DEFAULT_SERVER_EXECUTOR = "fixed";
 	static final String TRANSPORT_HTTP = "http";
 	static final int DEFAULT_HTTP_CONNECTIONS = 64;
 
@@ -110,6 +123,9 @@ public record Profile(String id, String question, Target target, Load load, Isol
 		t.put("providers", target.providers());
 		if (!target.http()) {
 			t.put("connections", target.connections());
+		}
+		if (target.rpc()) {
+			t.put("server_executor", target.serverExecutor());
 		}
 		if (target.http()) {
 			Map<String, Object> http = new LinkedHashMap<>();

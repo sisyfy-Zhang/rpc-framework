@@ -26,10 +26,12 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer: protobuf
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
- *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s }
+ *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s,
+ *             flush-consolidation: true }
  *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
- *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192,
+ *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192, flush-consolidation: true,
  *             executor: { type: fixed, threads: 16, queue-capacity: 1000 } }   # 或 { type: virtual, max-concurrent: 10000 }
+ *                                                                          # 或 { type: direct, max-concurrent: 10000 }（见 ExecutorConfig.direct 的警示）
  * </pre>
  */
 @ConfigurationProperties(prefix = "rpc")
@@ -125,6 +127,9 @@ public class RpcProperties {
 		if (client.syncWaitGrace != null) {
 			builder.syncWaitGrace(client.syncWaitGrace);
 		}
+		if (client.flushConsolidation != null) {
+			builder.flushConsolidation(client.flushConsolidation);
+		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
 	}
 
@@ -155,11 +160,18 @@ public class RpcProperties {
 		if (server.ioThreads != null) {
 			builder.ioThreads(server.ioThreads);
 		}
+		if (server.flushConsolidation != null) {
+			builder.flushConsolidation(server.flushConsolidation);
+		}
 		Executor executor = server.executor;
 		if (executor.type == ExecutorType.VIRTUAL) {
 			builder.executor(executor.maxConcurrent != null
 					? ExecutorConfig.virtualThreads(executor.maxConcurrent)
 					: ExecutorConfig.virtualThreads());
+		} else if (executor.type == ExecutorType.DIRECT) {
+			builder.executor(executor.maxConcurrent != null
+					? ExecutorConfig.direct(executor.maxConcurrent)
+					: ExecutorConfig.direct());
 		} else if (executor.threads != null || executor.queueCapacity != null) {
 			int threads = executor.threads != null ? executor.threads
 					: ((ExecutorConfig.Fixed) ExecutorConfig.defaults()).threads();
@@ -248,6 +260,19 @@ public class RpcProperties {
 		 */
 		private Duration syncWaitGrace;
 
+		/**
+		 * 是否合并 flush（默认 true）：连接 pipeline 首位加 Netty 的 FlushConsolidationHandler。关掉只用于对照实验。
+		 */
+		private Boolean flushConsolidation;
+
+		public Boolean getFlushConsolidation() {
+			return flushConsolidation;
+		}
+
+		public void setFlushConsolidation(Boolean flushConsolidation) {
+			this.flushConsolidation = flushConsolidation;
+		}
+
 		public Duration getSyncWaitGrace() {
 			return syncWaitGrace;
 		}
@@ -335,6 +360,20 @@ public class RpcProperties {
 
 		/** IO 事件循环（worker）线程数（默认 0 = Netty 缺省，2 × 可用核数）；业务方法在 executor 上执行，与它无关。 */
 		private Integer ioThreads;
+
+		/**
+		 * 是否合并 flush（默认 true）：连接 pipeline 首位加 Netty 的 FlushConsolidationHandler，业务线程并发回包时多个回包合成一次写出。
+		 * 关掉只用于对照实验。
+		 */
+		private Boolean flushConsolidation;
+
+		public Boolean getFlushConsolidation() {
+			return flushConsolidation;
+		}
+
+		public void setFlushConsolidation(Boolean flushConsolidation) {
+			this.flushConsolidation = flushConsolidation;
+		}
 
 		public Integer getIoThreads() {
 			return ioThreads;
@@ -425,7 +464,10 @@ public class RpcProperties {
 	/** rpc.server.executor.*：业务执行模型。 */
 	public static class Executor {
 
-		/** 执行模型：fixed（固定线程池 + 有界队列，默认）或 virtual（每请求一个虚拟线程 + 并发上限）。 */
+		/**
+		 * 执行模型：fixed（固定线程池 + 有界队列，默认）、virtual（每请求一个虚拟线程 + 并发上限）或 direct（opt-in：业务方法在
+		 * IO 线程上执行。业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类）。
+		 */
 		private ExecutorType type = ExecutorType.FIXED;
 
 		/** 固定池线程数（仅 type=fixed）；不设则为 CPU 核数 × 2。 */
@@ -434,7 +476,7 @@ public class RpcProperties {
 		/** 固定池排队上限（仅 type=fixed，默认 1000，0 表示不排队）；满了的请求回 SERVER_OVERLOADED。 */
 		private Integer queueCapacity;
 
-		/** 虚拟线程同时执行上限（仅 type=virtual，默认 10000）；超出的请求回 SERVER_OVERLOADED。 */
+		/** 虚拟线程同时执行上限（type=virtual）/ 在途请求上限（type=direct），默认 10000；超出的请求回 SERVER_OVERLOADED。 */
 		private Integer maxConcurrent;
 
 		public ExecutorType getType() {
@@ -470,11 +512,13 @@ public class RpcProperties {
 		}
 	}
 
-	/** 业务执行模型，对应 core 的 ExecutorConfig.fixed(...) / ExecutorConfig.virtualThreads(...)。 */
+	/** 业务执行模型，对应 core 的 ExecutorConfig.fixed(...) / ExecutorConfig.virtualThreads(...) / ExecutorConfig.direct(...)。 */
 	public enum ExecutorType {
 		/** 固定线程池 + 有界队列。 */
 		FIXED,
 		/** 每请求一个虚拟线程，信号量限制同时执行数。 */
-		VIRTUAL
+		VIRTUAL,
+		/** opt-in：业务方法在 IO 线程上执行（阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法）。 */
+		DIRECT
 	}
 }

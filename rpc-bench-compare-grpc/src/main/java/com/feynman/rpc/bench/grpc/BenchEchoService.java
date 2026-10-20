@@ -37,7 +37,7 @@ final class BenchEchoService extends BenchEchoGrpc.BenchEchoImplBase {
 
 	@Override
 	public void stats(Empty request, StreamObserver<ServerStats> responseObserver) {
-		responseObserver.onNext(ServerStats.newBuilder().putAllValues(ServerProbes.gcStats()).build());
+		responseObserver.onNext(ServerStats.newBuilder().putAllValues(ServerProbes.stats()).build());
 		responseObserver.onCompleted();
 	}
 }

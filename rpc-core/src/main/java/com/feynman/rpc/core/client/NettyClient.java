@@ -15,6 +15,7 @@ import com.feynman.rpc.core.codec.AttachmentsCodec;
 import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
+import com.feynman.rpc.core.internal.FlushConsolidation;
 import com.feynman.rpc.core.loadbalance.LoadStats;
 import com.feynman.rpc.core.protocol.OutboundBody;
 import com.feynman.rpc.core.protocol.ProtocolConstants;
@@ -35,6 +36,8 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultThreadFactory;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.FastThreadLocalThread;
 
 /**
  * 一个客户端实例的传输层：IO 线程组、Bootstrap、连接池、在途请求表。为什么它们是实例字段而不是进程级静态状态：
@@ -58,20 +61,30 @@ public final class NettyClient implements AutoCloseable {
 	 * @param loadStats 所属客户端的每地址在途统计：下线节点的连接据此判断何时排空（见 ConnectionManager）
 	 */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats) {
-		this(serializers, connectionsPerNode, loadStats, 0, null);
+		this(serializers, connectionsPerNode, loadStats, 0, null, true);
 	}
 
 	/** @param ioThreads IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads} */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads) {
-		this(serializers, connectionsPerNode, loadStats, ioThreads, null);
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null, true);
+	}
+
+	/**
+	 * @param ioThreads          IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads}
+	 * @param flushConsolidation 每条连接的 pipeline 首位是否加 FlushConsolidationHandler（{@link FlushConsolidation}），
+	 *                           见 {@code RpcClientConfig.flushConsolidation}
+	 */
+	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, boolean flushConsolidation) {
+		this(serializers, connectionsPerNode, loadStats, ioThreads, null, flushConsolidation);
 	}
 
 	/** @param allocator 非 null 时作为连接的 {@link ChannelOption#ALLOCATOR}（测试用它记录分配发生在哪些线程上） */
 	NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, ByteBufAllocator allocator) {
-		this(serializers, connectionsPerNode, loadStats, 0, allocator);
+		this(serializers, connectionsPerNode, loadStats, 0, allocator, true);
 	}
 
-	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator) {
+	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator,
+			boolean flushConsolidation) {
 		this.serializers = serializers;
 		byte[] supportedCodes = serializers.codesByPriority();
 
@@ -87,6 +100,10 @@ public final class NettyClient implements AutoCloseable {
 		bootstrap.handler(new ChannelInitializer<SocketChannel>() {
 			@Override
 			protected void initChannel(SocketChannel ch) {
+				if (flushConsolidation) {
+					// 最靠近 transport：读循环里的 flush 推迟到 channelReadComplete，事件循环外来的 flush 合成一个 flush 任务
+					FlushConsolidation.addFirst(ch.pipeline());
+				}
 				ch.pipeline().addLast(new RpcFrameDecoder());
 				ch.pipeline().addLast(new RpcMessageDecoder());
 				// 40s 没收到任何东西（服务端每 20s 会主动 ping 一次）就认为连接可能已经死了，关闭它
@@ -228,6 +245,23 @@ public final class NettyClient implements AutoCloseable {
 				+ "; not sent to " + channel.remoteAddress());
 	}
 
+	/**
+	 * 当前线程是否是本客户端的某个 IO 事件循环线程。同步代理据此拒绝在事件循环上阻塞等待（见 ReferenceProxy）。
+	 * 先看线程类型：事件循环线程都是 {@link FastThreadLocalThread}（{@link DefaultThreadFactory} 创建），业务 / 虚拟线程一次
+	 * instanceof 判断就返回；是的话再逐个问本组的事件循环（别的 Netty 组——例如同进程服务端的 worker——不算）。
+	 */
+	public boolean inEventLoop() {
+		if (!(Thread.currentThread() instanceof FastThreadLocalThread)) {
+			return false;
+		}
+		for (EventExecutor executor : ioGroup) {
+			if (executor.inEventLoop()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** 当前在途（已发出未收到响应）的请求数，用于泄漏断言。 */
 	public int pendingRequests() {
 		return pending.size();
@@ -242,6 +276,11 @@ public final class NettyClient implements AutoCloseable {
 	public int activeConnections(String address) {
 		List<Channel> channels = connections.activeChannels(address);
 		return channels.size();
+	}
+
+	/** 到某地址当前已激活的连接（含排空中的）；观测与测试用（例如检查 pipeline 配置）。 */
+	public List<Channel> activeChannels(String address) {
+		return connections.activeChannels(address);
 	}
 
 	/** 全部地址已激活的连接总数（含排空中的）。 */

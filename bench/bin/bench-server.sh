@@ -10,6 +10,9 @@
 #           target/classes:target/lib/*。放在前面：对比模块的第三方 jar 按它自己解析出的版本生效，与它的测试同一组版本）；
 #           BENCH_GC_LOG=1 时追加 -Xlog:gc*:file=<dir>/gc-server-<yyyyMMdd-HHmmss>.log，<dir> 为 BENCH_GC_LOG_DIR
 #           （缺省 <仓库>/target/gc-logs）。*.log 已被 .gitignore 忽略。
+#           BENCH_JFR=1 时追加 -XX:StartFlightRecording=filename=<dir>/jfr-server-<yyyyMMdd-HHmmss>.jfr,settings=profile，<dir> 为
+#           BENCH_JFR_DIR（缺省 <仓库>/target/jfr；compare.sh / sweep.sh 设为结果目录）。*.jfr 已被 .gitignore 忽略。
+# 业务执行器与 flush 合并（对照实验用，非缺省）：--executor fixed|virtual|direct（缺省 fixed = 框架缺省）、--flush-consolidation on|off（缺省 on）。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,6 +30,13 @@ if [ "${BENCH_GC_LOG:-0}" = "1" ]; then
   # 数组元素原样传给 java：gc* 不会被 shell 当通配符展开
   GC_LOG=("-Xlog:gc*:file=$GC_LOG_DIR/gc-server-$(date +%Y%m%d-%H%M%S).log")
 fi
+JFR=()
+if [ "${BENCH_JFR:-0}" = "1" ]; then
+  JFR_DIR="${BENCH_JFR_DIR:-$ROOT/target/jfr}"
+  case "$JFR_DIR" in /*) ;; *) JFR_DIR="$ROOT/$JFR_DIR" ;; esac
+  mkdir -p "$JFR_DIR"
+  JFR=("-XX:StartFlightRecording=filename=$JFR_DIR/jfr-server-$(date +%Y%m%d-%H%M%S).jfr,settings=profile")
+fi
 PIN=()
 if [ -n "${BENCH_SERVER_CPUS:-}" ]; then
   if command -v taskset >/dev/null 2>&1; then
@@ -37,4 +47,4 @@ if [ -n "${BENCH_SERVER_CPUS:-}" ]; then
 fi
 cd "$ROOT"
 # shellcheck disable=SC2086  # JAVA_OPTS 需要按空格拆成多个参数
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench server "$@"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench server "$@"

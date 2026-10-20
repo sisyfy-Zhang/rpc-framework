@@ -21,8 +21,8 @@ public interface BenchService {
 	Map<String, String> environment();
 
 	/**
-	 * 服务端进程此刻的累计 GC 次数 / 停顿时间（按收集器）与堆用量，值压平成字符串（{@link GcSampler.Snapshot#toStrings()}）。
-	 * 压测端在每轮统计窗口起止各调用一次，差值写进 {@code rounds[].gc.server}。
+	 * 服务端进程此刻的累计 GC 次数 / 停顿时间（按收集器）与堆用量、读写系统调用与上下文切换次数，值压平成字符串
+	 * （{@link ServerProbes#stats()}）。压测端在每轮统计窗口起止各调用一次，差值写进 {@code rounds[].gc.server} / {@code rounds[].io.server}。
 	 */
 	Map<String, String> stats();
 }

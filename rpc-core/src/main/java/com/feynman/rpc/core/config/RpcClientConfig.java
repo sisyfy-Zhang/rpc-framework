@@ -35,6 +35,9 @@ import com.feynman.rpc.core.serialize.Serializer;
  *
  * <p>{@code syncWaitGrace}（默认 1s）：同步代理方法在"本次调用 deadline 的剩余时间 + grace"之后不再等待，
  * 见 {@link Builder#syncWaitGrace(Duration)}。
+ *
+ * <p>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的 {@code FlushConsolidationHandler}，
+ * 见 {@link Builder#flushConsolidation(boolean)}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -49,7 +52,8 @@ public record RpcClientConfig(
 		Duration shutdownTimeout,
 		List<String> exceptionAllowlist,
 		int ioThreads,
-		Duration syncWaitGrace) {
+		Duration syncWaitGrace,
+		boolean flushConsolidation) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
 	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
@@ -59,6 +63,8 @@ public record RpcClientConfig(
 	public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(20);
 	public static final Duration DEFAULT_SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
 	public static final Duration DEFAULT_SYNC_WAIT_GRACE = Duration.ofSeconds(1);
+	/** 缺省合并 flush（{@code FlushConsolidationHandler}），见 {@link Builder#flushConsolidation(boolean)}。 */
+	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = true;
 
 	public RpcClientConfig {
 		if (registry == null) {
@@ -136,6 +142,7 @@ public record RpcClientConfig(
 		private final List<String> exceptionAllowlist = new ArrayList<>();
 		private int ioThreads = DEFAULT_IO_THREADS;
 		private Duration syncWaitGrace = DEFAULT_SYNC_WAIT_GRACE;
+		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -246,10 +253,21 @@ public record RpcClientConfig(
 			return this;
 		}
 
+		/**
+		 * 是否合并 flush（默认 true）：每条连接的 pipeline 首位加 Netty 的 {@code FlushConsolidationHandler(256, true)}。
+		 * 读循环里产生的 flush（例如 IO 线程上的异步回调里发起的下一次调用）推迟到本轮读完，事件循环外来的 flush 改为提交一个
+		 * flush 任务、把它之前排队的写一起带走。不改协议字节、不加定时器。关掉它只用于对照实验（同一构建内 A/B），
+		 * 见 docs/probes/flush-and-executor.md。
+		 */
+		public Builder<T> flushConsolidation(boolean flushConsolidation) {
+			this.flushConsolidation = flushConsolidation;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
-					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace));
+					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation));
 		}
 	}
 }

@@ -166,6 +166,17 @@ class BenchEndToEndTest {
 				assertTrue(path(round, "gc", side, "collections") instanceof Number);
 				assertTrue(path(round, "gc", side, "collectors") instanceof List<?>);
 			}
+			// 统计窗口的读写系统调用与上下文切换：Linux 上两端都是差值 + 每请求值（进程内服务端，同一个进程，两端数字相同），其它平台 n/a
+			assertEquals(path(round, "window", "requests"), path(round, "io", "window_requests"));
+			for (String side : List.of("client", "server")) {
+				if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")) {
+					assertTrue(path(round, "io", side, "syscw") instanceof Number, "rounds[].io." + side + ": " + round.get("io"));
+					assertTrue(((Number) path(round, "io", side, "syscw_per_request")).doubleValue() > 0, "a socket write per batch at least");
+					assertTrue(path(round, "io", side, "vol_cs_per_request") instanceof Number);
+				} else {
+					assertEquals(EnvironmentProbe.NA, path(round, "io", side), "rounds[].io off Linux: " + round.get("io"));
+				}
+			}
 			List<?> success = (List<?>) path(round, "timeseries", "success");
 			assertTrue(success.size() >= 3, "per-second series covers the round");
 			assertTrue(number(success.get(0)) > 0 && number(success.get(2)) > 0);
@@ -180,7 +191,11 @@ class BenchEndToEndTest {
 		assertTrue(md.startsWith("# " + id + "\n"));
 		assertTrue(md.contains("（正式）"));
 		assertTrue(md.contains("不可外推"));
-		assertTrue(md.contains("| GC 停顿 客户端/服务端 (ms) |"), md);
+		assertTrue(md.contains("| GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 |"), md);
+		assertEquals("fixed", path(json, "profile", "parsed", "target", "server_executor"), "rpc cards default to the framework's executor");
+		assertEquals(Boolean.TRUE, path(json, "validity", "server_executor", "matches"));
+		assertEquals("default (on)", path(json, "run", "harness_options", "flush_consolidation"));
+		assertEquals("on", path(json, "run", "target", "flush_consolidation"));
 		assertTrue(md.contains("| 服务端 JVM 参数 |") && md.contains("| 服务端 CPU 亲和 |") && md.contains("| CPU 亲和（压测端） |"));
 		int cpus = Runtime.getRuntime().availableProcessors();
 		Object host = path(json, "environment", "host_cpus");
@@ -190,25 +205,59 @@ class BenchEndToEndTest {
 		assertTrue(r.out().contains("verdict: PASSED"));
 	}
 
-	/** 实验必须能失败：1MiB 回显配 1ms 超时，错误必然出现，errors_max: 0 不满足 → 退出码 2，validity 记录失败项。 */
+	/**
+	 * 实验必须能失败：普通 1KB 卡配一个不可能满足的 {@code throughput_min}（10 亿 req/s）→ 退出码 2，validity 逐条记录失败项。
+	 * 以前用 1MiB × 16 并发 + 1ms 超时制造错误，会让测试 JVM 提交数 GB 内存；超时的分桶由 HttpCallTargetTest 覆盖。
+	 */
 	@Test
 	void anAssertionThatCannotHoldFailsTheRunWithExitCode2(@TempDir Path dir) throws Exception {
 		String id = "it-must-fail";
-		Result r = run(dir, id, card(id, "closed", "concurrency: 16", "2s", "500ms", "[500ms, 1.5s]", 1, "1ms",
-				"{ kind: bytes, size: 1048576 }", "assert:\n  errors_max: 0"), "--direct", "127.0.0.1:" + server.port());
+		Result r = run(dir, id, card(id, "closed", "concurrency: 4", "2s", "500ms", "[500ms, 1.5s]", 1, "1s",
+				"{ kind: bytes, size: 1024 }", "assert:\n  errors_max: 0\n  throughput_min: 1000000000"), "--direct", "127.0.0.1:" + server.port());
 		assertEquals(Bench.FAILED_ASSERTIONS, r.code(), r.out() + r.err());
 		assertEquals(Boolean.FALSE, path(r.json(), "validity", "passed"));
+		assertEquals(Boolean.TRUE, path(r.json(), "validity", "all_rounds_valid"), "the rounds themselves are fine; only the assert fails");
+		assertEquals(Boolean.FALSE, path(r.json(), "validity", "asserts_passed"));
 		List<?> asserts = (List<?>) path(r.json(), "validity", "asserts");
-		assertEquals(1, asserts.size());
+		assertEquals(2, asserts.size());
 		Map<?, ?> errorsMax = (Map<?, ?>) asserts.get(0);
 		assertEquals("errors_max", errorsMax.get("key"));
-		assertEquals(Boolean.FALSE, errorsMax.get("passed"));
-		assertTrue(number(errorsMax.get("actual_value")) > 0);
-		Map<?, ?> round = (Map<?, ?>) ((List<?>) r.json().get("rounds")).get(0);
-		assertTrue(((Map<?, ?>) round.get("errors_by_type")).containsKey(ErrorClassifier.TIMEOUT), "timeouts are bucketed: " + round);
+		assertEquals(Boolean.TRUE, errorsMax.get("passed"));
+		Map<?, ?> throughputMin = (Map<?, ?>) asserts.get(1);
+		assertEquals("throughput_min", throughputMin.get("key"));
+		assertEquals(Boolean.FALSE, throughputMin.get("passed"));
+		assertTrue(((Number) throughputMin.get("actual_value")).doubleValue() > 0, "the measured throughput is recorded: " + throughputMin);
+		assertEquals("正式轮", throughputMin.get("scope"));
 		String md = Files.readString(r.markdown(), StandardCharsets.UTF_8);
 		assertTrue(md.contains("**未通过**"));
 		assertTrue(r.out().contains("verdict: FAILED"));
+	}
+
+	/** 卡片声明的服务端执行器（target.server_executor）与服务端报告的不符：数字不属于这张卡，判定不通过（退出码 2）。 */
+	@Test
+	void aServerExecutorMismatchFailsTheRun(@TempDir Path dir) throws Exception {
+		String id = "it-executor-mismatch";
+		String yaml = card(id, "closed", "concurrency: 2", "1s", "200ms", "[200ms, 800ms]", 1, "1s", "{ kind: bytes, size: 64 }", "")
+				.replace("  providers: 1\n", "  providers: 1\n  server_executor: direct\n");
+		Result r = run(dir, id, yaml, "--direct", "127.0.0.1:" + server.port());
+		assertEquals(Bench.FAILED_ASSERTIONS, r.code(), r.out() + r.err());
+		assertEquals("direct", path(r.json(), "validity", "server_executor", "expected"));
+		assertEquals("fixed", path(r.json(), "validity", "server_executor", "actual"));
+		assertEquals(Boolean.FALSE, path(r.json(), "validity", "server_executor", "matches"));
+		assertEquals(Boolean.TRUE, path(r.json(), "validity", "all_rounds_valid"));
+		assertTrue(String.valueOf(path(r.json(), "validity", "statements")).contains("服务端执行器与卡片不符"));
+	}
+
+	/** {@code --flush-consolidation off}：rpc 卡的 RpcClientConfig.flushConsolidation，如实记进 harness_options 与 run.target。 */
+	@Test
+	void flushConsolidationCanBeTurnedOffForAnABRun(@TempDir Path dir) throws Exception {
+		String id = "it-flush-off";
+		Result r = run(dir, id, card(id, "closed", "concurrency: 2", "1s", "200ms", "[200ms, 800ms]", 1, "1s", "{ kind: bytes, size: 64 }", ""),
+				"--direct", "127.0.0.1:" + server.port(), "--flush-consolidation", "off");
+		assertEquals(Bench.OK, r.code(), r.err());
+		assertEquals("off", path(r.json(), "run", "harness_options", "flush_consolidation"));
+		assertEquals("off", path(r.json(), "run", "target", "flush_consolidation"));
+		assertEquals("on", path(r.json(), "server_environment", "server_flush_consolidation"));
 	}
 
 	@Test

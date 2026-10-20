@@ -612,6 +612,11 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
 - 把健康组件 `rpc` 接到 readiness：已注册才 UP，注册中心不可达或停机中为 OUT_OF_SERVICE（Actuator 在 classpath 上时自动装配）。
 - 只给幂等方法设置 `retries`：连接在请求写出后断开时，客户端无法判断服务端是否已执行，重试可能导致重复执行。
 - 返回 `CompletableFuture` 的方法：`thenApply` 等回调在 Netty IO 线程上执行，不要在里面阻塞；需要时用 `thenApplyAsync(fn, executor)`。
+  在这些回调里调用**同步**方法会直接抛 `IllegalStateException`（"called on this RpcClient's IO event-loop thread"）——阻塞事件循环会让
+  它上面的所有连接停摆，嵌套调用的响应若也由它读取就永远读不到；回调里请调异步方法（`thenCompose`），或先切到自己的执行器。
+- `rpc.server.executor.type: direct`（`ExecutorConfig.direct()`）是 opt-in 的非缺省选项：业务方法直接在收到请求的 IO 线程上执行，省掉两次线程交接。
+  **业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类。** 在业务方法里调下游 RPC（同步）、
+  读数据库、睡眠、等锁都算阻塞；拿不准就保持缺省的 `fixed`。`max-concurrent`（缺省 10000）约束在途请求数（主要是返回未完成 future 的异步方法），超出回 `SERVER_OVERLOADED`。
 - 横切逻辑（traceId、租户、鉴权）写成 `ClientFilter` / `ServerFilter` bean，starter 会自动接入；程序化调整配置用
   `RpcClientCustomizer` / `RpcServerCustomizer` bean。
 

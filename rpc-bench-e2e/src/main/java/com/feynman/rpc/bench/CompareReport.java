@@ -17,7 +17,8 @@ import java.util.Set;
  * <ul>
  *   <li><b>分组</b>：负载模型、服务、payload（kind + size）、时长 / 预热 / 统计窗口 / 轮数 / 超时、是否同机，全部相同的结果为一组。</li>
  *   <li><b>对比轴</b>：组内取值不止一种的 {@code transport}（连同序列化方式）、{@code concurrency}（闭环）、{@code rate}（开环）、
- *       {@code io_threads}（harness 的 {@code --io-threads}）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
+ *       {@code io_threads}（harness 的 {@code --io-threads}）、{@code server_executor}（服务端业务执行器）、{@code flush_consolidation}
+ *       （本框架两端是否合并 flush）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
  *       表内其余轴取值相同（例如 rpc vs grpc 的 64 并发一张、rpc 的 64 / 128 / 256 并发一张）。没有轴在变（同一张卡跑了多次）→ 一张"重复运行"表。</li>
  *   <li>只读 JSON（与 {@link MarkdownReport} 同一原则）：表里每个数字都能在对应的结果文件里找到。</li>
  * </ul>
@@ -29,7 +30,12 @@ final class CompareReport {
 	static final String AXIS_RATE = "rate";
 	static final String AXIS_IO_THREADS = "io_threads";
 	static final String AXIS_CONNECTIONS = "connections";
-	private static final List<String> AXES = List.of(AXIS_TRANSPORT, AXIS_CONNECTIONS, AXIS_CONCURRENCY, AXIS_RATE, AXIS_IO_THREADS);
+	/** 服务端业务执行器（服务端环境的 {@code server_executor_kind}：fixed / virtual / direct / grpc-default…）；旧结果没有时为 —。 */
+	static final String AXIS_SERVER_EXECUTOR = "server_executor";
+	/** 本框架两端的 flush 合并（{@code run.target.flush_consolidation} / {@code server_environment.server_flush_consolidation}）；其余为 —。 */
+	static final String AXIS_FLUSH = "flush_consolidation";
+	private static final List<String> AXES = List.of(AXIS_TRANSPORT, AXIS_CONNECTIONS, AXIS_CONCURRENCY, AXIS_RATE, AXIS_IO_THREADS,
+			AXIS_SERVER_EXECUTOR, AXIS_FLUSH);
 	/** transport 列的排序：本框架在前，对比对象按接入顺序，其余按字母。 */
 	private static final List<String> TRANSPORT_ORDER = List.of("rpc", "grpc", "dubbo", "http");
 
@@ -170,7 +176,8 @@ final class CompareReport {
 		if (!closed) {
 			header.add("服务时间 p99 (ms)");
 		}
-		header.addAll(List.of("客户端核 CPU", "服务端核 CPU", "client_bound", "GC 停顿 客户端/服务端 (ms)", "窗口错误", "判定", "连接",
+		header.addAll(List.of("客户端核 CPU", "服务端核 CPU", "client_bound", "GC 停顿 客户端/服务端 (ms)", "write 系统调用/请求 客户端/服务端",
+				"上下文切换/请求 客户端/服务端", "窗口错误", "判定", "连接",
 				"客户端 IO 线程", "服务端配置", "结果文件"));
 		md.append("| ").append(String.join(" | ", header)).append(" |\n|").append("---|".repeat(header.size())).append('\n');
 		Double first = null;
@@ -204,6 +211,8 @@ final class CompareReport {
 			Object bound = MarkdownReport.path(json, "validity", "client_bound");
 			cells.add(Boolean.TRUE.equals(bound) ? "**是**" : Boolean.FALSE.equals(bound) ? "否" : str(bound));
 			cells.add(gc(round, "client") + " / " + gc(round, "server"));
+			cells.add(round.get("io") == null ? "—" : IoSampler.cell(round, "client", "syscw") + " / " + IoSampler.cell(round, "server", "syscw"));
+			cells.add(round.get("io") == null ? "—" : contextSwitches(round, "client") + " / " + contextSwitches(round, "server"));
 			cells.add(str(official.get("window_errors")));
 			cells.add(Boolean.TRUE.equals(MarkdownReport.path(json, "validity", "passed")) ? "通过" : "**未通过**");
 			cells.add(connection(map(MarkdownReport.path(json, "run", "target"))));
@@ -244,6 +253,12 @@ final class CompareReport {
 		// 只有命令行显式给了 --io-threads 才算对比轴的取值；各 transport 的缺省（写法各不相同）一律记 default，不把缺省差异当成对比轴
 		Object ioSource = MarkdownReport.path(json, "run", "harness_options", "io_source");
 		axes.put(AXIS_IO_THREADS, "command line".equals(ioSource) ? str(MarkdownReport.path(json, "run", "harness_options", "io_threads")) : "default");
+		Object serverEnvironment = json.get("server_environment");
+		Map<?, ?> serverEnv = serverEnvironment instanceof Map<?, ?> m ? m : Map.of();
+		axes.put(AXIS_SERVER_EXECUTOR, str(serverEnv.get("server_executor_kind")));
+		Object clientFlush = MarkdownReport.path(json, "run", "target", "flush_consolidation");
+		Object serverFlush = serverEnv.get("server_flush_consolidation");
+		axes.put(AXIS_FLUSH, clientFlush == null && serverFlush == null ? "—" : "client " + str(clientFlush) + " / server " + str(serverFlush));
 		String payloadText = "bytes".equals(payload.get("kind")) ? str(payload.get("size")) + " B" : str(payload.get("kind"));
 		List<Object> key = List.of(str(load.get("model")), str(target.get("service")), str(payload.get("kind")), str(payload.get("size")),
 				str(load.get("duration_ms")), str(load.get("warmup_ms")), str(load.get("steady_window_ms")), str(load.get("rounds")),
@@ -262,6 +277,8 @@ final class CompareReport {
 				.thenComparingDouble(r -> numeric(r.axes().get(AXIS_RATE)))
 				.thenComparingDouble(r -> numeric(r.axes().get(AXIS_IO_THREADS)))
 				.thenComparing(r -> r.axes().get(AXIS_IO_THREADS))
+				.thenComparing(r -> r.axes().get(AXIS_SERVER_EXECUTOR))
+				.thenComparing(r -> r.axes().get(AXIS_FLUSH), Comparator.reverseOrder())
 				.thenComparing(Run::startedAt);
 	}
 
@@ -286,6 +303,8 @@ final class CompareReport {
 			case AXIS_RATE -> "速率 (req/s)";
 			case AXIS_IO_THREADS -> "客户端 IO 线程（对比轴）";
 			case AXIS_CONNECTIONS -> "连接数";
+			case AXIS_SERVER_EXECUTOR -> "服务端执行器";
+			case AXIS_FLUSH -> "flush 合并";
 			default -> axis;
 		};
 	}
@@ -317,6 +336,13 @@ final class CompareReport {
 			parts.add("执行器 " + env.get("server_executor"));
 		}
 		return parts.isEmpty() ? "—" : String.join("；", parts);
+	}
+
+	/** 一端每请求的上下文切换（自愿 + 非自愿）；取不到时同 {@link IoSampler#cell}。 */
+	private static String contextSwitches(Map<?, ?> round, String side) {
+		Double vol = IoSampler.perRequestValue(round, side, "vol_cs");
+		Double nonvol = IoSampler.perRequestValue(round, side, "nonvol_cs");
+		return vol == null || nonvol == null ? IoSampler.cell(round, side, "vol_cs") : String.format(Locale.ROOT, "%.2f", vol + nonvol);
 	}
 
 	private static String gc(Map<?, ?> round, String side) {

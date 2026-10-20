@@ -66,4 +66,15 @@ class HarnessOptionsTest {
 		assertThrows(IllegalArgumentException.class, () -> HarnessOptions.parse(null, null, null, "20"), "bare numbers other than 0 need a unit");
 		assertThrows(IllegalArgumentException.class, () -> HarnessOptions.parse(null, null, "yes", null, null));
 	}
+
+	@Test
+	void flushConsolidationIsAnOnOffOptionForRpcCards() {
+		HarnessOptions defaults = HarnessOptions.parse(null, null, null, null);
+		assertEquals(null, defaults.flushConsolidation());
+		assertEquals(Boolean.FALSE, defaults.withFlushConsolidation("off").flushConsolidation());
+		assertEquals(Boolean.TRUE, defaults.withFlushConsolidation("on").flushConsolidation());
+		assertEquals(null, defaults.withFlushConsolidation(null).flushConsolidation());
+		assertThrows(IllegalArgumentException.class, () -> defaults.withFlushConsolidation("yes"));
+		assertEquals(defaults, new HarnessOptions(null, null, null, null, null, null, null), "the 7-argument form keeps it null");
+	}
 }

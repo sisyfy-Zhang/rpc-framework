@@ -29,6 +29,8 @@ import com.feynman.rpc.core.serialize.Serializer;
  *   <li>{@code serializerOptions}：同 {@link RpcClientConfig}。</li>
  *   <li>{@code ioThreads}（默认 0）：IO 事件循环（worker）线程数，0 = Netty 缺省（2 × 可用核数），见
  *       {@link Builder#ioThreads(int)}。</li>
+ *   <li>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的
+ *       {@code FlushConsolidationHandler}（合并 flush），见 {@link Builder#flushConsolidation(boolean)}。</li>
  * </ul>
  */
 public record RpcServerConfig(
@@ -44,7 +46,8 @@ public record RpcServerConfig(
 		int remoteStackTraceMaxBytes,
 		Duration shutdownTimeout,
 		Duration deregisterGrace,
-		int ioThreads) {
+		int ioThreads,
+		boolean flushConsolidation) {
 
 	public static final int DEFAULT_PORT = 9000;
 	public static final int DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES = 8192;
@@ -52,6 +55,8 @@ public record RpcServerConfig(
 	public static final Duration DEFAULT_DEREGISTER_GRACE = Duration.ZERO;
 	/** 0 = 交给 Netty 决定，同 {@link RpcClientConfig#DEFAULT_IO_THREADS}。 */
 	public static final int DEFAULT_IO_THREADS = RpcClientConfig.DEFAULT_IO_THREADS;
+	/** 同 {@link RpcClientConfig#DEFAULT_FLUSH_CONSOLIDATION}。 */
+	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = RpcClientConfig.DEFAULT_FLUSH_CONSOLIDATION;
 	/** 堆栈被截断时追加的标记（计入字节上限）。 */
 	public static final String TRUNCATION_MARKER = "…(truncated)";
 	/** 上限至少能放下标记本身和一行有意义的内容。 */
@@ -113,6 +118,7 @@ public record RpcServerConfig(
 		private Duration shutdownTimeout = DEFAULT_SHUTDOWN_TIMEOUT;
 		private Duration deregisterGrace = DEFAULT_DEREGISTER_GRACE;
 		private int ioThreads = DEFAULT_IO_THREADS;
+		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
 
 		public Builder(Function<RpcServerConfig, T> finisher) {
 			this.finisher = finisher;
@@ -215,9 +221,21 @@ public record RpcServerConfig(
 			return this;
 		}
 
+		/**
+		 * 是否合并 flush（默认 true）：每条连接的 pipeline 首位加 Netty 的 {@code FlushConsolidationHandler(256, true)}。
+		 * 业务线程回包时的 flush 改为向事件循环提交一个 flush 任务，在它之前排队的回包被同一次 flush 带走；
+		 * 读循环里产生的 flush 推迟到本轮读完（{@code channelReadComplete}），一次读出的多个请求的回包合成一次 {@code write} 系统调用。
+		 * 不改协议字节、不加定时器。关掉它只用于对照实验（同一构建内 A/B），见 docs/probes/flush-and-executor.md。
+		 */
+		public Builder<T> flushConsolidation(boolean flushConsolidation) {
+			this.flushConsolidation = flushConsolidation;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcServerConfig(port, host, registry, serializer, executor, weight, serverFilters,
-					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace, ioThreads));
+					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace, ioThreads,
+					flushConsolidation));
 		}
 	}
 }

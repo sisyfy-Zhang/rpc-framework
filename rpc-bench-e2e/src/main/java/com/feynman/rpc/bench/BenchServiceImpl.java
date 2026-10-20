@@ -31,6 +31,6 @@ public final class BenchServiceImpl implements BenchService {
 
 	@Override
 	public Map<String, String> stats() {
-		return GcSampler.snapshot().toStrings();
+		return ServerProbes.stats();
 	}
 }

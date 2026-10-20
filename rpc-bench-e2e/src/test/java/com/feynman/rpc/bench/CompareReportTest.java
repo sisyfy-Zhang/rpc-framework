@@ -153,7 +153,7 @@ class CompareReportTest {
 
 		String transportTable = section(text, "> 对比轴：`transport`（concurrency = 64）。");
 		assertTrue(transportTable.indexOf("**rpc（protobuf）**") < transportTable.indexOf("**grpc（protobuf）**"), "rpc row first");
-		assertTrue(transportTable.contains("| **rpc（protobuf）** | `compare-closed64-rpc-v1` | 40000.0 | 1.00× | 1.000 | 4.000 | 8.000 | 40.000 | 95.0% | 60.0% | **是** | 3 / 1 | 0 | 通过 | rpc connection model |"),
+		assertTrue(transportTable.contains("| **rpc（protobuf）** | `compare-closed64-rpc-v1` | 40000.0 | 1.00× | 1.000 | 4.000 | 8.000 | 40.000 | 95.0% | 60.0% | **是** | 3 / 1 | — | — | 0 | 通过 | rpc connection model |"),
 				transportTable);
 		assertTrue(transportTable.contains("| **grpc（protobuf）** | `compare-closed64-grpc-v1` | 30000.0 | 0.75× |"), transportTable);
 		assertTrue(transportTable.contains("执行器 grpc executor"), "server configuration column comes from server_environment");

@@ -138,7 +138,7 @@ final class BenchRunner {
 		result.put("rounds", rounds);
 		Map<String, Object> summary = summary(profile, rounds);
 		result.put("summary", summary);
-		Map<String, Object> validity = validity(profile, rounds, summary, targetDescription);
+		Map<String, Object> validity = validity(profile, rounds, summary, targetDescription, serverEnvironment);
 		result.put("validity", validity);
 
 		Files.createDirectories(outDir);
@@ -239,6 +239,16 @@ final class BenchRunner {
 
 	static Map<String, Object> validity(Profile profile, List<Map<String, Object>> rounds, Map<String, Object> summary,
 			Map<String, Object> target) {
+		return validity(profile, rounds, summary, target, null);
+	}
+
+	/**
+	 * @param serverEnvironment 服务端环境（{@code server_environment}）。rpc 卡核对其中的 {@code server_executor_kind} 与卡片的
+	 *                          {@code target.server_executor}：服务端明确报告了另一种执行器时判定不通过（结果会被当成别的配置的数字）；
+	 *                          旧服务端没有这个字段、或取不到服务端环境时只记 unknown，不判失败
+	 */
+	static Map<String, Object> validity(Profile profile, List<Map<String, Object>> rounds, Map<String, Object> summary,
+			Map<String, Object> target, Object serverEnvironment) {
 		Map<String, Object> validity = new LinkedHashMap<>();
 		boolean warmup = rounds.stream().allMatch(r -> Boolean.TRUE.equals(r.get("warmup_completed")));
 		boolean backlog = rounds.stream().anyMatch(r -> number(r.get("backlog_dropped")) > 0);
@@ -273,6 +283,25 @@ final class BenchRunner {
 		if (worstClientGc != null && GcSampler.pausePct(worstClientGc, "client") > CLIENT_GC_PAUSE_PCT) {
 			statements.add(String.format(Locale.ROOT, "发压端 GC 停顿占窗口 %.1f%%（第 %s 轮，有效轮中最高），可能抬高尾延迟。",
 					GcSampler.pausePct(worstClientGc, "client"), worstClientGc.get("round")));
+		}
+		Boolean executorMatches = null;
+		if (profile.target().rpc()) {
+			Object actual = serverEnvironment instanceof Map<?, ?> env ? env.get("server_executor_kind") : null;
+			Map<String, Object> check = new LinkedHashMap<>();
+			check.put("expected", profile.target().serverExecutor());
+			check.put("actual", actual == null ? EnvironmentProbe.UNKNOWN : actual);
+			if (actual != null) {
+				executorMatches = profile.target().serverExecutor().equals(String.valueOf(actual));
+				check.put("matches", executorMatches);
+				if (!executorMatches) {
+					statements.add("服务端执行器与卡片不符：卡片 target.server_executor = " + profile.target().serverExecutor() + "，服务端报告 "
+							+ actual + "。数字不属于这张卡声明的配置，判定不通过。");
+				}
+			}
+			validity.put("server_executor", check);
+			if (!Profile.DEFAULT_SERVER_EXECUTOR.equals(profile.target().serverExecutor())) {
+				statements.add("非缺省配置：服务端业务执行器为 " + profile.target().serverExecutor() + "（框架缺省是 fixed）。");
+			}
 		}
 		statements.add("错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。");
 		validity.put("statements", statements);
@@ -321,7 +350,7 @@ final class BenchRunner {
 		}
 		validity.put("asserts", asserts);
 		validity.put("asserts_passed", assertsPassed);
-		validity.put("passed", allValid && assertsPassed);
+		validity.put("passed", allValid && assertsPassed && !Boolean.FALSE.equals(executorMatches));
 		return validity;
 	}
 

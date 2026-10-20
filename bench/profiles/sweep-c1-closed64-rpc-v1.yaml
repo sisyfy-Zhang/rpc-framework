@@ -1,0 +1,33 @@
+# 口径卡（单连接上限）：本框架，同机 loopback、1KB、单提供者，闭环 64 并发，直连（--direct），每节点 1 条连接。
+# 与 compare-closed64-rpc-v1（每节点 2 条 = 缺省）只差 target.connections（RpcClientConfig.connectionsPerNode）：
+# 直接读"每连接吞吐"——单条连接只落在服务端一个 worker 事件循环、客户端一个 IO 事件循环上，与 gRPC 单 channel
+# （compare-closed64-grpc-v1，缺省 1 个 channel）对位。sweep-c1-closed64-rpc-direct-v1 是同一张卡的服务端 direct 版本。
+# 跑法：bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-v1,compare-closed64-rpc-v1（同一个服务端上 1 条 vs 2 条连接）。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: sweep-c1-closed64-rpc-v1
+question: 同机 loopback、1KB、单提供者、直连，本框架 闭环 64 并发下的吞吐与两侧 CPU（每节点 1 条连接：单连接上限）
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  connections: 1
+load:
+  model: closed
+  concurrency: 64
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]
+assert:
+  errors_max: 0

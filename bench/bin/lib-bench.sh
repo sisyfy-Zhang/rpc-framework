@@ -3,6 +3,7 @@
 #   start_server <name> <log> <BENCH_EXTRA_CP 或空> <bench-server.sh 的参数...>   # 设置 SERVER_PID
 #   stop_server                                                                   # SIGTERM，10s 不退再 KILL
 #   extra_cp_for <transport>                                                      # 对比模块的 classpath（rpc 为空）
+#   card_server_executor <card.yaml>                                              # 卡片的 target.server_executor（没写 = fixed）
 
 SERVER_PID=""
 
@@ -18,6 +19,13 @@ extra_cp_for() {
     return 1
   fi
   echo "$module/target/classes:$module/target/lib/*"
+}
+
+# rpc 卡的 target.server_executor（fixed | virtual | direct，没写 = fixed）。只看 target 段里两格缩进的那一行。
+card_server_executor() {
+  local value
+  value="$(sed -n 's/^  server_executor:[[:space:]]*\([a-z-]*\).*/\1/p' "$1" | head -n 1)"
+  echo "${value:-fixed}"
 }
 
 start_server() {

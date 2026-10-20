@@ -153,7 +153,7 @@ final class BenchHttpServer implements AutoCloseable {
 				}
 				case STATS_PATH -> {
 					if (HttpMethod.GET.equals(method)) {
-						byte[] stats = Json.write(new LinkedHashMap<String, Object>(GcSampler.snapshot().toStrings()))
+						byte[] stats = Json.write(new LinkedHashMap<String, Object>(ServerProbes.stats()))
 								.getBytes(StandardCharsets.UTF_8);
 						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(stats), HttpHeaderValues.APPLICATION_JSON);
 					} else {

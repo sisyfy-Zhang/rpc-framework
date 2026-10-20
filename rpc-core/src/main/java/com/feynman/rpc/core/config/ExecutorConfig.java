@@ -8,6 +8,9 @@ package com.feynman.rpc.core.config;
  *   <li>{@link Fixed}：固定大小线程池 + <b>有界</b>队列，阻塞式业务代码的传统选择，线程数即并发上限。</li>
  *   <li>{@link VirtualThreads}：每请求一个虚拟线程（JDK 21），阻塞式业务也能获得接近异步的吞吐，同时执行的请求数
  *       用信号量封顶；注意 JDK 21 上 synchronized 会钉住载体线程。阶段 4 的"虚拟线程 vs 固定池"实验靠这个开关。</li>
+ *   <li>{@link Direct}（<b>opt-in，不是缺省</b>）：业务方法直接在收到请求的 IO 事件循环线程上执行，没有队列、没有线程交接。
+ *       <b>业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类。</b>
+ *       见 {@link #direct()}。</li>
  * </ul>
  *
  * <p><b>为什么必须有界</b>：无界队列在过载时不会拒绝任何请求，只会让排队时间无限变长——调用方早已超时放弃，
@@ -16,7 +19,7 @@ package com.feynman.rpc.core.config;
  * 两个上限都只约束"占着执行器的请求"：业务方法返回未完成的 CompletableFuture 后线程立即释放（服务端异步到底），
  * 等待中的 future 不占名额。
  */
-public sealed interface ExecutorConfig permits ExecutorConfig.Fixed, ExecutorConfig.VirtualThreads {
+public sealed interface ExecutorConfig permits ExecutorConfig.Fixed, ExecutorConfig.VirtualThreads, ExecutorConfig.Direct {
 
 	/** 固定池默认排队上限：按"线程数 × 单请求耗时"量级估计的突发缓冲，不是吞吐调优参数。 */
 	int DEFAULT_QUEUE_CAPACITY = 1000;
@@ -46,6 +49,31 @@ public sealed interface ExecutorConfig permits ExecutorConfig.Fixed, ExecutorCon
 		return new VirtualThreads(maxConcurrent);
 	}
 
+	/**
+	 * 在 IO 线程上直接执行业务方法（opt-in），在途上限 {@link #DEFAULT_MAX_CONCURRENT}，见 {@link #direct(int)}。
+	 *
+	 * <p><b>警示：业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类。</b>
+	 * 在业务方法里发起同步 RPC、读数据库、睡眠、等锁都算阻塞；返回 {@code CompletableFuture} 的异步方法可以用，
+	 * 但 future 的完成回调（结果序列化、回包）在完成它的线程上执行。缺省执行器不变（{@link #defaults()} 仍是固定池）。
+	 */
+	static ExecutorConfig direct() {
+		return new Direct(DEFAULT_MAX_CONCURRENT);
+	}
+
+	/**
+	 * 在 IO 线程上直接执行业务方法（opt-in），指定在途上限。
+	 *
+	 * <p>{@code maxConcurrent} 约束的是<b>在途请求</b>（已开始处理、回包尚未交给 Netty）：同步方法在 IO 线程上一个接一个执行，
+	 * 同时执行的数目天然不超过 IO 线程数，这个上限实际约束的是返回未完成 future 的异步方法——它们不占 IO 线程，
+	 * 不封顶就会无限堆积。超过上限的请求回 SERVER_OVERLOADED（业务方法没有执行）。缺省值与虚拟线程模式相同
+	 * （{@link #DEFAULT_MAX_CONCURRENT}），理由也相同：防的是下游资源被打爆，不是线程数。
+	 *
+	 * <p><b>警示：业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类。</b>
+	 */
+	static ExecutorConfig direct(int maxConcurrent) {
+		return new Direct(maxConcurrent);
+	}
+
 	/** 缺省：CPU 核数 × 2 的固定池，沿用旧实现的经验值。 */
 	static ExecutorConfig defaults() {
 		return fixed(Runtime.getRuntime().availableProcessors() * 2);
@@ -64,6 +92,15 @@ public sealed interface ExecutorConfig permits ExecutorConfig.Fixed, ExecutorCon
 
 	record VirtualThreads(int maxConcurrent) implements ExecutorConfig {
 		public VirtualThreads {
+			if (maxConcurrent < 1) {
+				throw new IllegalArgumentException("maxConcurrent must be >= 1: " + maxConcurrent);
+			}
+		}
+	}
+
+	/** 见 {@link ExecutorConfig#direct(int)}：业务方法在 IO 线程上执行，{@code maxConcurrent} 约束在途请求数。 */
+	record Direct(int maxConcurrent) implements ExecutorConfig {
+		public Direct {
 			if (maxConcurrent < 1) {
 				throw new IllegalArgumentException("maxConcurrent must be >= 1: " + maxConcurrent);
 			}

@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.feynman.rpc.core.RpcServer;
+import com.feynman.rpc.core.config.ExecutorConfig;
 import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.metrics.micrometer.MicrometerServerFilter;
 import com.feynman.rpc.metrics.micrometer.RpcServerMetrics;
@@ -13,9 +14,13 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * 压测服务端：导出 {@link BenchServiceImpl}，其余全部用 RpcServer 的缺省配置（执行器、连接参数），
- * 压的就是"开箱即用"的框架。{@code registry} 为 null 时不注册（客户端用 {@code --direct}）。
+ * 压的就是"开箱即用"的框架。{@code server --executor} / {@code --flush-consolidation} 只用于对照实验（非缺省配置，结果另放目录、标明）。{@code registry} 为 null 时不注册（客户端用 {@code --direct}）。
  */
 final class BenchServer implements AutoCloseable {
+
+	static final String EXECUTOR_FIXED = "fixed";
+	static final String EXECUTOR_VIRTUAL = "virtual";
+	static final String EXECUTOR_DIRECT = "direct";
 
 	private final RpcServer server;
 	private final Map<String, String> environment;
@@ -48,7 +53,18 @@ final class BenchServer implements AutoCloseable {
 	 */
 	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads)
 			throws Exception {
-		var builder = RpcServer.builder().port(port).serializer(serializer).ioThreads(ioThreads);
+		return start(port, host, registry, serializer, metrics, ioThreads, ExecutorConfig.defaults(), true);
+	}
+
+	/**
+	 * @param executor           业务执行器（{@code server --executor}）；缺省 {@code ExecutorConfig.defaults()}。direct 是 opt-in 的非缺省配置，
+	 *                           服务端环境的 {@code server_executor_kind} 记 {@value #EXECUTOR_DIRECT}，压测端据此核对卡片的 {@code target.server_executor}
+	 * @param flushConsolidation {@code RpcServerConfig.flushConsolidation}（{@code server --flush-consolidation}），记进 {@code server_flush_consolidation}
+	 */
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
+			ExecutorConfig executor, boolean flushConsolidation) throws Exception {
+		var builder = RpcServer.builder().port(port).serializer(serializer).ioThreads(ioThreads).executor(executor)
+				.flushConsolidation(flushConsolidation);
 		if (metrics != null) {
 			builder.serverFilter(new MicrometerServerFilter(metrics));
 		}
@@ -67,6 +83,8 @@ final class BenchServer implements AutoCloseable {
 			environment.put("server_io_threads", server.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText()
 					: String.valueOf(server.config().ioThreads()));
 			environment.put("server_executor", describe(server.config().executor()));
+			environment.put("server_executor_kind", kind(server.config().executor()));
+			environment.put("server_flush_consolidation", server.config().flushConsolidation() ? "on" : "off");
 			server.export(BenchService.class, new BenchServiceImpl(environment));
 			if (metrics != null) {
 				RpcServerMetrics.bind(server, metrics);
@@ -85,11 +103,22 @@ final class BenchServer implements AutoCloseable {
 	}
 
 	/** 业务执行器的一句话描述（缺省：固定池 2 × 可用核数、有界队列 1000；业务方法不在 IO 线程上执行）。 */
-	static String describe(com.feynman.rpc.core.config.ExecutorConfig executor) {
+	static String describe(ExecutorConfig executor) {
 		return switch (executor) {
-			case com.feynman.rpc.core.config.ExecutorConfig.Fixed f -> "fixed pool (" + f.threads() + " threads, queue " + f.queueCapacity()
+			case ExecutorConfig.Fixed f -> "fixed pool (" + f.threads() + " threads, queue " + f.queueCapacity()
 					+ "): business methods run off the IO threads";
-			case com.feynman.rpc.core.config.ExecutorConfig.VirtualThreads v -> "virtual thread per request (max " + v.maxConcurrent() + ")";
+			case ExecutorConfig.VirtualThreads v -> "virtual thread per request (max " + v.maxConcurrent() + ")";
+			case ExecutorConfig.Direct d -> "direct (NOT the default): business methods run on the IO threads (max in-flight "
+					+ d.maxConcurrent() + ")";
+		};
+	}
+
+	/** 卡片 {@code target.server_executor} 的取值：{@value #EXECUTOR_FIXED} / {@value #EXECUTOR_VIRTUAL} / {@value #EXECUTOR_DIRECT}。 */
+	static String kind(ExecutorConfig executor) {
+		return switch (executor) {
+			case ExecutorConfig.Fixed f -> EXECUTOR_FIXED;
+			case ExecutorConfig.VirtualThreads v -> EXECUTOR_VIRTUAL;
+			case ExecutorConfig.Direct d -> EXECUTOR_DIRECT;
 		};
 	}
 

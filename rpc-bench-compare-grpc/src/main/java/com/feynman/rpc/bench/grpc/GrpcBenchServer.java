@@ -123,6 +123,8 @@ public final class GrpcBenchServer implements AutoCloseable {
 				default -> throw new IllegalArgumentException(
 						"--executor must be " + EXECUTOR_DIRECT + ", " + EXECUTOR_FIXED + " or " + EXECUTOR_GRPC_DEFAULT + ", got \"" + executorKind + "\"");
 			}
+			// 与 rpc bench server 同名的机器可读字段：对比表据此把服务端执行器当作对比轴
+			environment.put("server_executor_kind", executorKind);
 			Map<String, String> frozen = Collections.unmodifiableMap(environment);
 			Server server = builder.addService(new BenchEchoService(frozen)).build().start();
 			return new GrpcBenchServer(server, boss, workers, executor, frozen);

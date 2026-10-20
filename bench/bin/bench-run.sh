@@ -11,6 +11,9 @@
 #           BENCH_HARNESS_OPTS 追加 harness 实现选项（--open-workers / --io-threads / --io-busy-poll / --pin-dispatcher / --pre-warmup）；
 #           BENCH_GC_LOG=1 时追加 -Xlog:gc*:file=<dir>/gc-client-<yyyyMMdd-HHmmss>.log，<dir> 为 --out 的值，
 #           没有 --out 时为 BENCH_GC_LOG_DIR（缺省 <仓库>/target/gc-logs）。*.log 已被 .gitignore 忽略，不会随归档入库。
+#           BENCH_JFR=1 时追加 -XX:StartFlightRecording=filename=<dir>/jfr-client-<yyyyMMdd-HHmmss>.jfr,settings=profile，<dir> 为 --out 的值，
+#           没有 --out 时为 BENCH_JFR_DIR（缺省 <仓库>/target/jfr）。*.jfr 已被 .gitignore 忽略。
+#           rpc 卡的 flush 合并 A/B：--flush-consolidation on|off（或放进 BENCH_HARNESS_OPTS），见 docs/benchmarking.md。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -34,6 +37,19 @@ if [ "${BENCH_GC_LOG:-0}" = "1" ]; then
   # 数组元素原样传给 java：gc* 不会被 shell 当通配符展开
   GC_LOG=("-Xlog:gc*:file=$GC_LOG_DIR/gc-client-$(date +%Y%m%d-%H%M%S).log")
 fi
+JFR=()
+if [ "${BENCH_JFR:-0}" = "1" ]; then
+  JFR_DIR="${BENCH_JFR_DIR:-$ROOT/target/jfr}"
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "--out" ]; then JFR_DIR="$arg"; fi
+    case "$arg" in --out=*) JFR_DIR="${arg#--out=}" ;; esac
+    prev="$arg"
+  done
+  case "$JFR_DIR" in /*) ;; *) JFR_DIR="$ROOT/$JFR_DIR" ;; esac
+  mkdir -p "$JFR_DIR"
+  JFR=("-XX:StartFlightRecording=filename=$JFR_DIR/jfr-client-$(date +%Y%m%d-%H%M%S).jfr,settings=profile")
+fi
 PIN=()
 if [ -n "${BENCH_CLIENT_CPUS:-}" ]; then
   if command -v taskset >/dev/null 2>&1; then
@@ -55,4 +71,4 @@ fi
 # 在仓库根目录运行：git sha / dirty 的采集与默认归档目录都相对仓库根
 cd "$ROOT"
 # shellcheck disable=SC2086
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"
