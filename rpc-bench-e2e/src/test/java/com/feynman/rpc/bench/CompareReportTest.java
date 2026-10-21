@@ -153,7 +153,7 @@ class CompareReportTest {
 
 		String transportTable = section(text, "> 对比轴：`transport`（concurrency = 64）。");
 		assertTrue(transportTable.indexOf("**rpc（protobuf）**") < transportTable.indexOf("**grpc（protobuf）**"), "rpc row first");
-		assertTrue(transportTable.contains("| **rpc（protobuf）** | `compare-closed64-rpc-v1` | 40000.0 | 1.00× | 1.000 | 4.000 | 8.000 | 40.000 | 95.0% | 60.0% | **是** | 3 / 1 | — | — | 0 | 通过 | rpc connection model |"),
+		assertTrue(transportTable.contains("| **rpc（protobuf）** | `compare-closed64-rpc-v1` | 40000.0 | 1.00× | 1.000 | 4.000 | 8.000 | 40.000 | 95.0% | 60.0% | **是** | 3 / 1 | — | — | — | 0 | 通过 | rpc connection model |"),
 				transportTable);
 		assertTrue(transportTable.contains("| **grpc（protobuf）** | `compare-closed64-grpc-v1` | 30000.0 | 0.75× |"), transportTable);
 		assertTrue(transportTable.contains("执行器 grpc executor"), "server configuration column comes from server_environment");
@@ -254,6 +254,93 @@ class CompareReportTest {
 		assertTrue(grpcConnections.contains("| **2** | grpc（protobuf） | `c-grpc-c2` | 90000.0 | 1.29× |"), grpcConnections);
 		assertTrue(text.contains("> 对比轴：`connections`（transport = dubbo（hessian2））。"), text);
 		assertFalse(text.contains("transport = rpc（protobuf））"), "rpc has a single connection count here");
+	}
+
+	/** 给 fixture 加上服务端执行器（server_executor_kind）与两端 flush 合并（{@code flush} 为 null 时不写：对比对象没有这项）。 */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> serverConfig(Map<String, Object> json, String executorKind, String flush) {
+		Map<String, Object> env = new LinkedHashMap<>((Map<String, Object>) json.get("server_environment"));
+		env.put("server_executor_kind", executorKind);
+		env.put("server_executor", executorKind + " executor");
+		if (flush != null) {
+			env.put("server_flush_consolidation", flush);
+			Map<String, Object> run = new LinkedHashMap<>((Map<String, Object>) json.get("run"));
+			Map<String, Object> target = new LinkedHashMap<>((Map<String, Object>) run.get("target"));
+			target.put("flush_consolidation", flush);
+			run.put("target", target);
+			json.put("run", run);
+		}
+		json.put("server_environment", env);
+		return json;
+	}
+
+	/** 给 fixture 的正式轮加上出站背压统计（rpc 服务端：窗口内暂停读次数；对比对象记 n/a）。 */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> backpressure(Map<String, Object> json, Object value) {
+		Map<String, Object> official = (Map<String, Object>) ((List<Object>) json.get("rounds")).get(1);
+		official.put("backpressure", value);
+		return json;
+	}
+
+	/**
+	 * 回归（20261022 归档时发现）：执行器与 flush 合并是各 transport 的固有属性（rpc fixed / on、gRPC grpc-default、Dubbo 两项都没有），
+	 * 以前参与 transport 表的分区，于是每个 transport 各落一个分区，"开箱即用"与"连接数对齐"两类 transport 表一张都不出。
+	 * 现在它们不参与分区；本框架的非缺省配置（direct 执行器、flush 合并关）不进 transport 表，只进各自轴的表。
+	 */
+	@Test
+	void transportTablesIgnoreIntrinsicExecutorAndFlushAndLeaveOutNonDefaultRpc() {
+		Map<String, Object> pauses = Map.of("window", Map.of("auto_read_pauses", 3, "outbound_overload_rejections", 0));
+		Map<String, Object> rpc = backpressure(serverConfig(
+				connections(result("c-rpc", "rpc", "protobuf", "closed", 64, 100000.0, 1.5, 57.0, 49.0, false, "t1"), 2, false), "fixed", "on"),
+				pauses);
+		Map<String, Object> rpcDirect = backpressure(serverConfig(
+				connections(result("c-rpc-direct", "rpc", "protobuf", "closed", 64, 140000.0, 1.0, 60.0, 27.0, false, "t2"), 2, false), "direct",
+				"on"), pauses);
+		Map<String, Object> rpcFlushOff = serverConfig(
+				connections(result("c-rpc-off", "rpc", "protobuf", "closed", 64, 90000.0, 1.6, 60.0, 58.0, false, "t3"), 2, false), "fixed", "off");
+		Map<String, Object> grpc = backpressure(serverConfig(
+				connections(result("c-grpc", "grpc", "protobuf", "closed", 64, 14000.0, 7.0, 21.0, 39.0, false, "t4"), 1, false), "grpc-default",
+				null), "n/a");
+		Map<String, Object> grpc2 = serverConfig(
+				connections(result("c-grpc-c2", "grpc", "protobuf", "closed", 64, 35000.0, 4.7, 52.0, 64.0, false, "t5"), 2, true), "grpc-default",
+				null);
+		Map<String, Object> dubbo = connections(result("c-dubbo", "dubbo", "hessian2", "closed", 64, 14000.0, 7.3, 24.0, 42.0, false, "t6"), 1, false);
+		Map<String, Object> dubbo2 = connections(result("c-dubbo-c2", "dubbo", "hessian2", "closed", 64, 26000.0, 5.8, 56.0, 68.0, false, "t7"), 2,
+				true);
+		List<Map.Entry<String, Map<?, ?>>> results = List.of(Map.entry("rpc.json", rpc), Map.entry("rpc-direct.json", rpcDirect),
+				Map.entry("rpc-off.json", rpcFlushOff), Map.entry("grpc.json", grpc), Map.entry("grpc2.json", grpc2), Map.entry("dubbo.json", dubbo),
+				Map.entry("dubbo2.json", dubbo2));
+		String text = CompareReport.document(results);
+		System.out.println(text);
+
+		String outOfBox = section(text, "> 对比轴：`transport`（开箱即用：各框架缺省连接数）。");
+		assertTrue(outOfBox.contains("`c-rpc`") && outOfBox.contains("`c-grpc`") && outOfBox.contains("`c-dubbo`"), outOfBox);
+		assertFalse(outOfBox.contains("`c-rpc-direct`") || outOfBox.contains("`c-rpc-off`"), "non-default rpc configurations stay out: " + outOfBox);
+		assertFalse(outOfBox.contains("c2`"), outOfBox);
+		assertTrue(outOfBox.contains(CompareReport.TRANSPORT_NOTE), outOfBox);
+		String aligned = section(text, "> 对比轴：`transport`（连接数对齐；connections = 2）。");
+		assertTrue(aligned.contains("`c-rpc`") && aligned.contains("`c-grpc-c2`") && aligned.contains("`c-dubbo-c2`"), aligned);
+		assertFalse(aligned.contains("`c-rpc-direct`") || aligned.contains("`c-rpc-off`"), aligned);
+		assertFalse(aligned.contains("`c-grpc`") || aligned.contains("`c-dubbo`"), aligned);
+		assertFalse(text.contains("> 对比轴：`transport`（server_executor"), "the executor is not a partition key of transport tables");
+
+		// 非缺省配置在各自轴的表里
+		String executors = section(text,
+				"> 对比轴：`server_executor`（transport = rpc（protobuf），connections = 2，flush_consolidation = client on / server on）。");
+		assertTrue(executors.contains("| **direct** | rpc（protobuf） | `c-rpc-direct` |") && executors.contains("| **fixed** | rpc（protobuf） | `c-rpc` |"),
+				executors);
+		String flush = section(text, "> 对比轴：`flush_consolidation`（transport = rpc（protobuf），connections = 2，server_executor = fixed）。");
+		assertTrue(flush.contains("`c-rpc`") && flush.contains("`c-rpc-off`") && !flush.contains("`c-rpc-direct`"), flush);
+
+		// 暂停读次数列：rpc 取窗口值，对比对象（n/a）与没有这项的结果记 —
+		assertTrue(outOfBox.contains("暂停读次数"), outOfBox);
+		assertTrue(outOfBox.contains("| 57.0% | 49.0% | 否 | 3 / 1 | — | — | 3 | 0 | 通过 |"), outOfBox);
+		assertTrue(outOfBox.contains("| 21.0% | 39.0% | 否 | 3 / 1 | — | — | — | 0 | 通过 |"), outOfBox);
+
+		// report 汇总里的对比表一节走同一段逻辑
+		String summary = CompareReport.render(results, 3);
+		assertTrue(summary.contains("> 对比轴：`transport`（开箱即用：各框架缺省连接数）。"), summary);
+		assertTrue(summary.contains("> 对比轴：`transport`（连接数对齐；connections = 2）。"), summary);
 	}
 
 	/** 从标记行开始到下一个空行之后的表格结束（下一个以 "> " 或 "#" 开头的行）为止。 */

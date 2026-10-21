@@ -627,7 +627,7 @@ mvn -q -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am pack
 bash bench/bin/compare.sh                         # rpc、grpc、grpc-c2、dubbo、dubbo-c2 × closed64、open10k → target/compare/run-<时间>/compare.md
 bash bench/bin/compare.sh --out bench/reports/<yyyyMMdd>-<sha7>/compare    # 归档
 COMPARE_SERVER_ARGS_GRPC="--executor direct" bash bench/bin/compare.sh --transports rpc,grpc,grpc-c2 --out <dir>   # gRPC 上界对照点（directExecutor，非缺省用法，结果另放一个目录）
-bash bench/bin/compare.sh --transports rpc-direct --out <dir>   # 本框架服务端 direct（compare-*-rpc-direct-v1，非缺省配置，结果另放一个目录）
+bash bench/bin/compare.sh --transports rpc-direct --out <dir>   # 本框架服务端 direct（compare-*-rpc-direct-v1，非缺省配置）：与缺省结果同目录，由 server_executor 轴区分，声明段标注非缺省配置
 ```
 
 `compare.sh` 依次对每个 transport（`-c<N>` / `-direct` 后缀是卡片变体，服务端按第一个 `-` 之前的 transport 起；rpc 的服务端执行器取自卡片的
@@ -641,8 +641,12 @@ bash bench/bin/compare.sh --transports rpc-direct --out <dir>   # 本框架服�
 组内取值不止一种的 `transport`（连同序列化）、`connections`（实际连接数，卡片没写 `target.connections` 的标"缺省"）、`concurrency`、`rate`、
 `io_threads`（只有命令行显式给了 `--io-threads` 才算，各 transport 的缺省写法不同、不算对比轴）、`server_executor`（服务端环境的 `server_executor_kind`）、
 `flush_consolidation`（本框架两端的 flush 合并）自动成为对比轴，每个轴一张表、表内其余轴取值相同。
+transport 表例外：`server_executor` 与 `flush_consolidation` 是各 transport 的固有属性（本框架 fixed / 合并开、gRPC grpc-default、Dubbo 两项都没有），
+不参与 transport 表的分区，只在"服务端配置"列与表下的说明里出现；本框架的非缺省配置（执行器不是 fixed，例如 rpc-direct，或任一端 flush 合并关）
+不进 transport 表，只进 `server_executor` / `flush_consolidation` 轴的表——所以 rpc-direct 的结果与缺省结果放同一目录，fixed 对 direct 的表才会出来。
 每行取该结果的正式轮：吞吐（及相对首行的倍数）、p50 / p99 / p99.9 / max、开环的服务时间 p99、两组核的 CPU、client_bound、两端 GC 停顿、
-两端每请求的 write 系统调用与上下文切换、窗口错误、判定、连接方式、客户端 IO 线程、服务端配置（IO 线程与执行器）、结果文件。
+两端每请求的 write 系统调用与上下文切换、暂停读次数（rpc 服务端窗口内的 `backpressure.window.auto_read_pauses`，有硬上限拒绝时附上；对比对象为 —）、
+窗口错误、判定、连接方式、客户端 IO 线程、服务端配置（IO 线程与执行器）、结果文件。
 
 ## 并发扫描与连接数扫描
 

@@ -20,6 +20,9 @@ import java.util.Set;
  *       {@code io_threads}（harness 的 {@code --io-threads}）、{@code server_executor}（服务端业务执行器）、{@code flush_consolidation}
  *       （本框架两端是否合并 flush）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
  *       表内其余轴取值相同（例如 rpc vs grpc 的 64 并发一张、rpc 的 64 / 128 / 256 并发一张）。没有轴在变（同一张卡跑了多次）→ 一张"重复运行"表。</li>
+ *   <li><b>transport 表</b>：{@code server_executor} 与 {@code flush_consolidation} 是各 transport 的固有属性（本框架 fixed / 合并开、gRPC
+ *       grpc-default、Dubbo 没有这两项），不参与 transport 表的分区，只在"服务端配置"列里展示；本框架的非缺省配置（执行器不是 fixed，
+ *       或任一端 flush 合并关）不进 transport 表，只进 {@code server_executor} / {@code flush_consolidation} 轴的表。</li>
  *   <li>只读 JSON（与 {@link MarkdownReport} 同一原则）：表里每个数字都能在对应的结果文件里找到。</li>
  * </ul>
  */
@@ -36,6 +39,11 @@ final class CompareReport {
 	static final String AXIS_FLUSH = "flush_consolidation";
 	private static final List<String> AXES = List.of(AXIS_TRANSPORT, AXIS_CONNECTIONS, AXIS_CONCURRENCY, AXIS_RATE, AXIS_IO_THREADS,
 			AXIS_SERVER_EXECUTOR, AXIS_FLUSH);
+	/** transport 表分区时不看的轴：各 transport 的固有属性（见类注释）。 */
+	private static final Set<String> TRANSPORT_INTRINSIC = Set.of(AXIS_SERVER_EXECUTOR, AXIS_FLUSH);
+	/** transport 表下的说明：固有属性怎么处理、非缺省配置去了哪里。 */
+	static final String TRANSPORT_NOTE = "transport 表不按服务端执行器与 flush 合并分区：它们是各框架自己的缺省（见\"服务端配置\"列）；"
+			+ "本框架的非缺省配置（执行器不是 fixed，或 flush 合并关）不进 transport 表，见 `server_executor` / `flush_consolidation` 轴的表。";
 	/** transport 列的排序：本框架在前，对比对象按接入顺序，其余按字母。 */
 	private static final List<String> TRANSPORT_ORDER = List.of("rpc", "grpc", "dubbo", "http");
 
@@ -111,40 +119,64 @@ final class CompareReport {
 				table(md, group, axis);
 				continue;
 			}
-			// 多个轴在变：每个轴一张表，表内其余变化的轴取值相同
+			// 多个轴在变：每个轴一张表，表内其余变化的轴取值相同（transport 表例外：不看执行器与 flush 合并，见类注释）
 			for (String axis : varying) {
-				if (AXIS_TRANSPORT.equals(axis) && varying.contains(AXIS_CONNECTIONS)) {
-					transportTablesAcrossConnectionModes(md, group, varying);
+				if (AXIS_TRANSPORT.equals(axis)) {
+					transportTables(md, group, varying);
 					continue;
 				}
-				emitPartitions(md, partition(group, axis, varying, false), axis, "");
+				emitPartitions(md, partition(group, axis, varying, Set.of()), axis, "", "");
 			}
 		}
 		return md.toString();
 	}
 
 	/**
-	 * transport 与连接数同时在变（对比卡的"开箱即用"与"连接数对齐"两种配置）：transport 的并排分两类——
+	 * transport 的并排。{@code server_executor} 与 {@code flush_consolidation} 不参与分区（各 transport 的固有属性），
+	 * 本框架的非缺省配置（{@link #defaultConfiguration}）不进表。连接数也在变（对比卡的"开箱即用"与"连接数对齐"两种配置）时分两类——
 	 * <ul>
 	 *   <li><b>开箱即用</b>：卡片都没写 {@code target.connections}，各框架用自己的缺省连接数（本框架 2、gRPC 1 个 channel、Dubbo 1 条）；</li>
 	 *   <li><b>连接数对齐</b>：实际连接数相同（写了 {@code target.connections} 的卡，加上缺省恰好相等的卡）。</li>
 	 * </ul>
 	 */
-	private static void transportTablesAcrossConnectionModes(StringBuilder md, List<Run> group, List<String> varying) {
-		List<Run> defaults = group.stream().filter(r -> !r.explicitConnections()).toList();
-		emitPartitions(md, partition(defaults, AXIS_TRANSPORT, varying, true), AXIS_TRANSPORT, "开箱即用：各框架缺省连接数");
-		Map<String, List<Run>> aligned = partition(group, AXIS_TRANSPORT, varying, false);
-		aligned.values().removeIf(rows -> rows.stream().noneMatch(Run::explicitConnections));
-		emitPartitions(md, aligned, AXIS_TRANSPORT, "连接数对齐");
+	private static void transportTables(StringBuilder md, List<Run> group, List<String> varying) {
+		List<Run> rows = group.stream().filter(CompareReport::defaultConfiguration).toList();
+		if (!varying.contains(AXIS_CONNECTIONS)) {
+			emitPartitions(md, partition(rows, AXIS_TRANSPORT, varying, TRANSPORT_INTRINSIC), AXIS_TRANSPORT, "", TRANSPORT_NOTE);
+			return;
+		}
+		Set<String> ignoredForDefaults = new LinkedHashSet<>(TRANSPORT_INTRINSIC);
+		ignoredForDefaults.add(AXIS_CONNECTIONS);
+		List<Run> defaults = rows.stream().filter(r -> !r.explicitConnections()).toList();
+		emitPartitions(md, partition(defaults, AXIS_TRANSPORT, varying, ignoredForDefaults), AXIS_TRANSPORT, "开箱即用：各框架缺省连接数",
+				TRANSPORT_NOTE);
+		Map<String, List<Run>> aligned = partition(rows, AXIS_TRANSPORT, varying, TRANSPORT_INTRINSIC);
+		aligned.values().removeIf(partitionRows -> partitionRows.stream().noneMatch(Run::explicitConnections));
+		emitPartitions(md, aligned, AXIS_TRANSPORT, "连接数对齐", TRANSPORT_NOTE);
 	}
 
-	/** 按"其余变化的轴"的取值分区；{@code ignoreConnections} 时分区键里不含连接数。 */
-	private static Map<String, List<Run>> partition(List<Run> rows, String axis, List<String> varying, boolean ignoreConnections) {
+	/**
+	 * 进 transport 表的结果：对比对象一律算（它们的执行器与 flush 就是各自的缺省）；本框架只算缺省配置——服务端执行器 fixed
+	 * （旧结果没有该字段时为 —）、两端 flush 合并都没关。direct 执行器、flush 合并关等非缺省配置只进 {@code server_executor} /
+	 * {@code flush_consolidation} 轴的表。
+	 */
+	static boolean defaultConfiguration(Run run) {
+		String transport = run.axes().get(AXIS_TRANSPORT);
+		String base = transport.contains("（") ? transport.substring(0, transport.indexOf('（')) : transport;
+		if (!"rpc".equals(base)) {
+			return true;
+		}
+		String executor = run.axes().get(AXIS_SERVER_EXECUTOR);
+		return ("fixed".equals(executor) || "—".equals(executor)) && !run.axes().get(AXIS_FLUSH).contains("off");
+	}
+
+	/** 按"其余变化的轴"的取值分区；{@code ignored} 里的轴不进分区键。 */
+	private static Map<String, List<Run>> partition(List<Run> rows, String axis, List<String> varying, Set<String> ignored) {
 		Map<String, List<Run>> partitions = new LinkedHashMap<>();
 		for (Run run : rows) {
 			List<String> others = new ArrayList<>();
 			for (String other : varying) {
-				if (!other.equals(axis) && !(ignoreConnections && AXIS_CONNECTIONS.equals(other))) {
+				if (!other.equals(axis) && !ignored.contains(other)) {
 					others.add(other + " = " + run.axes().get(other));
 				}
 			}
@@ -153,12 +185,16 @@ final class CompareReport {
 		return partitions;
 	}
 
-	private static void emitPartitions(StringBuilder md, Map<String, List<Run>> partitions, String axis, String label) {
+	/** @param note 非空时写在每张表之后（transport 表用它说明固有属性与非缺省配置的去处） */
+	private static void emitPartitions(StringBuilder md, Map<String, List<Run>> partitions, String axis, String label, String note) {
 		partitions.forEach((fixed, rows) -> {
 			if (rows.stream().map(r -> r.axes().get(axis)).distinct().count() > 1) {
 				String detail = label.isEmpty() ? fixed : fixed.isEmpty() ? label : label + "；" + fixed;
 				md.append("> 对比轴：`").append(axis).append("`").append(detail.isEmpty() ? "" : "（" + detail + "）").append("。\n\n");
 				table(md, rows, axis);
+				if (!note.isEmpty()) {
+					md.append(note).append("\n\n");
+				}
 			}
 		});
 	}
@@ -177,7 +213,7 @@ final class CompareReport {
 			header.add("服务时间 p99 (ms)");
 		}
 		header.addAll(List.of("客户端核 CPU", "服务端核 CPU", "client_bound", "GC 停顿 客户端/服务端 (ms)", "write 系统调用/请求 客户端/服务端",
-				"上下文切换/请求 客户端/服务端", "窗口错误", "判定", "连接",
+				"上下文切换/请求 客户端/服务端", "暂停读次数", "窗口错误", "判定", "连接",
 				"客户端 IO 线程", "服务端配置", "结果文件"));
 		md.append("| ").append(String.join(" | ", header)).append(" |\n|").append("---|".repeat(header.size())).append('\n');
 		Double first = null;
@@ -213,6 +249,8 @@ final class CompareReport {
 			cells.add(gc(round, "client") + " / " + gc(round, "server"));
 			cells.add(round.get("io") == null ? "—" : IoSampler.cell(round, "client", "syscw") + " / " + IoSampler.cell(round, "server", "syscw"));
 			cells.add(round.get("io") == null ? "—" : contextSwitches(round, "client") + " / " + contextSwitches(round, "server"));
+			// rpc 服务端的出站背压：窗口内暂停读次数（有硬上限拒绝时附上）；对比对象与旧结果没有这项，记 —
+			cells.add(BackpressureStats.windowPauses(round) == null ? "—" : BackpressureStats.cell(round));
 			cells.add(str(official.get("window_errors")));
 			cells.add(Boolean.TRUE.equals(MarkdownReport.path(json, "validity", "passed")) ? "通过" : "**未通过**");
 			cells.add(connection(map(MarkdownReport.path(json, "run", "target"))));
@@ -228,6 +266,7 @@ final class CompareReport {
 		md.append("每行取该结果的正式轮（")
 				.append(closed ? "闭环：窗口吞吐中位数那一轮" : "开环：窗口 p99 中位数那一轮")
 				.append("）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。")
+				.append("暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。")
 				.append(closed ? "闭环的 p99 / p99.9 低估尾延迟，尾延迟以开环为准。" : "开环延迟从计划发出时刻算起（修正 coordinated omission）。")
 				.append("\n\n");
 	}
