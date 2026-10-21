@@ -9,6 +9,8 @@
 
 表格（两份 `compare.md` 与 `README.md`）由修复提交 18d7858 的工具从现有 JSON 重新生成；数据 JSON 均为 d23e39d 上的运行，重新生成时没有重跑压测。
 
+README 于任务 13 由该任务的提交（`CompareReport` 分组键加入寻址方式 `run.target.mode`：经 ZooKeeper 的 `loopback-*` 卡不再与直连的 compare 卡同表）用 `bench-report.sh --in` 本目录重新生成；既有 JSON 未改动。`crossval-repeat/run-2`、`run-3` 是任务 13 在 d8dc78b 上追加的两次开环交叉验证（d8dc78b 与 d23e39d 之间只改了对比表工具与归档），README 的交叉验证一节随之列出三次。
+
 ## 与 d5d620c 批次的口径差别：不可直接并排
 
 d5d620c（20261019-d5d620c）之后，框架缺省行为与 harness 都有改动，**本批与 d5d620c 批次不可直接并排**：

@@ -3,8 +3,8 @@
 一个可以被真实项目依赖的 Java RPC 库：Netty 传输 + 自研二进制协议 + ZooKeeper / Nacos 服务发现 + Spring Boot starter。
 核心是纯 Java（不依赖任何容器），同一个 JVM 里可以 new 出多个客户端与服务端；Spring Boot 只是在它外面包了一层。
 
-> 当前状态：**阶段 0（可用性修复）已完成**，尚未发布到 Maven 仓库，需要先在本地 `mvn install`。
-> 还没有链路追踪与压测数据（见[路线图](#路线图)）；调用指标见 [docs/observability.md](docs/observability.md)。使用前请先读[已知边界](#已知边界)。
+> 当前状态：**阶段 0 ~ 3 已完成**（可用性修复、证据基础设施、实测数据、发布就绪），版本 `1.0.0` 发布中（见[快速开始](#快速开始)）。
+> 压测数字与对比见[测试与证据](#测试与证据)与 [docs/comparison.md](docs/comparison.md)；还没有链路追踪（见[路线图](#路线图)），调用指标见 [docs/observability.md](docs/observability.md)。使用前请先读[已知边界](#已知边界)。
 
 ## 目录
 
@@ -137,7 +137,8 @@
 
 BOM 只管本框架自己的模块版本，不覆盖你工程里 Netty、Spring 等第三方依赖的版本。不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
 
-在 Central 上线之前（或想用 main 上的最新代码），在仓库根目录 `mvn install -DskipTests` 装到本地仓库，把上面的版本换成 `1.0.0-SNAPSHOT`。
+发布到 Maven Central 的版本见 [Releases](https://github.com/sisyfy-Zhang/rpc-framework/releases)。在 Central 上线之前（或想用 main 上的最新代码），在仓库根目录 `mvn install -DskipTests`
+装到本地仓库，把上面的版本换成根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
 
 ### 1. 纯 Java
 
@@ -361,7 +362,8 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 - **ZooKeeper 不可达时，下线节点会残留到会话超时**：进程退出但无法连上 ZK 摘注册时，临时节点要等服务端判定会话过期（缺省请求 30s，实际值取决于 ZK 的 tickTime 协商）才消失，期间消费端可能仍选到它（会以连接失败的形式出现）。
 - **连接重置后，`retries > 0` 可能重发已经执行过的请求**：请求写出后连接断开，客户端无法知道服务端是否已执行，会按传输失败处理并重试。只对幂等方法设置 `retries`，或在业务侧用 `rpc.idempotency-key` attachment 自行去重（框架不内置去重）。
 - **返回 `CompletableFuture` 的方法，用户回调在 Netty IO 线程上执行**：在 `thenApply` / `whenComplete` 里做阻塞操作会卡住该连接上的所有请求；需要阻塞时用 `thenApplyAsync(fn, yourExecutor)`。
-- **还没有链路追踪与压测数据**：attachments 已预留 W3C `traceparent` 等键，但 OpenTelemetry 集成、吞吐 / 延迟数据都在[路线图](#路线图)里，本 README 不给出任何性能数字。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](docs/observability.md)）。
+- **还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在[路线图](#路线图)里。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](docs/observability.md)）。性能数字只来自一台笔记本的同机 loopback，见[测试与证据](#测试与证据)的"不可外推"。
+- **没有按节点的熔断 / 离群摘除**：进程存活但不回包（连接静默挂起）时，打到它的请求持续超时（超时不重试；读空闲 40s 关连接后重连仍被挂住；进程存活，注册中心也不摘），见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
 - **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。
 - **服务端 Filter 运行在业务线程上**：IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
 
@@ -387,23 +389,62 @@ Maven 会把 rpc-core 的全部测试类放进集成测试的 classpath（`LeakC
 
 CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用，Nacos 契约测试实跑）、Linux 真实 SIGTERM 用例、paranoid 泄漏检测、JDK 25 可选任务。
 
+### 压测数据
+
+数字只由压测流水线产生（[docs/benchmarking.md](docs/benchmarking.md)）：口径卡驱动独立的服务端 / 客户端 JVM，JSON 是事实源，Markdown 由 JSON 生成。
+下面全部取自归档 [`bench/reports/20261022-d23e39d/`](bench/reports/20261022-d23e39d/)（干净提交 d23e39d，22 张卡全部通过，每卡 60s × 3 轮取正式轮），每个数字旁是它的结果文件；
+完整的三方对比、差距来源与对我们不利的数字见 **[docs/comparison.md](docs/comparison.md)**。
+
+环境：WSL2 Ubuntu（10 vCPU，AMD Ryzen 5 4600H），服务端绑 cpu 0-4、压测端绑 5-9，同机 loopback，1KB 回显，三方都直连（不经注册中心）。
+**不可外推**：没有真实网络、单一负载形态，只说明这台机器上各配置的相对关系与量级。
+
+| 卡 | 本框架 fixed（缺省） | 本框架 direct（非缺省，opt-in） | gRPC 1.85 开箱即用 / 2 连接 | Dubbo 3.3.6 开箱即用 / 2 连接 |
+|---|---|---|---|---|
+| 闭环 64 并发：吞吐 (req/s) | [101,943.2](bench/reports/20261022-d23e39d/compare/compare-closed64-rpc-v1-20261022-012703.md) | [142,671.6](bench/reports/20261022-d23e39d/compare/compare-closed64-rpc-direct-v1-20261022-020438.md) | [14,386.4](bench/reports/20261022-d23e39d/compare/compare-closed64-grpc-v1-20261022-013714.md) / [35,516.3](bench/reports/20261022-d23e39d/compare/compare-closed64-grpc-c2-v1-20261022-014400.md) | [14,401.8](bench/reports/20261022-d23e39d/compare/compare-closed64-dubbo-v1-20261022-015049.md) / [25,963.1](bench/reports/20261022-d23e39d/compare/compare-closed64-dubbo-c2-v1-20261022-015743.md) |
+| 开环 10000 req/s：p99 (ms) | [0.798](bench/reports/20261022-d23e39d/compare/compare-open10k-rpc-v1-20261022-013024.md) | [0.530](bench/reports/20261022-d23e39d/compare/compare-open10k-rpc-direct-v1-20261022-020759.md) | [20.955](bench/reports/20261022-d23e39d/compare/compare-open10k-grpc-v1-20261022-014037.md) / [1.338](bench/reports/20261022-d23e39d/compare/compare-open10k-grpc-c2-v1-20261022-014722.md) | [22.233](bench/reports/20261022-d23e39d/compare/compare-open10k-dubbo-v1-20261022-015412.md) / [4.235](bench/reports/20261022-d23e39d/compare/compare-open10k-dubbo-c2-v1-20261022-020106.md) |
+
+并排总表（含 CPU、GC、每请求系统调用与上下文切换）：[compare.md](bench/reports/20261022-d23e39d/compare/compare.md)、[sweep/compare.md](bench/reports/20261022-d23e39d/sweep/compare.md)。
+direct 让业务方法在 IO 线程上执行，阻塞即卡住同一事件循环上的所有连接，只适合纯 CPU、微秒级的方法，不是缺省，对外以 fixed 为准。
+gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连接，开箱即用的差距大头在这两点，不在编解码（[comparison.md 第 3 节](docs/comparison.md#3-差在哪)）。
+
+- **故障注入**（慢节点 / 杀节点 / 突增，真实制造，判定预登记；探针口径）：P2C 把慢节点份额从 1/3 压到 0.038；failover 下 `kill -9` 零错误；
+  有界队列在 3 倍突增下快速拒绝、回落 1s 恢复；连接静默挂起时 1/3 流量持续超时——没有离群摘除，见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
+- **harness 交叉验证**（阶段 1 验收项 A1-4：与 wrk2 / wrk 打同一个 HTTP 端点）：开环**连续 3 次 PASS**（第 1 次在 d23e39d 上；第 2、3 次在 d8dc78b 上，它与 d23e39d 之间只改了对比表工具 `CompareReport` 与归档，不碰发压与测量路径）
+  （[第 1 次](bench/reports/20261022-d23e39d/crossval-open-20261022-024132.md) · [第 2 次](bench/reports/20261022-d23e39d/crossval-repeat/run-2/crossval-open-20261022-032433.md) · [第 3 次](bench/reports/20261022-d23e39d/crossval-repeat/run-3/crossval-open-20261022-033221.md)），
+  闭环容量标定 [PASS](bench/reports/20261022-d23e39d/crossval-closed-20261022-024556.md)；判据与流程见 [docs/benchmarking.md「交叉验证」](docs/benchmarking.md#交叉验证)。
+
 ## 路线图
 
-- **阶段 1 · 证据基础设施**：`docker compose up` 一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy；Micrometer 指标 Filter 与 Grafana 面板（QPS、p99、在途、连接数、错误码）；压测 CLI 输出带环境与口径的 JSON / Markdown 报告；用 wrk / k6 交叉验证自研压测客户端（偏差 < 15%）。
-  - 压测 harness 已就位：口径卡、子命令、WSL2 标准流程、报告字段与 harness 交叉验证见 [docs/benchmarking.md](docs/benchmarking.md)；README 中的压测数字只引用它生成的报告文件。
-- **阶段 2 · 跑数据**：同机吞吐与 p50 / p99（对照 gRPC-Java、Dubbo triple）；慢节点下 RoundRobin 与 P2C 的 p99；杀一个提供者的错误数与恢复时间；流量突增 3 倍时过载保护的效果；每组 3 轮，附环境说明与"不可外推"声明。
-- **阶段 3 · 发布**：CI 全绿；坐标发布到 Maven Central（`io.github.sisyfy-zhang`，流程见 [docs/releasing.md](docs/releasing.md)）；空白 Boot 4 工程按接入文档 15 分钟跑通。
-- **阶段 4 · 可选（每项自带对比实验）**：自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
+- **阶段 0 · 可用性修复**：已完成。纯 Java 核心、协议 v2、多实例、优雅停机、deadline、序列化白名单、Registry TCK 等（见[特性](#特性)）。
+- **阶段 1 · 证据基础设施**：已完成。`docker compose up` 一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy（[docker/README.md](docker/README.md)）；
+  Micrometer 指标与 Grafana 面板；口径卡驱动的压测 harness（[docs/benchmarking.md](docs/benchmarking.md)）；harness 与 wrk / wrk2 交叉验证，开环连续 3 次 PASS（见[压测数据](#压测数据)）。
+- **阶段 2 · 跑数据**：已完成。同机吞吐与 p50 / p99 对照 gRPC-Java、Dubbo triple（开箱即用与连接数对齐两种配置）、并发与连接数扫描，
+  归档 [`bench/reports/20261022-d23e39d/`](bench/reports/20261022-d23e39d/)；传输路径调研（[docs/research/transport-path-comparison.md](docs/research/transport-path-comparison.md)）
+  之后的 flush 合并、出站背压、direct 执行器（opt-in）各有 A/B 探针，每连接写队列实测无收益已回退；慢节点 / 杀节点 / 突增三组故障注入。
+- **阶段 3 · 发布**：已完成就绪项。CI 全绿；坐标 `io.github.sisyfy-zhang`、`rpc-bom`、release profile 与 release.yml（[docs/releasing.md](docs/releasing.md)）；
+  空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 上 Central 以 Releases 为准。
+- **阶段 4 · 可选（每项自带对比实验）**：
+  - **离群摘除 / 熔断**：按节点的超时 / 失败率摘除。证据：连接静默挂起时 1/3 流量持续超时到轮次结束（[故障注入](docs/probes/fault-injection.md)）。
+  - 自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
 
 ## 文档
 
+- [docs/comparison.md](docs/comparison.md)：与 gRPC-Java / Dubbo 3 的对比报告：环境与口径、三方表、差距来源、对我们不利的数字、故障注入结论、方法论
 - [docs/getting-started.md](docs/getting-started.md)：15 分钟接入指南（空白 Boot 4 工程 → provider + consumer），含常见错误对照表
 - [docs/protocol.md](docs/protocol.md)：协议 v2 规格（帧头、attachments、信封、状态码、协商、连接关闭规则）
 - [docs/pitfalls.md](docs/pitfalls.md)：开发中踩过的坑（现象 / 根因 / 修法 / 教训）
 - [docs/benchmarking.md](docs/benchmarking.md)：端到端压测：口径卡字段、`server` / `run` / `report` / `crossval` 子命令、WSL2 标准流程、报告字段、harness 交叉验证
 - [docs/observability.md](docs/observability.md)：指标：指标名与 tag、status 取值、计时口径、PromQL 示例、Grafana 面板、纯 Java 内嵌 `/metrics`；中间件与面板的一键环境见 [docker/README.md](docker/README.md)
 - [docs/releasing.md](docs/releasing.md)：发布到 Maven Central：前置（Central 账号、命名空间、GPG、Secrets）、版本号规则、打 tag、release.yml 做了什么、在 Central Portal 点 Publish、回滚与重发
-- [docs/probes/protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
+- [docs/research/transport-path-comparison.md](docs/research/transport-path-comparison.md)：传输路径对照调研（gRPC-Java / Dubbo / Netty / SOFA-Bolt / Motan），候选优化清单
+- 探针与对照实验（[docs/probes/](docs/probes/)）：
+  - [flush-and-executor.md](docs/probes/flush-and-executor.md)：flush 合并 A/B、direct 执行器、单连接上限
+  - [write-queue-and-context-switches.md](docs/probes/write-queue-and-context-switches.md)：每连接写队列（否定结果，已回退）与上下文切换按线程组归因
+  - [outbound-backpressure.md](docs/probes/outbound-backpressure.md)：出站背压的机制、"只发不读"对照与正常负载下的代价
+  - [fault-injection.md](docs/probes/fault-injection.md)：慢节点、杀节点、突增三组故障注入
+  - [harness-tail-latency.md](docs/probes/harness-tail-latency.md)：harness 开环尾延迟的来源与修稳
+  - [nacos-timing.md](docs/probes/nacos-timing.md)：Nacos 首订阅与消失窗口的时序校准
+  - [protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
 - [rpc-examples/README.md](rpc-examples/README.md)：示例的运行方式
 
 ## 许可证

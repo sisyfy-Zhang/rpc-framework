@@ -17,7 +17,7 @@
 | [compare-open10k-rpc-direct-v1](#compare-open10k-rpc-direct-v1) | 1 | 2026-10-21T15:07:59.418395663Z | **通过** |
 | [compare-open10k-rpc-v1](#compare-open10k-rpc-v1) | 1 | 2026-10-21T14:30:24.659749822Z | **通过** |
 | [crossval-http-closed-capacity-v1](#crossval-http-closed-capacity-v1) | 1 | 2026-10-21T15:41:33.635327629Z | **通过** |
-| [crossval-http-open-v1](#crossval-http-open-v1) | 1 | 2026-10-21T15:35:08.396326655Z | **通过** |
+| [crossval-http-open-v1](#crossval-http-open-v1) | 3 | 2026-10-21T16:25:57.951165425Z | **通过** |
 | [loopback-latency-v1](#loopback-latency-v1) | 1 | 2026-10-21T15:31:42.824388436Z | **通过** |
 | [loopback-throughput-v1](#loopback-throughput-v1) | 1 | 2026-10-21T15:28:20.737128534Z | **通过** |
 | [sweep-c1-closed64-rpc-direct-v1](#sweep-c1-closed64-rpc-direct-v1) | 1 | 2026-10-21T15:11:22.748049778Z | **通过** |
@@ -38,7 +38,6 @@
 | transport（序列化） | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **rpc（protobuf）** | `compare-closed64-rpc-v1` | 101943.2 | 1.00× | 0.573 | 1.458 | 2.789 | 15.385 | 57.2% | 49.1% | 否 | 58 / 54 | 0.19 / 0.16 | 0.27 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-closed64-rpc-v1-20261022-012703.json` |
-| **rpc（protobuf）** | `loopback-throughput-v1` | 103918.9 | 1.02× | 0.570 | 1.365 | 2.531 | 7.901 | 59.7% | 49.8% | 否 | 65 / 52 | 0.20 / 0.17 | 0.28 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-throughput-v1-20261022-022820.json` |
 | **grpc（protobuf）** | `compare-closed64-grpc-v1` | 14386.4 | 0.14× | 4.297 | 7.152 | 8.471 | 25.952 | 20.9% | 38.7% | 否 | 12 / 12 | 1.38 / 0.06 | 1.28 / 2.81 | — | 0 | 通过 | 1 ManagedChannel = 1 HTTP/2 connection; concurrent calls are multiplexed streams (rpc cards: 2 TCP connections per provider) | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 grpc default (no executor(...): shared cached thread pool, handlers run off the IO threads) | `compare-closed64-grpc-v1-20261022-013714.json` |
 | **dubbo（hessian2）** | `compare-closed64-dubbo-v1` | 14401.8 | 0.14× | 4.530 | 7.307 | 10.166 | 35.226 | 23.7% | 41.6% | 否 | 63 / 62 | 0.11 / 0.07 | 0.25 / 2.73 | — | 0 | 通过 | 1 triple HTTP/2 connection per address; concurrent calls are multiplexed streams (rpc cards: 2 TCP connections per provider) | dubbo default (shared client event loop: min(available cores + 1, 32) = 6) | IO 线程 default (aligned with Netty: 2 x available cores = 10)；执行器 dubbo default (threadpool=fixed, threads=200): business methods run off the IO threads | `compare-closed64-dubbo-v1-20261022-015049.json` |
 
@@ -63,7 +62,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | transport（序列化） | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **rpc（protobuf）** | `compare-closed64-rpc-v1` | 101943.2 | 1.00× | 0.573 | 1.458 | 2.789 | 15.385 | 57.2% | 49.1% | 否 | 58 / 54 | 0.19 / 0.16 | 0.27 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-closed64-rpc-v1-20261022-012703.json` |
-| **rpc（protobuf）** | `loopback-throughput-v1` | 103918.9 | 1.02× | 0.570 | 1.365 | 2.531 | 7.901 | 59.7% | 49.8% | 否 | 65 / 52 | 0.20 / 0.17 | 0.28 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-throughput-v1-20261022-022820.json` |
 | **grpc（protobuf）** | `compare-closed64-grpc-c2-v1` | 35516.3 | 0.35× | 1.677 | 4.678 | 7.152 | 35.160 | 52.4% | 64.0% | 否 | 28 / 27 | 1.61 / 0.18 | 1.49 / -1.30 | — | 0 | 通过 | 2 ManagedChannels = 2 HTTP/2 connections, calls take a channel round-robin; concurrent calls are multiplexed streams | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 grpc default (no executor(...): shared cached thread pool, handlers run off the IO threads) | `compare-closed64-grpc-c2-v1-20261022-014400.json` |
 | **dubbo（hessian2）** | `compare-closed64-dubbo-c2-v1` | 25963.1 | 0.25× | 2.302 | 5.784 | 9.765 | 49.578 | 56.1% | 68.0% | 否 | 136 / 110 | 0.32 / 0.17 | 0.42 / 2.43 | — | 0 | 通过 | 2 independent Dubbo client instances = 2 triple HTTP/2 connections, calls take an instance round-robin; concurrent calls are multiplexed streams | dubbo default (shared client event loop: min(available cores + 1, 32) = 6) | IO 线程 default (aligned with Netty: 2 x available cores = 10)；执行器 dubbo default (threadpool=fixed, threads=200): business methods run off the IO threads | `compare-closed64-dubbo-c2-v1-20261022-015743.json` |
 
@@ -86,7 +84,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **1** | rpc（protobuf） | `sweep-c1-closed64-rpc-v1` | 92771.5 | 1.00× | 0.633 | 1.540 | 2.679 | 27.984 | 38.1% | 38.8% | 否 | 54 / 47 | 0.09 / 0.10 | 0.19 / 0.26 | 0 | 0 | 通过 | 1 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `sweep-c1-closed64-rpc-v1-20261022-013349.json` |
 | **2（缺省）** | rpc（protobuf） | `compare-closed64-rpc-v1` | 101943.2 | 1.10× | 0.573 | 1.458 | 2.789 | 15.385 | 57.2% | 49.1% | 否 | 58 / 54 | 0.19 / 0.16 | 0.27 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-closed64-rpc-v1-20261022-012703.json` |
-| **2（缺省）** | rpc（protobuf） | `loopback-throughput-v1` | 103918.9 | 1.12× | 0.570 | 1.365 | 2.531 | 7.901 | 59.7% | 49.8% | 否 | 65 / 52 | 0.20 / 0.17 | 0.28 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-throughput-v1-20261022-022820.json` |
 
 每行取该结果的正式轮（闭环：窗口吞吐中位数那一轮）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。闭环的 p99 / p99.9 低估尾延迟，尾延迟以开环为准。
 
@@ -123,7 +120,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | 并发 | transport | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **64** | rpc（protobuf） | `compare-closed64-rpc-v1` | 101943.2 | 1.00× | 0.573 | 1.458 | 2.789 | 15.385 | 57.2% | 49.1% | 否 | 58 / 54 | 0.19 / 0.16 | 0.27 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-closed64-rpc-v1-20261022-012703.json` |
-| **64** | rpc（protobuf） | `loopback-throughput-v1` | 103918.9 | 1.02× | 0.570 | 1.365 | 2.531 | 7.901 | 59.7% | 49.8% | 否 | 65 / 52 | 0.20 / 0.17 | 0.28 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-throughput-v1-20261022-022820.json` |
 | **128** | rpc（protobuf） | `sweep-closed128-rpc-v1` | 141161.6 | 1.38× | 0.837 | 2.191 | 4.641 | 43.516 | 63.9% | 49.9% | 否 | 84 / 72 | 0.15 / 0.11 | 0.19 / 0.18 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `sweep-closed128-rpc-v1-20261022-021445.json` |
 | **256** | rpc（protobuf） | `sweep-closed256-rpc-v1` | 162498.2 | 1.59× | 1.474 | 3.701 | 5.915 | 35.652 | 61.7% | 48.5% | 否 | 103 / 88 | 0.13 / 0.07 | 0.14 / 0.13 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `sweep-closed256-rpc-v1-20261022-021807.json` |
 
@@ -144,7 +140,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **direct** | rpc（protobuf） | `compare-closed64-rpc-direct-v1` | 142671.6 | 1.00× | 0.421 | 0.977 | 2.284 | 19.038 | 60.3% | 27.2% | 否 | 79 / 69 | 0.18 / 0.08 | 0.24 / 0.04 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 direct (NOT the default): business methods run on the IO threads (max in-flight 10000) | `compare-closed64-rpc-direct-v1-20261022-020438.json` |
 | **fixed** | rpc（protobuf） | `compare-closed64-rpc-v1` | 101943.2 | 0.71× | 0.573 | 1.458 | 2.789 | 15.385 | 57.2% | 49.1% | 否 | 58 / 54 | 0.19 / 0.16 | 0.27 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-closed64-rpc-v1-20261022-012703.json` |
-| **fixed** | rpc（protobuf） | `loopback-throughput-v1` | 103918.9 | 0.73× | 0.570 | 1.365 | 2.531 | 7.901 | 59.7% | 49.8% | 否 | 65 / 52 | 0.20 / 0.17 | 0.28 / 0.27 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-throughput-v1-20261022-022820.json` |
 
 每行取该结果的正式轮（闭环：窗口吞吐中位数那一轮）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。闭环的 p99 / p99.9 低估尾延迟，尾延迟以开环为准。
 
@@ -155,7 +150,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | transport（序列化） | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 服务时间 p99 (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **rpc（protobuf）** | `compare-open10k-rpc-v1` | 10000.0 | 1.00× | 0.440 | 0.798 | 14.475 | 32.621 | 0.702 | 50.0% | 37.6% | 否 | 8 / 7 | 1.77 / 1.58 | 3.01 / 2.18 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-open10k-rpc-v1-20261022-013024.json` |
-| **rpc（protobuf）** | `loopback-latency-v1` | 10000.0 | 1.00× | 0.382 | 0.782 | 2.059 | 5.526 | 0.710 | 56.9% | 37.4% | 否 | 8 / 6 | 1.81 / 1.66 | 3.09 / 2.30 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-latency-v1-20261022-023142.json` |
 | **grpc（protobuf）** | `compare-open10k-grpc-v1` | 9999.7 | 1.00× | 1.226 | 20.955 | 37.552 | 44.728 | 7.741 | 52.1% | 36.6% | 否 | 11 / 8 | 3.22 / 0.45 | 2.99 / 2.86 | — | 0 | 通过 | 1 ManagedChannel = 1 HTTP/2 connection; concurrent calls are multiplexed streams (rpc cards: 2 TCP connections per provider) | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 grpc default (no executor(...): shared cached thread pool, handlers run off the IO threads) | `compare-open10k-grpc-v1-20261022-014037.json` |
 | **dubbo（hessian2）** | `compare-open10k-dubbo-v1` | 10000.0 | 1.00× | 0.776 | 22.233 | 30.753 | 41.746 | 5.308 | 59.1% | 42.4% | 否 | 42 / 45 | 1.08 / 0.65 | 2.37 / 1.46 | — | 0 | 通过 | 1 triple HTTP/2 connection per address; concurrent calls are multiplexed streams (rpc cards: 2 TCP connections per provider) | dubbo default (shared client event loop: min(available cores + 1, 32) = 6) | IO 线程 default (aligned with Netty: 2 x available cores = 10)；执行器 dubbo default (threadpool=fixed, threads=200): business methods run off the IO threads | `compare-open10k-dubbo-v1-20261022-015412.json` |
 
@@ -168,7 +162,6 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | transport（序列化） | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 服务时间 p99 (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **rpc（protobuf）** | `compare-open10k-rpc-v1` | 10000.0 | 1.00× | 0.440 | 0.798 | 14.475 | 32.621 | 0.702 | 50.0% | 37.6% | 否 | 8 / 7 | 1.77 / 1.58 | 3.01 / 2.18 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-open10k-rpc-v1-20261022-013024.json` |
-| **rpc（protobuf）** | `loopback-latency-v1` | 10000.0 | 1.00× | 0.382 | 0.782 | 2.059 | 5.526 | 0.710 | 56.9% | 37.4% | 否 | 8 / 6 | 1.81 / 1.66 | 3.09 / 2.30 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-latency-v1-20261022-023142.json` |
 | **grpc（protobuf）** | `compare-open10k-grpc-c2-v1` | 10000.1 | 1.00× | 0.585 | 1.338 | 8.511 | 33.014 | 1.239 | 60.9% | 50.1% | 否 | 13 / 11 | 4.07 / 2.53 | 4.18 / 3.61 | — | 0 | 通过 | 2 ManagedChannels = 2 HTTP/2 connections, calls take a channel round-robin; concurrent calls are multiplexed streams | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 grpc default (no executor(...): shared cached thread pool, handlers run off the IO threads) | `compare-open10k-grpc-c2-v1-20261022-014722.json` |
 | **dubbo（hessian2）** | `compare-open10k-dubbo-c2-v1` | 10000.0 | 1.00× | 0.708 | 4.235 | 25.346 | 33.112 | 2.791 | 71.6% | 52.6% | 否 | 44 / 47 | 1.51 / 1.29 | 3.01 / 1.75 | — | 0 | 通过 | 2 independent Dubbo client instances = 2 triple HTTP/2 connections, calls take an instance round-robin; concurrent calls are multiplexed streams | dubbo default (shared client event loop: min(available cores + 1, 32) = 6) | IO 线程 default (aligned with Netty: 2 x available cores = 10)；执行器 dubbo default (threadpool=fixed, threads=200): business methods run off the IO threads | `compare-open10k-dubbo-c2-v1-20261022-020106.json` |
 
@@ -200,7 +193,18 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **direct** | rpc（protobuf） | `compare-open10k-rpc-direct-v1` | 10000.0 | 1.00× | 0.251 | 0.530 | 3.133 | 14.967 | 0.446 | 49.6% | 21.7% | 否 | 8 / 6 | 1.66 / 0.99 | 3.37 / 0.99 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 direct (NOT the default): business methods run on the IO threads (max in-flight 10000) | `compare-open10k-rpc-direct-v1-20261022-020759.json` |
 | **fixed** | rpc（protobuf） | `compare-open10k-rpc-v1` | 10000.0 | 1.00× | 0.440 | 0.798 | 14.475 | 32.621 | 0.702 | 50.0% | 37.6% | 否 | 8 / 7 | 1.77 / 1.58 | 3.01 / 2.18 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `compare-open10k-rpc-v1-20261022-013024.json` |
-| **fixed** | rpc（protobuf） | `loopback-latency-v1` | 10000.0 | 1.00× | 0.382 | 0.782 | 2.059 | 5.526 | 0.710 | 56.9% | 37.4% | 否 | 8 / 6 | 1.81 / 1.66 | 3.09 / 2.30 | 0 | 0 | 通过 | 2 TCP connection(s) per provider, requests multiplexed by request id | default (Netty: 2 x available cores = 10) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `loopback-latency-v1-20261022-023142.json` |
+
+每行取该结果的正式轮（开环：窗口 p99 中位数那一轮）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。开环延迟从计划发出时刻算起（修正 coordinated omission）。
+
+### 开环 · 1024 B · `BenchService#echo` · 每轮 60s（预热 20s，窗口 [20s, 60s]）× 3 轮 · 超时 1s · 目标 http
+
+> 同一口径的重复运行（没有字段不同）。
+
+| transport | 口径卡 | 吞吐 (req/s) | 吞吐 / 首行 | p50 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 服务时间 p99 (ms) | 客户端核 CPU | 服务端核 CPU | client_bound | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 上下文切换/请求 客户端/服务端 | 暂停读次数 | 窗口错误 | 判定 | 连接 | 客户端 IO 线程 | 服务端配置 | 结果文件 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| http | `crossval-http-open-v1` | 5000.0 | 1.00× | 0.180 | 0.403 | 0.684 | 8.839 | 0.334 | 23.4% | 12.9% | 否 | 0 / 2 | 1.00 / 1.00 | -0.02 / 0.99 | 0 | 0 | 通过 | open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2 | n/a (blocking client) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `crossval-http-open-v1-20261022-023508.json` |
+| http | `crossval-http-open-v1` | 5000.0 | 1.00× | 0.188 | 0.402 | 2.666 | 20.595 | 0.321 | 24.5% | 22.9% | 否 | 0 / 2 | 1.00 / 1.00 | -1.01 / 1.01 | 0 | 0 | 通过 | open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2 | n/a (blocking client) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `crossval-http-open-v1-20261022-031809.json` |
+| http | `crossval-http-open-v1` | 5000.0 | 1.00× | 0.182 | 0.401 | 2.433 | 13.746 | 0.315 | 37.1% | 14.9% | 否 | 0 / 2 | 1.00 / 1.00 | -1.02 / 0.99 | 0 | 0 | 通过 | open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2 | n/a (blocking client) | IO 线程 default (Netty: 2 x available cores = 10)；执行器 fixed pool (10 threads, queue 1000): business methods run off the IO threads | `crossval-http-open-v1-20261022-032557.json` |
 
 每行取该结果的正式轮（开环：窗口 p99 中位数那一轮）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。开环延迟从计划发出时刻算起（修正 coordinated omission）。
 
@@ -1284,11 +1288,13 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 
 ## crossval-http-open-v1
 
+### crossval-http-open-v1-20261022-023508.json
+
 > 标签：`archive` · 结果文件：`crossval-http-open-v1-20261022-023508.json` · 判定：**通过**
 
 **问题**：校验 harness 开环的达成吞吐、服务时间与节拍质量
 
-### 环境
+#### 环境
 
 | 项 | 值 |
 |---|---|
@@ -1311,7 +1317,7 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | 时间 | 2026-10-21T15:35:08.396326655Z → 2026-10-21T15:38:30.699849085Z |
 | harness | rpc-bench-e2e 1.0.0-SNAPSHOT |
 
-### 口径
+#### 口径
 
 | 项 | 值 |
 |---|---|
@@ -1327,7 +1333,7 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | harness 选项 | 开环执行者 pool-platform（64 个平台线程工作者，有界 FIFO 队列） · HTTP 客户端 blocking · 调度线程绑核 5（第 1 轮读回：pinned，其余线程 6-9） |
 | 预热段 | 20s（load.warmup），第 1 轮之前以同样负载跑、不计入任何轮：发出 100000、错误 0、延迟 p99 0.484ms、最大在途 28 |
 
-### 轮次
+#### 轮次
 
 | 轮 | 窗口内请求 | 吞吐 (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 错误（窗口内） | 服务时间 p99 (ms) | 发出滞后 p99 (ms) | 客户端核 CPU | 服务端核 CPU | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 暂停读次数 | 有效 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1351,13 +1357,179 @@ transport 表不按服务端执行器与 flush 合并分区：它们是各框架
 | other | 7 -> 6 | 0.000（0.000 / 0.000） | 2 -> 2 | 0.000（0.000 / 0.000） |
 | 合计 | | -0.020 | | 0.992 |
 
-### 断言
+#### 断言
 
 | 断言 | 阈值 | 实测 | 口径 | 结果 |
 |---|---|---|---|---|
 | `errors_max` | 0 | 0 | 全部轮次窗口内错误之和 | 通过 |
 
-### 声明
+#### 声明
+
+- 数字来自固定的一台本机（localhost，AMD Ryzen 5 4600H with Radeon Graphics），只说明这台机器上这个口径下的量级，不可外推到其它机器、其它网络或生产环境。
+- 拓扑：client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19180]），经 http://127.0.0.1:19180/echo 发现；卡片声明的注册中心：none (direct HTTP URL)。
+- 开环负载（open）：延迟从计划发出时刻算起，发压端自身的调度滞后（见“发出滞后”列）也计入延迟；发出滞后的 p99 明显大于服务时间时，说明压测端本身成了瓶颈，数字不代表被测服务。
+- 开环调度线程以忙等对齐节拍，独占一个核；本报告的 CPU 亲和见环境表。
+- 错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。
+
+### crossval-http-open-v1-20261022-031809.json
+
+> 标签：`crossval` · 结果文件：`crossval-http-open-v1-20261022-031809.json` · 判定：**通过**
+
+**问题**：校验 harness 开环的达成吞吐、服务时间与节拍质量
+
+#### 环境
+
+| 项 | 值 |
+|---|---|
+| 操作系统 | Linux 6.18.33.2-microsoft-standard-WSL2 (amd64) |
+| WSL | 是 |
+| CPU | AMD Ryzen 5 4600H with Radeon Graphics |
+| 可用核数 / 主机核数 | 5 / 10（服务端 5 / 10） |
+| 内存 | 9.7 GiB |
+| JDK | 21.0.12.1+1-LTS · Eclipse Adoptium · OpenJDK 64-Bit Server VM |
+| JVM 参数（压测端） | `-Xms1g -Xmx1g -XX:+AlwaysPreTouch` |
+| 服务端 JVM 参数 | `-Xms1g -Xmx1g -XX:+AlwaysPreTouch` |
+| CPU 亲和（压测端） | 5-9 |
+| 服务端 CPU 亲和 | 0-4 |
+| 指标 | 压测端 metrics_enabled=false · 服务端 metrics_enabled=false |
+| GC | G1 Young Generation G1 Concurrent GC G1 Old Generation |
+| Netty | 4.1.136.Final |
+| git | d8dc78b（干净） |
+| 主机名 | localhost |
+| 电源 / 调频 | AC1=1 / n/a |
+| 时间 | 2026-10-21T16:18:09.436860180Z → 2026-10-21T16:21:32.076333756Z |
+| harness | rpc-bench-e2e 1.0.0-SNAPSHOT |
+
+#### 口径
+
+| 项 | 值 |
+|---|---|
+| 目标 | http · `BenchService#echo` · bytes，1024 B（固定种子随机内容） |
+| 序列化 / 提供者 | —（HTTP 请求体就是原始字节）/ 1 个 URL |
+| 连接 | http://127.0.0.1:19180/echo，64 条 keep-alive 连接、每条同一时刻 1 个在途请求（open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2），重试 0 |
+| 负载模型 | 开环（open），5000 req/s 等间隔发出，在途上限 10000 |
+| 时长 | 60s / 轮，预热 20s，统计窗口 [20s, 60s]，共 3 轮 |
+| 超时 | 1s |
+| 隔离 | client separate_jvm · server separate_jvm · 同机 是 · 注册中心 none (direct HTTP URL) |
+| 直方图 | HdrHistogram，3 位有效数字，上限 10s；只统计完成时刻落在窗口内的成功调用 |
+| 延迟起点 | 计划发出时刻（开环，修正 coordinated omission） |
+| harness 选项 | 开环执行者 pool-platform（64 个平台线程工作者，有界 FIFO 队列） · HTTP 客户端 blocking · 调度线程绑核 5（第 1 轮读回：pinned，其余线程 6-9） |
+| 预热段 | 20s（load.warmup），第 1 轮之前以同样负载跑、不计入任何轮：发出 100000、错误 0、延迟 p99 0.481ms、最大在途 37 |
+
+#### 轮次
+
+| 轮 | 窗口内请求 | 吞吐 (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 错误（窗口内） | 服务时间 p99 (ms) | 发出滞后 p99 (ms) | 客户端核 CPU | 服务端核 CPU | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 暂停读次数 | 有效 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 199999 | 5000.0 | 0.207 | 0.334 | 0.433 | 1.595 | 151.388 | 0 | 0.358 | 0.014 | 24.7% | 23.7% | 0 / 3 | 1.00 / 1.00 | 0 | 是 |
+| **2（正式）** | **200001** | **5000.0** | **0.188** | **0.303** | **0.402** | **2.666** | **20.595** | **0** | **0.321** | **0.013** | **24.5%** | **22.9%** | **0 / 2** | **1.00 / 1.00** | **0** | **是** |
+| 3 | 200000 | 5000.0 | 0.179 | 0.295 | 0.390 | 1.084 | 10.633 | 0 | 0.315 | 0.012 | 24.0% | 11.3% | 8 / 2 | 1.00 / 1.00 | 0 | 是 |
+
+正式轮：第 2 轮（开环：窗口 p99 的中位数那一轮）。各轮极差：throughput_rps 0.050（0.0%），p50_ms 0.028（15.6%），p99_ms 0.043（11.0%），p999_ms 1.582（145.9%）。
+
+服务端业务执行器（正式轮统计窗口内）：过载拒绝 0，停机拒绝 0，排队等待 p50 / p99 / max — / — / — ms（0 个请求；到达 → 业务线程开始执行）。
+
+上下文切换按线程组（正式轮，统计窗口内；按线程名前缀归组，口径见 docs/benchmarking.md）：
+
+| 线程组 | 客户端 线程数 | 客户端 切换/请求（自愿 / 非自愿） | 服务端 线程数 | 服务端 切换/请求（自愿 / 非自愿） |
+|---|---|---|---|---|
+| netty_io | — | — | 12 -> 12 | 1.001（0.988 / 0.013） |
+| fjp | 5 -> 5 | -0.006（-0.004 / -0.002） | — | — |
+| timers | 1 -> 1 | 0.000（0.000 / 0.000） | — | — |
+| harness | 65 -> 0 | -1.005（-1.005 / -0.001） | — | — |
+| jvm | 20 -> 20 | 0.006（0.006 / 0.000） | 20 -> 20 | 0.006（0.006 / 0.000） |
+| other | 7 -> 6 | 0.000（0.000 / 0.000） | 2 -> 2 | 0.000（0.000 / 0.000） |
+| 合计 | | -1.005 | | 1.007 |
+
+#### 断言
+
+| 断言 | 阈值 | 实测 | 口径 | 结果 |
+|---|---|---|---|---|
+| `errors_max` | 0 | 0 | 全部轮次窗口内错误之和 | 通过 |
+
+#### 声明
+
+- 数字来自固定的一台本机（localhost，AMD Ryzen 5 4600H with Radeon Graphics），只说明这台机器上这个口径下的量级，不可外推到其它机器、其它网络或生产环境。
+- 拓扑：client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19180]），经 http://127.0.0.1:19180/echo 发现；卡片声明的注册中心：none (direct HTTP URL)。
+- 开环负载（open）：延迟从计划发出时刻算起，发压端自身的调度滞后（见“发出滞后”列）也计入延迟；发出滞后的 p99 明显大于服务时间时，说明压测端本身成了瓶颈，数字不代表被测服务。
+- 开环调度线程以忙等对齐节拍，独占一个核；本报告的 CPU 亲和见环境表。
+- 错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。
+
+### crossval-http-open-v1-20261022-032557.json
+
+> 标签：`crossval` · 结果文件：`crossval-http-open-v1-20261022-032557.json` · 判定：**通过**
+
+**问题**：校验 harness 开环的达成吞吐、服务时间与节拍质量
+
+#### 环境
+
+| 项 | 值 |
+|---|---|
+| 操作系统 | Linux 6.18.33.2-microsoft-standard-WSL2 (amd64) |
+| WSL | 是 |
+| CPU | AMD Ryzen 5 4600H with Radeon Graphics |
+| 可用核数 / 主机核数 | 5 / 10（服务端 5 / 10） |
+| 内存 | 9.7 GiB |
+| JDK | 21.0.12.1+1-LTS · Eclipse Adoptium · OpenJDK 64-Bit Server VM |
+| JVM 参数（压测端） | `-Xms1g -Xmx1g -XX:+AlwaysPreTouch` |
+| 服务端 JVM 参数 | `-Xms1g -Xmx1g -XX:+AlwaysPreTouch` |
+| CPU 亲和（压测端） | 5-9 |
+| 服务端 CPU 亲和 | 0-4 |
+| 指标 | 压测端 metrics_enabled=false · 服务端 metrics_enabled=false |
+| GC | G1 Young Generation G1 Concurrent GC G1 Old Generation |
+| Netty | 4.1.136.Final |
+| git | d8dc78b（干净） |
+| 主机名 | localhost |
+| 电源 / 调频 | AC1=1 / n/a |
+| 时间 | 2026-10-21T16:25:57.951165425Z → 2026-10-21T16:29:20.292115435Z |
+| harness | rpc-bench-e2e 1.0.0-SNAPSHOT |
+
+#### 口径
+
+| 项 | 值 |
+|---|---|
+| 目标 | http · `BenchService#echo` · bytes，1024 B（固定种子随机内容） |
+| 序列化 / 提供者 | —（HTTP 请求体就是原始字节）/ 1 个 URL |
+| 连接 | http://127.0.0.1:19180/echo，64 条 keep-alive 连接、每条同一时刻 1 个在途请求（open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2），重试 0 |
+| 负载模型 | 开环（open），5000 req/s 等间隔发出，在途上限 10000 |
+| 时长 | 60s / 轮，预热 20s，统计窗口 [20s, 60s]，共 3 轮 |
+| 超时 | 1s |
+| 隔离 | client separate_jvm · server separate_jvm · 同机 是 · 注册中心 none (direct HTTP URL) |
+| 直方图 | HdrHistogram，3 位有效数字，上限 10s；只统计完成时刻落在窗口内的成功调用 |
+| 延迟起点 | 计划发出时刻（开环，修正 coordinated omission） |
+| harness 选项 | 开环执行者 pool-platform（64 个平台线程工作者，有界 FIFO 队列） · HTTP 客户端 blocking · 调度线程绑核 5（第 1 轮读回：pinned，其余线程 6-9） |
+| 预热段 | 20s（load.warmup），第 1 轮之前以同样负载跑、不计入任何轮：发出 100000、错误 0、延迟 p99 0.587ms、最大在途 92 |
+
+#### 轮次
+
+| 轮 | 窗口内请求 | 吞吐 (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | max (ms) | 错误（窗口内） | 服务时间 p99 (ms) | 发出滞后 p99 (ms) | 客户端核 CPU | 服务端核 CPU | GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 暂停读次数 | 有效 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 199999 | 5000.0 | 0.183 | 0.293 | 0.399 | 4.069 | 42.205 | 0 | 0.315 | 0.010 | 22.0% | 26.1% | 0 / 2 | 1.00 / 1.00 | 0 | 是 |
+| **2（正式）** | **200000** | **5000.0** | **0.182** | **0.296** | **0.401** | **2.433** | **13.746** | **0** | **0.315** | **0.011** | **37.1%** | **14.9%** | **0 / 2** | **1.00 / 1.00** | **0** | **是** |
+| 3 | 200000 | 5000.0 | 0.181 | 0.311 | 0.434 | 2.671 | 17.170 | 0 | 0.340 | 0.011 | 23.3% | 13.0% | 4 / 2 | 1.00 / 1.00 | 0 | 是 |
+
+正式轮：第 2 轮（开环：窗口 p99 的中位数那一轮）。各轮极差：throughput_rps 0.025（0.0%），p50_ms 0.002（1.1%），p99_ms 0.035（8.8%），p999_ms 1.636（67.2%）。
+
+服务端业务执行器（正式轮统计窗口内）：过载拒绝 0，停机拒绝 0，排队等待 p50 / p99 / max — / — / — ms（0 个请求；到达 → 业务线程开始执行）。
+
+上下文切换按线程组（正式轮，统计窗口内；按线程名前缀归组，口径见 docs/benchmarking.md）：
+
+| 线程组 | 客户端 线程数 | 客户端 切换/请求（自愿 / 非自愿） | 服务端 线程数 | 服务端 切换/请求（自愿 / 非自愿） |
+|---|---|---|---|---|
+| netty_io | — | — | 12 -> 12 | 0.986（0.985 / 0.001） |
+| fjp | 5 -> 4 | -0.006（-0.004 / -0.002） | — | — |
+| timers | 1 -> 1 | 0.000（0.000 / 0.000） | — | — |
+| harness | 65 -> 0 | -1.023（-1.002 / -0.021） | — | — |
+| jvm | 20 -> 20 | 0.006（0.006 / 0.000） | 20 -> 20 | 0.006（0.006 / 0.000） |
+| other | 7 -> 6 | 0.000（0.000 / 0.000） | 2 -> 2 | 0.000（0.000 / 0.000） |
+| 合计 | | -1.023 | | 0.992 |
+
+#### 断言
+
+| 断言 | 阈值 | 实测 | 口径 | 结果 |
+|---|---|---|---|---|
+| `errors_max` | 0 | 0 | 全部轮次窗口内错误之和 | 通过 |
+
+#### 声明
 
 - 数字来自固定的一台本机（localhost，AMD Ryzen 5 4600H with Radeon Graphics），只说明这台机器上这个口径下的量级，不可外推到其它机器、其它网络或生产环境。
 - 拓扑：client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19180]），经 http://127.0.0.1:19180/echo 发现；卡片声明的注册中心：none (direct HTTP URL)。
@@ -2047,6 +2219,8 @@ harness 与 wrk / wrk2 打同一个 HTTP 目标的比较结果（`crossval` 子�
 |---|---|---|---|---|
 | [crossval-open-20261022-024132.json](#crossval-open-20261022-024132json) | open (measurement) | wrk2 | crossval-http-open-v1-20261022-023508.json | **PASS** |
 | [crossval-closed-20261022-024556.json](#crossval-closed-20261022-024556json) | closed (capacity) | wrk | crossval-http-closed-capacity-v1-20261022-024133.json | **PASS** |
+| [crossval-open-20261022-032433.json](#crossval-open-20261022-032433json) | open (measurement) | wrk2 | crossval-http-open-v1-20261022-031809.json | **PASS** |
+| [crossval-open-20261022-033221.json](#crossval-open-20261022-033221json) | open (measurement) | wrk2 | crossval-http-open-v1-20261022-032557.json | **PASS** |
 
 ### crossval-open-20261022-024132.json
 
@@ -2073,4 +2247,36 @@ harness 与 wrk / wrk2 打同一个 HTTP 目标的比较结果（`crossval` 子�
 | 组 | 判据 | 实测 | 相对偏差 | 结果 |
 |---|---|---|---|---|
 | 唯一判定项 | 两次运行的 CPU 采样都成功，且都能判别瓶颈侧（某一侧平均 ≥ 90%） | harness 运行：压测端饱和；wrk 运行：服务端饱和 | — | 通过 |
+
+### crossval-open-20261022-032433.json
+
+> 判定：**PASS** · 创建于 2026-10-22T03:24:33.691730063+11:00 · harness：`crossval-http-open-v1-20261022-031809.json`（git d8dc78b（干净））· 工具命令：`taskset -c 5-9 wrk2 -t 4 -c 64 -R 5000 --latency -U -s bench/bin/post-1k.lua -d 40s http://127.0.0.1:19180/echo`
+
+**问题**：同一个 HTTP 目标、开环同一 rate，harness 与 wrk2 的发压节拍与测量是否一致——校验的是 harness 本身
+
+| 组 | 判据 | 实测 | 相对偏差 | 结果 |
+|---|---|---|---|---|
+| 前提 | harness 有效轮 ≥ 2（正式轮在有效轮中选）、有效轮窗口内无错误 | valid_rounds=3/3, valid_rounds_window_errors=0 | — | 通过 |
+| 前提 | wrk2 全部 3 次测量无 socket 错误、无非 2xx/3xx 响应 | socket_errors=0, non_2xx_3xx=0（3 次合计） | — | 通过 |
+| a. 达成吞吐 | harness 相对目标 rate 偏差 ≤ 2% | 5000.0 vs 5000 req/s | 0.0% | 通过 |
+| a. 达成吞吐 | wrk2 相对目标 rate 偏差 ≤ 2% | 4995.5 vs 5000 req/s | 0.1% | 通过 |
+| b. 测量一致性 | harness 服务时间 p50 vs wrk2 未修正 p50：相对偏差 ≤ 15% 或绝对差 ≤ 100µs（取宽者） | 0.149 vs 0.155 ms | 3.9% | 通过 |
+| b. 测量一致性 | harness 服务时间 p99 vs wrk2 未修正 p99：相对偏差 ≤ 15% 或绝对差 ≤ 100µs（取宽者） | 0.321 vs 0.382 ms | 16.0% | 通过 |
+| c. 节拍质量 | harness 发出滞后 p99 ≤ 100µs | 0.013 ms | — | 通过 |
+
+### crossval-open-20261022-033221.json
+
+> 判定：**PASS** · 创建于 2026-10-22T03:32:21.427585985+11:00 · harness：`crossval-http-open-v1-20261022-032557.json`（git d8dc78b（干净））· 工具命令：`taskset -c 5-9 wrk2 -t 4 -c 64 -R 5000 --latency -U -s bench/bin/post-1k.lua -d 40s http://127.0.0.1:19180/echo`
+
+**问题**：同一个 HTTP 目标、开环同一 rate，harness 与 wrk2 的发压节拍与测量是否一致——校验的是 harness 本身
+
+| 组 | 判据 | 实测 | 相对偏差 | 结果 |
+|---|---|---|---|---|
+| 前提 | harness 有效轮 ≥ 2（正式轮在有效轮中选）、有效轮窗口内无错误 | valid_rounds=3/3, valid_rounds_window_errors=0 | — | 通过 |
+| 前提 | wrk2 全部 3 次测量无 socket 错误、无非 2xx/3xx 响应 | socket_errors=0, non_2xx_3xx=0（3 次合计） | — | 通过 |
+| a. 达成吞吐 | harness 相对目标 rate 偏差 ≤ 2% | 5000 vs 5000 req/s | 0.0% | 通过 |
+| a. 达成吞吐 | wrk2 相对目标 rate 偏差 ≤ 2% | 4996.0 vs 5000 req/s | 0.1% | 通过 |
+| b. 测量一致性 | harness 服务时间 p50 vs wrk2 未修正 p50：相对偏差 ≤ 15% 或绝对差 ≤ 100µs（取宽者） | 0.143 vs 0.150 ms | 4.7% | 通过 |
+| b. 测量一致性 | harness 服务时间 p99 vs wrk2 未修正 p99：相对偏差 ≤ 15% 或绝对差 ≤ 100µs（取宽者） | 0.315 vs 0.346 ms | 9.0% | 通过 |
+| c. 节拍质量 | harness 发出滞后 p99 ≤ 100µs | 0.011 ms | — | 通过 |
 

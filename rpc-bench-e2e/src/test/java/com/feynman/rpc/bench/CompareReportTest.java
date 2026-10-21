@@ -343,6 +343,58 @@ class CompareReportTest {
 		assertTrue(summary.contains("> 对比轴：`transport`（连接数对齐；connections = 2）。"), summary);
 	}
 
+	/** 给 fixture 写上目标寻址方式（run.target.mode：direct / registry / http），其余 run 字段保持不变。 */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> mode(Map<String, Object> json, String mode) {
+		Map<String, Object> run = new LinkedHashMap<>((Map<String, Object>) json.get("run"));
+		Map<String, Object> target = new LinkedHashMap<>((Map<String, Object>) run.get("target"));
+		target.put("mode", mode);
+		run.put("target", target);
+		json.put("run", run);
+		return json;
+	}
+
+	/**
+	 * 回归（任务 13，20261022-d23e39d 归档的 README 汇总）：经 ZooKeeper 的 loopback 卡与直连的 compare 卡负载口径相同，
+	 * 以前落在同一组，开箱即用的 transport 表多出一行 rpc。寻址方式（run.target.mode）进分组键后两者分组，
+	 * 经注册中心的一组标题写明"经注册中心"，只有它一份时不出表。
+	 */
+	@Test
+	void registryAndDirectResultsAreNotGroupedTogether() {
+		Map<String, Object> rpc = mode(serverConfig(
+				connections(result("c-rpc", "rpc", "protobuf", "closed", 64, 100000.0, 1.5, 57.0, 49.0, false, "t1"), 2, false), "fixed", "on"),
+				"direct");
+		Map<String, Object> loopback = mode(serverConfig(
+				connections(result("loopback-throughput", "rpc", "protobuf", "closed", 64, 104000.0, 1.4, 58.0, 50.0, false, "t2"), 2, false),
+				"fixed", "on"), "registry");
+		Map<String, Object> grpc = mode(serverConfig(
+				connections(result("c-grpc", "grpc", "protobuf", "closed", 64, 14000.0, 7.0, 21.0, 39.0, false, "t3"), 1, false), "grpc-default",
+				null), "direct");
+		Map<String, Object> dubbo = mode(
+				connections(result("c-dubbo", "dubbo", "hessian2", "closed", 64, 14000.0, 7.3, 24.0, 42.0, false, "t4"), 1, false), "direct");
+		List<Map.Entry<String, Map<?, ?>>> results = List.of(Map.entry("rpc.json", rpc), Map.entry("loopback.json", loopback),
+				Map.entry("grpc.json", grpc), Map.entry("dubbo.json", dubbo));
+		String text = CompareReport.document(results);
+		System.out.println(text);
+		String transport = section(text, "> 对比轴：`transport`（开箱即用：各框架缺省连接数）。");
+		assertTrue(transport.contains("`c-rpc`") && transport.contains("`c-grpc`") && transport.contains("`c-dubbo`"), transport);
+		assertFalse(transport.contains("`loopback-throughput`"), "the registry-mode result is not in the direct table: " + transport);
+		assertEquals(1, transport.lines().filter(l -> l.startsWith("| **rpc（protobuf）** |")).count(), "exactly one rpc row: " + transport);
+		assertFalse(text.contains("经注册中心"), "a lone registry-mode result forms no table");
+
+		// 两份经注册中心的结果自成一组，组标题写明寻址方式；直连组的标题不变
+		Map<String, Object> loopback2 = mode(serverConfig(
+				connections(result("loopback-throughput", "rpc", "protobuf", "closed", 64, 103000.0, 1.4, 58.0, 50.0, false, "t5"), 2, false),
+				"fixed", "on"), "registry");
+		String both = CompareReport.render(List.of(Map.entry("rpc.json", rpc), Map.entry("loopback.json", loopback),
+				Map.entry("loopback2.json", loopback2), Map.entry("grpc.json", grpc)), 3);
+		assertTrue(both.contains("× 3 轮 · 超时 1s · 经注册中心\n"), both);
+		assertTrue(both.contains("× 3 轮 · 超时 1s\n"), both);
+		String registryGroup = both.substring(both.indexOf("· 经注册中心"));
+		assertTrue(registryGroup.contains("> 同一口径的重复运行（没有字段不同）。"), registryGroup);
+		assertFalse(registryGroup.contains("`c-rpc`") || registryGroup.contains("`c-grpc`"), registryGroup);
+	}
+
 	/** 从标记行开始到下一个空行之后的表格结束（下一个以 "> " 或 "#" 开头的行）为止。 */
 	private static String section(String text, String marker) {
 		int start = text.indexOf(marker);

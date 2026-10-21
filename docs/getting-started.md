@@ -23,7 +23,7 @@
 - JDK 21、Maven 3.9+。
 - 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `1.0.0`（发布中，坐标以 [Maven Central 页面](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)为准）。
   **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`，代码里 import 的包是 `com.feynman.rpc.*`。
-- 在 Central 上线之前（或想用 main 上的最新代码），先把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成 `1.0.0-SNAPSHOT`。
+- 在 Central 上线之前（或想用 main 上的最新代码），先把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成本仓库根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
   第 3 步的方式 B（嵌入式 ZooKeeper）也要用到这份 clone：
 
 ```bash
@@ -48,7 +48,7 @@ mvn install -DskipTests
 
 ```xml
 <properties>
-  <rpc.version>1.0.0</rpc.version>   <!-- 用本地 install 的快照时改成 1.0.0-SNAPSHOT -->
+  <rpc.version>1.0.0</rpc.version>   <!-- 用本地 install 的版本时改成本仓库根 pom.xml 的 <version> -->
 </properties>
 
 <dependencyManagement>

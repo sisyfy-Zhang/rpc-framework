@@ -60,9 +60,10 @@
 以 `1.0.0` 为例，在 main 上、工作区干净、CI 全绿：
 
 ```bash
-# 1. 去掉 -SNAPSHOT（只改 pom 里的版本号；改完核对再没有 1.0.0-SNAPSHOT）
-git grep -l '<version>1.0.0-SNAPSHOT</version>' -- '*pom.xml' | xargs sed -i 's#<version>1.0.0-SNAPSHOT</version>#<version>1.0.0</version>#'
-git grep -n '1.0.0-SNAPSHOT' -- '*pom.xml'          # 应无输出
+# 1. 去掉 -SNAPSHOT（只改 pom 里的版本号；改完核对再没有 $V-SNAPSHOT）
+V=1.0.0
+git grep -l "<version>$V-SNAPSHOT</version>" -- '*pom.xml' | xargs sed -i "s#<version>$V-SNAPSHOT</version>#<version>$V</version>#"
+git grep -n "$V-SNAPSHOT" -- '*pom.xml'             # 应无输出
 mvn -B clean install                                 # 全量构建 + 测试在本机再过一遍
 git commit -am "发布 1.0.0" && git push origin main  # 等 ci.yml 通过
 

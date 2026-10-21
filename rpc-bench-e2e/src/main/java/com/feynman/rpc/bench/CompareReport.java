@@ -15,7 +15,8 @@ import java.util.Set;
  * transport / 并发 / 速率 / 客户端 IO 线程数上不同的结果并排成表。每行取该结果的正式轮；哪些字段不同由程序识别，作为对比轴。
  *
  * <ul>
- *   <li><b>分组</b>：负载模型、服务、payload（kind + size）、时长 / 预热 / 统计窗口 / 轮数 / 超时、是否同机，全部相同的结果为一组。</li>
+ *   <li><b>分组</b>：负载模型、服务、payload（kind + size）、时长 / 预热 / 统计窗口 / 轮数 / 超时、是否同机、目标寻址方式
+ *       （{@code run.target.mode}：直连 / 经注册中心 / http），全部相同的结果为一组。</li>
  *   <li><b>对比轴</b>：组内取值不止一种的 {@code transport}（连同序列化方式）、{@code concurrency}（闭环）、{@code rate}（开环）、
  *       {@code io_threads}（harness 的 {@code --io-threads}）、{@code server_executor}（服务端业务执行器）、{@code flush_consolidation}
  *       （本框架两端是否合并 flush）。只有一个轴在变 → 一张表；多个轴在变 → 每个轴一张表，
@@ -299,13 +300,25 @@ final class CompareReport {
 		Object serverFlush = serverEnv.get("server_flush_consolidation");
 		axes.put(AXIS_FLUSH, clientFlush == null && serverFlush == null ? "—" : "client " + str(clientFlush) + " / server " + str(serverFlush));
 		String payloadText = "bytes".equals(payload.get("kind")) ? str(payload.get("size")) + " B" : str(payload.get("kind"));
+		// 目标的寻址方式（run.target.mode，harness 写出的机器值：direct / registry / http）进分组键：经注册中心的结果
+		// （loopback-* 卡）与直连的对比卡口径不同，不能在同一张表里并排
+		String mode = str(MarkdownReport.path(json, "run", "target", "mode"));
 		List<Object> key = List.of(str(load.get("model")), str(target.get("service")), str(payload.get("kind")), str(payload.get("size")),
 				str(load.get("duration_ms")), str(load.get("warmup_ms")), str(load.get("steady_window_ms")), str(load.get("rounds")),
-				str(load.get("timeout_ms")), str(isolation.get("same_host")));
+				str(load.get("timeout_ms")), str(isolation.get("same_host")), mode);
 		String title = (closed ? "闭环" : "开环") + " · " + payloadText + " · `" + str(target.get("service")) + "` · 每轮 "
 				+ str(load.get("duration")) + "（预热 " + str(load.get("warmup")) + "，窗口 [" + String.join(", ", strings(load.get("steady_window")))
-				+ "]）× " + str(load.get("rounds")) + " 轮 · 超时 " + str(load.get("timeout"));
+				+ "]）× " + str(load.get("rounds")) + " 轮 · 超时 " + str(load.get("timeout")) + modeSuffix(mode);
 		return new Run(file, json, axes, String.valueOf(key), title, closed, explicitConnections);
+	}
+
+	/** 组标题里的寻址方式：直连（对比卡的口径）与没有这项的旧结果不加后缀，其余写明。 */
+	static String modeSuffix(String mode) {
+		return switch (mode) {
+			case "direct", "—" -> "";
+			case "registry" -> " · 经注册中心";
+			default -> " · 目标 " + mode;
+		};
 	}
 
 	private static Comparator<Run> rowOrder() {

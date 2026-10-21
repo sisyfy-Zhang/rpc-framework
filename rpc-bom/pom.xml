@@ -6,7 +6,7 @@
        因此 groupId / version / Central 元数据在这里各写一份；发布改版本时与根 pom 一起改（docs/releasing.md）。 -->
   <groupId>io.github.sisyfy-zhang</groupId>
   <artifactId>rpc-bom</artifactId>
-  <version>1.0.0-SNAPSHOT</version>
+  <version>1.0.0</version>
   <packaging>pom</packaging>
   <name>rpc-bom</name>
   <description>Bill of materials that pins the versions of all published rpc-framework modules.</description>

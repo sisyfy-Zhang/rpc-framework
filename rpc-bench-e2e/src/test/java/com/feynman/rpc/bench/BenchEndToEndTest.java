@@ -134,7 +134,7 @@ class BenchEndToEndTest {
 				"ended_at", "harness_version")) {
 			assertTrue(((Map<?, ?>) json.get("environment")).containsKey(key), "environment." + key);
 		}
-		// 版本来自资源过滤后的 bench-version.properties：只断言过滤确实发生（形如 1.0.0 / 1.0.0-SNAPSHOT），不写死版本号，发布改版本时不用跟着改
+		// 版本来自资源过滤后的 bench-version.properties：只断言过滤确实发生（形如 X.Y.Z / X.Y.Z-SNAPSHOT），不写死版本号，发布改版本时不用跟着改
 		assertTrue(String.valueOf(path(json, "environment", "harness_version")).matches("\\d+\\.\\d+\\.\\d+(-SNAPSHOT)?"),
 				"harness_version = " + path(json, "environment", "harness_version"));
 		assertTrue(((Map<?, ?>) json.get("environment")).containsKey("cpus_allowed"));

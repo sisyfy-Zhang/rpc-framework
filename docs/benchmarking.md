@@ -637,7 +637,7 @@ bash bench/bin/compare.sh --transports rpc-direct --out <dir>   # 本框架服�
 
 ### 对比表
 
-`compare --in <dir>`（`report` 汇总时也附上）把结果分组：负载模型、服务、payload、时长 / 预热 / 窗口 / 轮数 / 超时、是否同机全部相同的为一组；
+`compare --in <dir>`（`report` 汇总时也附上）把结果分组：负载模型、服务、payload、时长 / 预热 / 窗口 / 轮数 / 超时、是否同机、目标寻址方式（`run.target.mode`：`direct` / `registry` / `http`；经注册中心的组标题带"经注册中心"）全部相同的为一组——经 ZooKeeper 的 `loopback-*` 卡与直连的对比卡不混表；
 组内取值不止一种的 `transport`（连同序列化）、`connections`（实际连接数，卡片没写 `target.connections` 的标"缺省"）、`concurrency`、`rate`、
 `io_threads`（只有命令行显式给了 `--io-threads` 才算，各 transport 的缺省写法不同、不算对比轴）、`server_executor`（服务端环境的 `server_executor_kind`）、
 `flush_consolidation`（本框架两端的 flush 合并）自动成为对比轴，每个轴一张表、表内其余轴取值相同。

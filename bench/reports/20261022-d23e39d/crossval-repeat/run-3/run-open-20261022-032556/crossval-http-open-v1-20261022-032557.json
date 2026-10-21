@@ -1,0 +1,1148 @@
+{
+  "schema_version": 1,
+  "label": "crossval",
+  "profile": {
+    "id": "crossval-http-open-v1",
+    "parsed": {
+      "profile": "crossval-http-open-v1",
+      "question": "校验 harness 开环的达成吞吐、服务时间与节拍质量",
+      "target": {
+        "transport": "http",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {
+          "kind": "bytes",
+          "size": 1024
+        },
+        "serializer": null,
+        "providers": 1,
+        "http": {
+          "url": "http://127.0.0.1:19180/echo",
+          "connections": 64
+        }
+      },
+      "load": {
+        "model": "open",
+        "concurrency": null,
+        "rate": 5000,
+        "duration": "60s",
+        "duration_ms": 60000.0,
+        "warmup": "20s",
+        "warmup_ms": 20000.0,
+        "steady_window": ["20s", "60s"],
+        "steady_window_ms": [20000.0, 60000.0],
+        "rounds": 3,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": 10000
+      },
+      "isolation": {
+        "client_process": "separate_jvm",
+        "server_process": "separate_jvm",
+        "same_host": true,
+        "registry": "none (direct HTTP URL)"
+      },
+      "measure": {
+        "histogram": {
+          "significant_digits": 3,
+          "max": "10s",
+          "max_ms": 10000.0
+        },
+        "report": ["throughput", "p50", "p95", "p99", "p999", "max", "errors_by_status"]
+      },
+      "assert": [
+        {
+          "key": "errors_max",
+          "metric": "errors",
+          "bound": "max",
+          "threshold": "0"
+        }
+      ]
+    },
+    "raw_yaml": "# 口径卡（harness 校验卡）：不是框架的性能卡。同一个 HTTP 目标（bench server --http-port 的 POST /echo）分别用 harness 与\n# wrk2 -U 打，校验 harness 的开环发压与测量：达成吞吐、服务时间 vs 未修正延迟、发出滞后（docs/benchmarking.md「交叉验证」）。\n# 由 bench/bin/crossval.sh --mode open 驱动；改动口径请复制成新 id（-v2），不要原地改。\nprofile: crossval-http-open-v1\nquestion: 校验 harness 开环的达成吞吐、服务时间与节拍质量\ntarget:\n  transport: http\n  service: BenchService#echo\n  payload: { kind: bytes, size: 1024 }\n  http: { url: \"http://127.0.0.1:19180/echo\", connections: 64 }\nload:\n  model: open\n  rate: 5000\n  duration: 60s\n  warmup: 20s\n  steady_window: [20s, 60s]\n  rounds: 3\n  timeout: 1s\nisolation:\n  client_process: separate_jvm\n  server_process: separate_jvm\n  same_host: true\n  registry: none (direct HTTP URL)\nmeasure:\n  histogram: { significant_digits: 3, max: 10s }\n  report: [throughput, p50, p95, p99, p999, max, errors_by_status]\nassert:\n  errors_max: 0\n"
+  },
+  "run": {
+    "command": "rpc-bench-e2e run --profile /home/yifan/rpc-bench/bench/profiles/crossval-http-open-v1.yaml --out bench/reports/20261022-d23e39d/crossval-repeat/run-3/run-open-20261022-032556 --label crossval --pin-dispatcher 5",
+    "target": {
+      "transport": "http",
+      "mode": "http",
+      "address": "http://127.0.0.1:19180/echo",
+      "providers": ["127.0.0.1:19180"],
+      "connections": 64,
+      "connection_model": "open: pool of target.http.connections; one in-flight request per connection; no idle connection at the scheduled time -> queue (FIFO) for the next idle one, latency still from the scheduled time; in-flight cap (queued + sent) = rate x timeout x 2",
+      "http_client": "blocking java.net.Socket per connection (TCP_NODELAY), keep-alive, no pipelining; the calling thread writes and reads",
+      "io_transport": "blocking socket (no event loop)",
+      "io_threads": 0,
+      "io_busy_poll": false,
+      "timeout_check": "Socket.setSoTimeout = remaining load.timeout per read",
+      "retries": 0,
+      "pre_warmup_calls_per_connection": 200,
+      "call_style": "sync: the calling thread writes one HTTP/1.1 request and blocks reading its response",
+      "metrics_filter": false
+    },
+    "harness_options": {
+      "open_workers": "pool-platform",
+      "open_pool_size": 64,
+      "http_client": "blocking",
+      "io_threads": "n/a (blocking client)",
+      "io_busy_poll": "n/a (blocking client)",
+      "io_source": "default",
+      "workers_source": "default",
+      "pin_dispatcher": 5,
+      "pre_warmup": "20s",
+      "pre_warmup_ms": 20000.0,
+      "pre_warmup_source": "load.warmup",
+      "flush_consolidation": "n/a (http)"
+    },
+    "pre_warmup": {
+      "duration_ms": 20000.0,
+      "issued": 100000,
+      "successes": 100000,
+      "errors": 0,
+      "errors_by_type": {},
+      "latency_ms": {
+        "count": 100000,
+        "mean": 0.233,
+        "min": 0.095,
+        "p50": 0.189,
+        "p90": 0.294,
+        "p95": 0.359,
+        "p99": 0.587,
+        "p999": 6.496,
+        "max": 30.884
+      },
+      "service_time_ms": {
+        "count": 100000,
+        "mean": 0.174,
+        "min": 0.058,
+        "p50": 0.149,
+        "p90": 0.239,
+        "p95": 0.292,
+        "p99": 0.44,
+        "p999": 1.449,
+        "max": 30.835
+      },
+      "dispatch_lag_ms": {
+        "count": 100000,
+        "mean": 0.004,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.016,
+        "p999": 0.81,
+        "max": 7.156
+      },
+      "backlog_dropped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 100000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 191765,
+        "spin_window_final_ns": 383530,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 92,
+        "workers": "pool-platform",
+        "pool_size": 64,
+        "queue_capacity": 10000,
+        "call_style": "sync proxy method on one of 64 platform-thread workers taking scheduled times from a bounded FIFO queue",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 104655,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 99,
+          "others_pinned": 97,
+          "others_exited": 1,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      }
+    }
+  },
+  "environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": true,
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "cpus_allowed": "5-9",
+    "total_memory_bytes": 10428227584,
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "gc": ["G1 Young Generation", "G1 Concurrent GC", "G1 Old Generation"],
+    "netty_version": "4.1.136.Final",
+    "git_sha": "d8dc78b4861405a87797e149592c38ea4258e396",
+    "git_dirty": false,
+    "git_dirty_files": [],
+    "hostname": "localhost",
+    "power_supply": {
+      "AC1": "1"
+    },
+    "cpu_governor": "n/a",
+    "harness_version": "1.0.0-SNAPSHOT",
+    "pid": 104538,
+    "metrics_enabled": false,
+    "started_at": "2026-10-21T16:25:57.951165425Z",
+    "ended_at": "2026-10-21T16:29:20.292115435Z"
+  },
+  "server_environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": "true",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": "5",
+    "host_cpus": "10",
+    "cpus_allowed": "0-4",
+    "total_memory_bytes": "10428227584",
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": "-Xms1g -Xmx1g -XX:+AlwaysPreTouch",
+    "gc": "G1 Young Generation G1 Concurrent GC G1 Old Generation",
+    "netty_version": "4.1.136.Final",
+    "git_sha": "d8dc78b4861405a87797e149592c38ea4258e396",
+    "git_dirty": "false",
+    "git_dirty_files": "",
+    "hostname": "localhost",
+    "power_supply": "AC1=1",
+    "cpu_governor": "n/a",
+    "harness_version": "1.0.0-SNAPSHOT",
+    "pid": "104489",
+    "metrics_enabled": "false",
+    "endpoint": "http",
+    "server_advertised_port": "same as listen port",
+    "server_deregister_grace_ms": "0",
+    "server_executor": "fixed pool (10 threads, queue 1000): business methods run off the IO threads",
+    "server_executor_kind": "fixed",
+    "server_executor_queue_capacity": "1000",
+    "server_flush_consolidation": "on",
+    "server_io_threads": "default (Netty: 2 x available cores = 10)",
+    "server_outbound_backpressure": "on",
+    "server_outbound_hard_limit": "1048576",
+    "server_queue_wait_filter": "on (bench QueueWaitFilter, order -4500)",
+    "server_work_ms": "0.0",
+    "server_write_buffer_water_mark": "32768:65536",
+    "transport": "rpc"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-10-21T16:26:19.867081034Z",
+      "ended_at": "2026-10-21T16:27:19.883425178Z",
+      "elapsed_ms": 60019.979,
+      "issued": 300000,
+      "requests_total": 300000,
+      "successes_total": 300000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 199999,
+        "successes": 199999,
+        "errors": 0
+      },
+      "throughput_rps": 4999.975,
+      "latency_ms": {
+        "count": 199999,
+        "mean": 0.209,
+        "min": 0.096,
+        "p50": 0.183,
+        "p90": 0.261,
+        "p95": 0.293,
+        "p99": 0.399,
+        "p999": 4.069,
+        "max": 42.205
+      },
+      "service_time_ms": {
+        "count": 199999,
+        "mean": 0.159,
+        "min": 0.05,
+        "p50": 0.144,
+        "p90": 0.212,
+        "p95": 0.24,
+        "p99": 0.315,
+        "p999": 0.467,
+        "max": 42.14
+      },
+      "dispatch_lag_ms": {
+        "count": 300000,
+        "mean": 0.001,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.01,
+        "p999": 0.117,
+        "max": 8.155
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 300000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 195566,
+        "spin_window_final_ns": 391132,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 95,
+        "workers": "pool-platform",
+        "pool_size": 64,
+        "queue_capacity": 10000,
+        "call_style": "sync proxy method on one of 64 platform-thread workers taking scheduled times from a bounded FIFO queue",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 104827,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 99,
+          "others_pinned": 97,
+          "others_exited": 1,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 22.0,
+        "server_cpus": "0-4",
+        "server_busy_pct": 26.1
+      },
+      "gc": {
+        "client": {
+          "collections": 0,
+          "pause_ms": 0,
+          "pause_pct": 0.0,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 88.761,
+          "heap_used_mb_end": 248.761,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 1,
+          "pause_ms": 2,
+          "pause_pct": 0.005,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 1,
+              "time_ms": 2
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 314.243,
+          "heap_used_mb_end": 113.128,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "io": {
+        "source": "/proc/self/io (syscr, syscw) + sum of /proc/self/task/*/status (voluntary / nonvoluntary_ctxt_switches), grouped by /proc/self/task/*/comm prefix (by_group), steady window",
+        "window_requests": 199999,
+        "client": {
+          "syscr": 400367,
+          "syscw": 199967,
+          "vol_cs": -200205,
+          "nonvol_cs": -499,
+          "threads": "98 -> 31",
+          "by_group": {
+            "fjp": {
+              "threads": "5 -> 4",
+              "vol_cs": -668,
+              "nonvol_cs": -340,
+              "vol_cs_per_request": -0.003,
+              "nonvol_cs_per_request": -0.002,
+              "cs_per_request": -0.005
+            },
+            "timers": {
+              "threads": "1 -> 1",
+              "vol_cs": 4,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "harness": {
+              "threads": "65 -> 0",
+              "vol_cs": -200706,
+              "nonvol_cs": -208,
+              "vol_cs_per_request": -1.004,
+              "nonvol_cs_per_request": -0.001,
+              "cs_per_request": -1.005
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 1170,
+              "nonvol_cs": 49,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "7 -> 6",
+              "vol_cs": -5,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 2.002,
+          "syscw_per_request": 1.0,
+          "vol_cs_per_request": -1.001,
+          "nonvol_cs_per_request": -0.002
+        },
+        "server": {
+          "syscr": 199704,
+          "syscw": 199498,
+          "vol_cs": 198754,
+          "nonvol_cs": 3838,
+          "threads": "38 -> 35",
+          "by_group": {
+            "netty_io": {
+              "threads": "12 -> 12",
+              "vol_cs": 197538,
+              "nonvol_cs": 3836,
+              "vol_cs_per_request": 0.988,
+              "nonvol_cs_per_request": 0.019,
+              "cs_per_request": 1.007
+            },
+            "fjp": {
+              "threads": "2 -> 1",
+              "vol_cs": -9,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "jvm": {
+              "threads": "21 -> 20",
+              "vol_cs": 1231,
+              "nonvol_cs": 2,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "3 -> 2",
+              "vol_cs": -6,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 0.999,
+          "syscw_per_request": 0.997,
+          "vol_cs_per_request": 0.994,
+          "nonvol_cs_per_request": 0.019
+        }
+      },
+      "backpressure": {
+        "source": "server stats (RpcServer.autoReadPauses / outboundOverloadRejections) + harness client (RpcClient.sendBufferRejections / unwritableConnectionSwitches)",
+        "window": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        },
+        "cumulative_at_window_end": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        }
+      },
+      "server_executor": {
+        "source": "server counters (RpcServer.executorRejections / shutdownRejections / queuedBusinessTasks; queue wait = bench QueueWaitFilter: arrival (IO-thread decode) -> business thread starts the filter chain)",
+        "executor_rejections": 0,
+        "shutdown_rejections": 0,
+        "queue_wait_ms": {
+          "count": 0,
+          "p50": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "dispatcher_delayed": false,
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [5000, 4999, 5000, 5000, 5000, 5001, 5000, 4999, 5000, 5001, 5000, 4999, 5001, 5000, 5000, 5000, 5000, 4999, 5001, 5000, 5000, 4999, 5001, 5000, 5000, 5000, 4999, 5001, 4999, 5000, 5001, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5001, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5000, 5000, 5000, 5001, 5000, 5000, 4999, 5001, 4999, 5001, 5000, 4999, 1, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 2,
+      "started_at": "2026-10-21T16:27:20.087897910Z",
+      "ended_at": "2026-10-21T16:28:20.093062323Z",
+      "elapsed_ms": 60008.898,
+      "issued": 300000,
+      "requests_total": 300000,
+      "successes_total": 300000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 200000,
+        "successes": 200000,
+        "errors": 0
+      },
+      "throughput_rps": 5000.0,
+      "latency_ms": {
+        "count": 200000,
+        "mean": 0.202,
+        "min": 0.094,
+        "p50": 0.182,
+        "p90": 0.26,
+        "p95": 0.296,
+        "p99": 0.401,
+        "p999": 2.433,
+        "max": 13.746
+      },
+      "service_time_ms": {
+        "count": 200000,
+        "mean": 0.157,
+        "min": 0.061,
+        "p50": 0.143,
+        "p90": 0.212,
+        "p95": 0.241,
+        "p99": 0.315,
+        "p999": 0.456,
+        "max": 13.246
+      },
+      "dispatch_lag_ms": {
+        "count": 300000,
+        "mean": 0.003,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.011,
+        "p999": 0.489,
+        "max": 10.093
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 300000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 174364,
+        "spin_window_final_ns": 348728,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 53,
+        "workers": "pool-platform",
+        "pool_size": 64,
+        "queue_capacity": 10000,
+        "call_style": "sync proxy method on one of 64 platform-thread workers taking scheduled times from a bounded FIFO queue",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 104994,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 97,
+          "others_pinned": 96,
+          "others_exited": 0,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 37.1,
+        "server_cpus": "0-4",
+        "server_busy_pct": 14.9
+      },
+      "gc": {
+        "client": {
+          "collections": 0,
+          "pause_ms": 0,
+          "pause_pct": 0.0,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 343.761,
+          "heap_used_mb_end": 490.761,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 1,
+          "pause_ms": 2,
+          "pause_pct": 0.005,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 1,
+              "time_ms": 2
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 318.128,
+          "heap_used_mb_end": 118.113,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "io": {
+        "source": "/proc/self/io (syscr, syscw) + sum of /proc/self/task/*/status (voluntary / nonvoluntary_ctxt_switches), grouped by /proc/self/task/*/comm prefix (by_group), steady window",
+        "window_requests": 200000,
+        "client": {
+          "syscr": 400355,
+          "syscw": 199994,
+          "vol_cs": -200024,
+          "nonvol_cs": -4586,
+          "threads": "98 -> 31",
+          "by_group": {
+            "fjp": {
+              "threads": "5 -> 4",
+              "vol_cs": -782,
+              "nonvol_cs": -484,
+              "vol_cs_per_request": -0.004,
+              "nonvol_cs_per_request": -0.002,
+              "cs_per_request": -0.006
+            },
+            "timers": {
+              "threads": "1 -> 1",
+              "vol_cs": 3,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "harness": {
+              "threads": "65 -> 0",
+              "vol_cs": -200394,
+              "nonvol_cs": -4114,
+              "vol_cs_per_request": -1.002,
+              "nonvol_cs_per_request": -0.021,
+              "cs_per_request": -1.023
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 1147,
+              "nonvol_cs": 12,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "7 -> 6",
+              "vol_cs": 2,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 2.002,
+          "syscw_per_request": 1.0,
+          "vol_cs_per_request": -1.0,
+          "nonvol_cs_per_request": -0.023
+        },
+        "server": {
+          "syscr": 199960,
+          "syscw": 199787,
+          "vol_cs": 198124,
+          "nonvol_cs": 199,
+          "threads": "34 -> 34",
+          "by_group": {
+            "netty_io": {
+              "threads": "12 -> 12",
+              "vol_cs": 196982,
+              "nonvol_cs": 198,
+              "vol_cs_per_request": 0.985,
+              "nonvol_cs_per_request": 0.001,
+              "cs_per_request": 0.986
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 1142,
+              "nonvol_cs": 1,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "2 -> 2",
+              "vol_cs": 0,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 1.0,
+          "syscw_per_request": 0.999,
+          "vol_cs_per_request": 0.991,
+          "nonvol_cs_per_request": 0.001
+        }
+      },
+      "backpressure": {
+        "source": "server stats (RpcServer.autoReadPauses / outboundOverloadRejections) + harness client (RpcClient.sendBufferRejections / unwritableConnectionSwitches)",
+        "window": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        },
+        "cumulative_at_window_end": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        }
+      },
+      "server_executor": {
+        "source": "server counters (RpcServer.executorRejections / shutdownRejections / queuedBusinessTasks; queue wait = bench QueueWaitFilter: arrival (IO-thread decode) -> business thread starts the filter chain)",
+        "executor_rejections": 0,
+        "shutdown_rejections": 0,
+        "queue_wait_ms": {
+          "count": 0,
+          "p50": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "dispatcher_delayed": false,
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [4999, 5001, 5000, 5000, 5000, 5000, 4999, 5001, 5000, 5000, 5000, 4999, 5000, 5001, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5000, 5001, 5000, 4999, 5001, 5000, 4999, 5001, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5000, 5001, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5001, 0, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    },
+    {
+      "round": 3,
+      "started_at": "2026-10-21T16:28:20.255010834Z",
+      "ended_at": "2026-10-21T16:29:20.261522100Z",
+      "elapsed_ms": 60010.322,
+      "issued": 300000,
+      "requests_total": 300000,
+      "successes_total": 300000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 20000.0,
+        "end_ms": 60000.0,
+        "requests": 200000,
+        "successes": 200000,
+        "errors": 0
+      },
+      "throughput_rps": 5000.0,
+      "latency_ms": {
+        "count": 200000,
+        "mean": 0.206,
+        "min": 0.071,
+        "p50": 0.181,
+        "p90": 0.272,
+        "p95": 0.311,
+        "p99": 0.434,
+        "p999": 2.671,
+        "max": 17.17
+      },
+      "service_time_ms": {
+        "count": 200000,
+        "mean": 0.159,
+        "min": 0.058,
+        "p50": 0.142,
+        "p90": 0.217,
+        "p95": 0.249,
+        "p99": 0.34,
+        "p999": 0.64,
+        "max": 15.778
+      },
+      "dispatch_lag_ms": {
+        "count": 300000,
+        "mean": 0.002,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.011,
+        "p999": 0.27,
+        "max": 9.191
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 300000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 202526,
+        "spin_window_final_ns": 405052,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 49,
+        "workers": "pool-platform",
+        "pool_size": 64,
+        "queue_capacity": 10000,
+        "call_style": "sync proxy method on one of 64 platform-thread workers taking scheduled times from a bounded FIFO queue",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 105173,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 97,
+          "others_pinned": 96,
+          "others_exited": 0,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 40000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 23.3,
+        "server_cpus": "0-4",
+        "server_busy_pct": 13.0
+      },
+      "gc": {
+        "client": {
+          "collections": 1,
+          "pause_ms": 4,
+          "pause_pct": 0.01,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 1,
+              "time_ms": 4
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 584.761,
+          "heap_used_mb_end": 134.374,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 1,
+          "pause_ms": 2,
+          "pause_pct": 0.005,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 1,
+              "time_ms": 2
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 322.113,
+          "heap_used_mb_end": 120.122,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "io": {
+        "source": "/proc/self/io (syscr, syscw) + sum of /proc/self/task/*/status (voluntary / nonvoluntary_ctxt_switches), grouped by /proc/self/task/*/comm prefix (by_group), steady window",
+        "window_requests": 200000,
+        "client": {
+          "syscr": 400442,
+          "syscw": 199994,
+          "vol_cs": -200558,
+          "nonvol_cs": -681,
+          "threads": "98 -> 31",
+          "by_group": {
+            "fjp": {
+              "threads": "5 -> 4",
+              "vol_cs": -1306,
+              "nonvol_cs": -493,
+              "vol_cs_per_request": -0.007,
+              "nonvol_cs_per_request": -0.002,
+              "cs_per_request": -0.009
+            },
+            "timers": {
+              "threads": "1 -> 1",
+              "vol_cs": 3,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "harness": {
+              "threads": "65 -> 0",
+              "vol_cs": -200436,
+              "nonvol_cs": -193,
+              "vol_cs_per_request": -1.002,
+              "nonvol_cs_per_request": -0.001,
+              "cs_per_request": -1.003
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 1179,
+              "nonvol_cs": 5,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "7 -> 6",
+              "vol_cs": 2,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 2.002,
+          "syscw_per_request": 1.0,
+          "vol_cs_per_request": -1.003,
+          "nonvol_cs_per_request": -0.003
+        },
+        "server": {
+          "syscr": 199975,
+          "syscw": 199802,
+          "vol_cs": 198190,
+          "nonvol_cs": 503,
+          "threads": "34 -> 34",
+          "by_group": {
+            "netty_io": {
+              "threads": "12 -> 12",
+              "vol_cs": 197037,
+              "nonvol_cs": 503,
+              "vol_cs_per_request": 0.985,
+              "nonvol_cs_per_request": 0.003,
+              "cs_per_request": 0.988
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 1153,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.006
+            },
+            "other": {
+              "threads": "2 -> 2",
+              "vol_cs": 0,
+              "nonvol_cs": 0,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 1.0,
+          "syscw_per_request": 0.999,
+          "vol_cs_per_request": 0.991,
+          "nonvol_cs_per_request": 0.003
+        }
+      },
+      "backpressure": {
+        "source": "server stats (RpcServer.autoReadPauses / outboundOverloadRejections) + harness client (RpcClient.sendBufferRejections / unwritableConnectionSwitches)",
+        "window": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        },
+        "cumulative_at_window_end": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0
+        }
+      },
+      "server_executor": {
+        "source": "server counters (RpcServer.executorRejections / shutdownRejections / queuedBusinessTasks; queue wait = bench QueueWaitFilter: arrival (IO-thread decode) -> business thread starts the filter chain)",
+        "executor_rejections": 0,
+        "shutdown_rejections": 0,
+        "queue_wait_ms": {
+          "count": 0,
+          "p50": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "dispatcher_delayed": false,
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [5000, 5000, 5000, 4999, 5000, 5001, 5000, 5000, 4999, 5000, 5000, 5001, 5000, 5000, 4999, 5001, 5000, 4999, 5001, 4999, 5001, 4999, 5001, 5000, 5000, 5000, 4999, 5001, 5000, 4999, 5000, 5001, 4999, 5001, 5000, 4999, 5001, 5000, 5000, 5000, 5000, 4999, 5001, 5000, 4999, 5000, 5001, 4999, 5001, 5000, 5000, 5000, 5000, 4999, 5001, 5000, 5000, 5000, 5000, 4999, 1, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    }
+  ],
+  "summary": {
+    "official_round": 2,
+    "selection_rule": "开环：窗口 p99 的中位数那一轮",
+    "official": {
+      "throughput_rps": 5000.0,
+      "p50_ms": 0.182,
+      "p90_ms": 0.26,
+      "p95_ms": 0.296,
+      "p99_ms": 0.401,
+      "p999_ms": 2.433,
+      "max_ms": 13.746,
+      "mean_ms": 0.202,
+      "window_requests": 200000,
+      "window_errors": 0
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 3,
+        "min": 4999.975,
+        "max": 5000.0,
+        "range": 0.025,
+        "range_pct": 0.001
+      },
+      "p50_ms": {
+        "rounds": 3,
+        "min": 0.181,
+        "max": 0.183,
+        "range": 0.002,
+        "range_pct": 1.105
+      },
+      "p95_ms": {
+        "rounds": 3,
+        "min": 0.293,
+        "max": 0.311,
+        "range": 0.018,
+        "range_pct": 6.143
+      },
+      "p99_ms": {
+        "rounds": 3,
+        "min": 0.399,
+        "max": 0.434,
+        "range": 0.035,
+        "range_pct": 8.772
+      },
+      "p999_ms": {
+        "rounds": 3,
+        "min": 2.433,
+        "max": 4.069,
+        "range": 1.636,
+        "range_pct": 67.242
+      },
+      "max_ms": {
+        "rounds": 3,
+        "min": 13.746,
+        "max": 42.205,
+        "range": 28.459,
+        "range_pct": 207.035
+      }
+    }
+  },
+  "validity": {
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "client_bound": false,
+    "dispatcher_delayed_rounds": [],
+    "dispatcher_delayed": false,
+    "client_gc_pause_pct_max": 0.01,
+    "statements": ["开环负载（open）：延迟从计划发出时刻算起，发压端自身的调度滞后（见“发出滞后”列）也计入延迟；发出滞后的 p99 明显大于服务时间时，说明压测端本身成了瓶颈，数字不代表被测服务。", "开环调度线程以忙等对齐节拍，独占一个核；本报告的 CPU 亲和见环境表。", "错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。"],
+    "topology": "client 与 server 是两个独立 JVM，同一台机器（loopback），1 个提供者（[127.0.0.1:19180]），经 http://127.0.0.1:19180/echo 发现；卡片声明的注册中心：none (direct HTTP URL)。",
+    "asserts": [
+      {
+        "key": "errors_max",
+        "threshold": "0",
+        "actual": "0",
+        "actual_value": 0.0,
+        "scope": "全部轮次窗口内错误之和",
+        "passed": true
+      }
+    ],
+    "asserts_passed": true,
+    "passed": true
+  }
+}
