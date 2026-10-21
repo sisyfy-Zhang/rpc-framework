@@ -313,7 +313,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | — | `serverFilter(Filter...)` | — | Boot 中为容器里的 `ServerFilter` bean |
 
 **Boot 专属**：`RpcClientCustomizer` / `RpcServerCustomizer` bean 在属性与 Filter bean 之后修改 builder；
-`management.health.rpc.enabled`（有 Actuator 时，缺省 true）：健康组件 `rpc`，已启动且已注册为 UP，未注册或停机中为 OUT_OF_SERVICE。
+`management.health.rpc.enabled`（有 Actuator 时，缺省 true）：健康组件 `rpc`，已启动且已注册为 UP，未注册、注册丢失（ZooKeeper 会话过期，节点尚未重建；Nacos 不报告）或停机中为 OUT_OF_SERVICE。
 停机最长耗时约 `deregister-grace + shutdown-timeout + 5s`，`spring.lifecycle.timeout-per-shutdown-phase`（Boot 缺省 30s）必须大于它。
 
 ## 设计要点

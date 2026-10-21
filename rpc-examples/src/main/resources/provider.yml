@@ -18,6 +18,15 @@ rpc:
       # 有界队列：满了的请求回 SERVER_OVERLOADED（业务未执行，配了重试的调用方会换节点）
       queue-capacity: 1000
 
+# Actuator：health 组件 rpc（已注册 = UP；尚未注册、注册丢失或停机中 = OUT_OF_SERVICE）接进 readiness 组，并列出组件明细
+management:
+  endpoint:
+    health:
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,rpc
+
 logging:
   level:
     com.feynman.rpc: INFO

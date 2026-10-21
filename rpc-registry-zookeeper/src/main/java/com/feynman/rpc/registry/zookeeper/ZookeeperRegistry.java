@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.registry.InstanceListener;
 import com.feynman.rpc.core.registry.InstanceMetadata;
+import com.feynman.rpc.core.registry.RegistrationListener;
 import com.feynman.rpc.core.registry.Registry;
 import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.core.registry.RegistryException;
@@ -57,7 +58,10 @@ import com.feynman.rpc.core.registry.ServiceInstance;
  *       删除 + 重建）只产生一次回调；某个监听者已经收到过的相同列表不再重复推给它。</li>
  *   <li><b>会话过期重注册</b>：临时节点随旧会话消失。{@link ConnectionState#LOST} 或重连后会话 ID 变化时，
  *       把 {@link #registered} 里的全部实例在新会话上重新创建。创建是幂等的：节点已存在且属于当前会话就只在
- *       元数据不同时 setData；属于别的（旧）会话就删掉重建，保证节点绑在活着的会话上。</li>
+ *       元数据不同时 setData；属于别的（旧）会话就删掉重建，保证节点绑在活着的会话上。
+ *       丢失与重建通过 {@link RegistrationListener} 报告（LOST / 发现会话已换时报丢失，全部重建成功后报恢复），
+ *       RpcServer 据此让 isRegistered() 与 health 在这段时间里为"不可被发现"。注意 ZK 整体不可达时，LOST 要等
+ *       会话超时（{@code session-timeout-ms}）才由 Curator 判定，之前的 SUSPENDED 期间节点在服务端仍然存在。</li>
  *   <li><b>不在构造里等连接</b>：构造函数立即返回，ZK 不可达不会卡住 RpcServer.start() 或
  *       RpcClient 的构造。register / subscribe 各自最多等 {@code connect-wait-ms}（默认 1000ms）：register 等不到就
  *       抛 {@link RegistryException}，由 RpcServer 的后台注册退避重试；subscribe 等不到就先返回、不推首次列表，
@@ -134,6 +138,9 @@ public class ZookeeperRegistry implements Registry {
 	private volatile long sessionId;
 	/** 自上次成功重注册以来是否发生过 LOST / 会话变化，需要重注册。 */
 	private final AtomicBoolean reRegisterNeeded = new AtomicBoolean();
+	/** 已向 {@link #registrationListeners} 报告丢失、尚未报告恢复：保证 lost / restored 成对出现。 */
+	private final AtomicBoolean registrationsLost = new AtomicBoolean();
+	private final List<RegistrationListener> registrationListeners = new CopyOnWriteArrayList<>();
 
 	public ZookeeperRegistry(RegistryConfig config) {
 		this.instanceId = INSTANCE_IDS.incrementAndGet();
@@ -270,6 +277,8 @@ public class ZookeeperRegistry implements Registry {
 				boolean sessionChanged = previous != 0 && previous != current;
 				if (sessionChanged) {
 					reRegisterNeeded.set(true);
+					// 没收到 LOST 就发现会话已换（旧会话在断连期间过期）：节点同样已随旧会话消失
+					reportLost();
 				}
 				log.info("ZooKeeper {} {} (session 0x{}{})", address, state, Long.toHexString(current),
 						sessionChanged ? ", previous session 0x" + Long.toHexString(previous) + " is gone" : "");
@@ -280,6 +289,7 @@ public class ZookeeperRegistry implements Registry {
 				reRegisterNeeded.set(true);
 				log.warn("ZooKeeper {} session LOST; ephemeral nodes of this registry are gone and will be re-created on reconnect",
 						address);
+				reportLost();
 			}
 			default -> log.info("ZooKeeper {} {}", address, state);
 		}
@@ -340,7 +350,41 @@ public class ZookeeperRegistry implements Registry {
 		if (count > 0) {
 			log.info("Re-registered {} instance(s) on ZooKeeper {} session 0x{}", count, address, Long.toHexString(sessionId));
 		}
+		// 期间又丢了（再次 LOST 会重新置位 reRegisterNeeded）就不报恢复，等下一轮重建
+		if (!reRegisterNeeded.get() && registrationsLost.compareAndSet(true, false)) {
+			notifyRegistrationListeners(false);
+		}
 		return true;
+	}
+
+	@Override
+	public boolean addRegistrationListener(RegistrationListener listener) {
+		ensureOpen();
+		registrationListeners.add(listener);
+		return true;
+	}
+
+	private void reportLost() {
+		if (registrationsLost.compareAndSet(false, true)) {
+			notifyRegistrationListeners(true);
+		}
+	}
+
+	private void notifyRegistrationListeners(boolean lost) {
+		for (RegistrationListener listener : registrationListeners) {
+			if (closed) {
+				return;
+			}
+			try {
+				if (lost) {
+					listener.onRegistrationsLost();
+				} else {
+					listener.onRegistrationsRestored();
+				}
+			} catch (RuntimeException e) {
+				log.warn("Registration listener threw; other listeners are still notified", e);
+			}
+		}
 	}
 
 	private long currentSessionId() {
@@ -416,6 +460,7 @@ public class ZookeeperRegistry implements Registry {
 			registered.clear();
 			pendingDeletes.clear();
 		}
+		registrationListeners.clear();
 		// 关闭会话：服务端立即删除本会话的临时节点
 		client.close();
 		runSafe.shutdown();

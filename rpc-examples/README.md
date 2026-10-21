@@ -5,8 +5,8 @@
 | 包 / 类 | 内容 |
 |---|---|
 | `api` | 共享契约：`UserFacade`、`UserService`、`InventoryService`（多参数、泛型返回、异步方法），DTO `User`，业务异常 `InsufficientStockException` |
-| `provider.ProviderApplication` | Spring Boot provider：`@RpcService` 暴露三个服务，配置 `provider.yml`（端口 9000） |
-| `consumer.ConsumerApplication` | Spring Boot consumer：`@RpcReference` 注入，启动后调用一次 `saveUser` 然后退出，配置 `consumer.yml` |
+| `provider.ProviderApplication` | Spring Boot provider：`@RpcService` 暴露三个服务，`TenantFilter`（ServerFilter）读 attachment，配置 `provider.yml`（端口 9000；health 组件 `rpc` 接进 readiness 组） |
+| `consumer.ConsumerApplication` | Spring Boot consumer：`@RpcReference` 注入，启动后 `DemoRunner` 调用一次 `saveUser`、`CallShapesRunner` 演示业务异常 / 异步 / attachments，然后退出，配置 `consumer.yml` |
 | `plain.PlainProvider` / `plain.PlainConsumer` | 不用 Spring 的纯 Java 版本（端口 9100） |
 | `EmbeddedZooKeeper` | 本机试跑用的进程内 ZooKeeper（curator-test 的 TestingServer），默认端口 2181 |
 
@@ -56,8 +56,8 @@ java -cp "$CP" com.feynman.rpc.examples.plain.PlainConsumer
 `http://localhost:<p>/metrics` 暴露 Prometheus 抓取端点，`docker/` 里的 Prometheus 已预置抓取 9466（见 [docs/observability.md](../docs/observability.md)）。
 
 预期：provider 打印 `Registered com.feynman.rpc.examples.api.UserFacade::default at <本机地址>:9000`；
-consumer 打印 `Remote saveUser returned User{id=1, name=zzz}` 后退出；provider 同时打印
-`UserServiceImpl.save called with User{id=1, name=zzz}`。纯 Java consumer 输出三行：剩余库存、购买者列表、库存不足异常。
+consumer 打印 `CallShapesRunner` 的四行结果与 `Remote saveUser returned User{id=1, name=zzz}` 后退出；provider 同时打印
+`buyers called for tenant acme` 与 `UserServiceImpl.save called with User{id=1, name=zzz}`。纯 Java consumer 输出三行：剩余库存、购买者列表、库存不足异常。
 两个 provider 都暴露 `InventoryService`、各自持有一份内存库存：同时运行时 `PlainConsumer` 的调用会被负载均衡（p2c）分到两个节点上，
 三行输出的数字可能对不上——这正好演示了服务发现与负载均衡；只想看一致的结果就只运行其中一个 provider。
 

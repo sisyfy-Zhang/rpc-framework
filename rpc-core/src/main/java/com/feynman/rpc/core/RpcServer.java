@@ -27,6 +27,7 @@ import com.feynman.rpc.core.extension.ExtensionLoader;
 import com.feynman.rpc.core.filter.DeadlineServerFilter;
 import com.feynman.rpc.core.filter.Filter;
 import com.feynman.rpc.core.registry.InstanceMetadata;
+import com.feynman.rpc.core.registry.RegistrationListener;
 import com.feynman.rpc.core.registry.Registry;
 import com.feynman.rpc.core.registry.RegistryFactory;
 import com.feynman.rpc.core.registry.ServiceInstance;
@@ -108,6 +109,11 @@ public final class RpcServer implements AutoCloseable {
 	private volatile NettyServer transport;
 	/** 只在注册线程上创建；close 在注册线程结束之后读取。 */
 	private volatile Registry registry;
+	/**
+	 * 注册中心报告"已注册的节点丢失、尚未重建"（{@link RegistrationListener}）。由注册中心自己的线程写，
+	 * 不拿 this 的锁：注册中心 close 时会等自己的线程结束，而 close 可能在持有 this 锁的路径上调用。
+	 */
+	private volatile boolean registrationsLost;
 	private volatile int boundPort = -1;
 	private volatile String advertisedHost;
 	private volatile long startedAt;
@@ -243,6 +249,11 @@ public final class RpcServer implements AutoCloseable {
 				return;
 			}
 			registry = current;
+			// 先登记再注册：之后任何一次会话丢失都能反映到 isRegistered()；不支持的实现返回 false，行为不变
+			if (!current.addRegistrationListener(new LossTracker())) {
+				log.debug("Registry {} does not report registration loss; isRegistered() stays true once registered",
+						config.registry().type());
+			}
 		}
 		while (true) {
 			ServiceInstance next;
@@ -309,9 +320,36 @@ public final class RpcServer implements AutoCloseable {
 		return registeredFuture.copy();
 	}
 
-	/** 当前全部已暴露服务是否都已注册成功。未 start 或已 close 时为 false。 */
+	/**
+	 * 当前全部已暴露服务是否都已注册成功、且仍在注册中心上。未 start 或已 close 时为 false。
+	 *
+	 * <p>"仍在"依赖注册中心实现报告丢失（{@link Registry#addRegistrationListener}）：ZooKeeper 会话过期后到重建完成前
+	 * 为 false（{@link #registered()} 不受影响，它只表示"曾经全部注册完"）；不报告丢失的实现（如 Nacos）注册成功后一直为 true。
+	 */
 	public synchronized boolean isRegistered() {
-		return state == State.STARTED && registeredFuture.isDone() && !registeredFuture.isCompletedExceptionally();
+		return state == State.STARTED && registeredFuture.isDone() && !registeredFuture.isCompletedExceptionally()
+				&& !registrationsLost;
+	}
+
+	/** 把注册中心报告的丢失 / 重建记到 {@link #registrationsLost}。只写 volatile 字段，不拿锁、不阻塞注册中心的线程。 */
+	private final class LossTracker implements RegistrationListener {
+
+		@Override
+		public void onRegistrationsLost() {
+			registrationsLost = true;
+			if (state == State.STARTED) {
+				log.warn("Registry {} reports this server's registrations LOST; port {} keeps serving but is not discoverable "
+						+ "until the registry re-creates them", config.registry().type(), boundPort);
+			}
+		}
+
+		@Override
+		public void onRegistrationsRestored() {
+			registrationsLost = false;
+			if (state == State.STARTED) {
+				log.info("Registry {} re-created this server's registrations; discoverable again", config.registry().type());
+			}
+		}
 	}
 
 	private ServiceInstance instanceOf(ExportedService service) {

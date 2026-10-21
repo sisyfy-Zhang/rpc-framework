@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
+import org.springframework.boot.health.contributor.Status;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import com.feynman.rpc.core.RpcServer;
@@ -14,14 +16,17 @@ import com.feynman.rpc.examples.api.InventoryService;
 import com.feynman.rpc.examples.api.User;
 import com.feynman.rpc.examples.api.UserFacade;
 import com.feynman.rpc.examples.api.UserService;
+import com.feynman.rpc.examples.consumer.CallShapesRunner;
 import com.feynman.rpc.examples.consumer.ConsumerApplication;
 import com.feynman.rpc.examples.consumer.OrderGateway;
 import com.feynman.rpc.examples.consumer.UserGateway;
 import com.feynman.rpc.examples.provider.ProviderApplication;
+import com.feynman.rpc.examples.provider.TenantFilter;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,6 +55,11 @@ class ExamplesEndToEndTest {
 						server.exportedServices().stream().sorted((a, b) -> a.toString().compareTo(b.toString())).toList());
 				assertEquals(List.of("127.0.0.1:" + server.port()), zk.providers(ServiceKey.of(UserFacade.class)));
 
+				// provider.yml 的 Actuator 配置：health 组件 rpc 可按路径读取（show-components）且已接进 readiness 组
+				HealthEndpoint health = provider.getBean(HealthEndpoint.class);
+				assertEquals(Status.UP, health.healthForPath("rpc").getStatus());
+				assertEquals(Status.UP, health.healthForPath("readiness", "rpc").getStatus());
+
 				// consumer 的 DemoRunner（ApplicationRunner）在 run() 返回前就发起了一次远程调用，失败会让启动失败
 				try (ConfigurableApplicationContext consumer = assertTimeoutPreemptively(Duration.ofSeconds(30),
 						() -> ConsumerApplication.builder().run(registryArg, "--examples.consumer.demo-call=true"))) {
@@ -71,6 +81,18 @@ class ExamplesEndToEndTest {
 					assertEquals(List.of("order-1", "order-2"), buyers.stream().map(User::getName).toList());
 					assertEquals(List.of("order-1", "order-2"),
 							orders.inventory().buyersAsync(1001L).get(5, TimeUnit.SECONDS).stream().map(User::getName).toList());
+
+					// 接入文档第 7 节的验证清单：CallShapesRunner 启动时已对 SKU 3001 跑过一遍（失败会让启动失败），这里换个 SKU 断言结果
+					assertEquals(List.of("left=7",
+							"InsufficientStockException: sku 4001 has 7 left, order order-2 wants 100",
+							"async buyers=[User{id=1, name=order-1}]",
+							"buyers(tenant=acme)=1"),
+							consumer.getBean(CallShapesRunner.class).demo(4001L));
+					// attachment 往返：consumer 经 RpcContext 设置，provider 的 TenantFilter 读到；只随紧接着的下一次调用发出
+					TenantFilter tenants = provider.getBean(TenantFilter.class);
+					assertEquals("acme", tenants.lastTenant());
+					orders.buyers(4001L);
+					assertNull(tenants.lastTenant(), "attachment must not leak into the following call");
 				}
 			} finally {
 				provider.close();

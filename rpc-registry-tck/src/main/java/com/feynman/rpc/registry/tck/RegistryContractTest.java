@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
@@ -32,6 +33,7 @@ import org.opentest4j.TestAbortedException;
 
 import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.registry.InstanceMetadata;
+import com.feynman.rpc.core.registry.RegistrationListener;
 import com.feynman.rpc.core.registry.Registry;
 import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.core.registry.RegistryException;
@@ -430,6 +432,46 @@ public abstract class RegistryContractTest {
 		// 清理动作在关闭后静默返回
 		assertDoesNotThrow(() -> registry.unregister(instance));
 		assertDoesNotThrow(() -> registry.unsubscribe(key, new PushRecorder("late")));
+	}
+
+	// ------------------------------------------------------------------ 注册丢失回调（可选能力）
+
+	/**
+	 * {@link Registry#addRegistrationListener} 是可选能力：不实现它的 Registry（缺省方法返回 false、永不回调）行为不变；
+	 * 实现了的，在正常的注册 / 订阅 / 摘除 / 关闭过程中不得误报丢失或恢复——误报会让 RpcServer 的 isRegistered()
+	 * 与 health 组件在一切正常时报"不可被发现"。真正的丢失（会话过期）与后端强相关，由各实现自己的测试覆盖。
+	 */
+	@Test
+	void registrationListenerIsOptional_andNormalOperationsNeverReportLossOrRestore() throws Exception {
+		ServiceKey key = randomKey();
+		ServiceInstance instance = instance(key, nextPort());
+		Registry provider = newRegistry();
+		List<String> events = new CopyOnWriteArrayList<>();
+		boolean supported = provider.addRegistrationListener(new RegistrationListener() {
+			@Override
+			public void onRegistrationsLost() {
+				events.add("lost");
+			}
+
+			@Override
+			public void onRegistrationsRestored() {
+				events.add("restored");
+			}
+		});
+		PushRecorder witness = new PushRecorder("witness");
+		newRegistry().subscribe(key, witness);
+
+		provider.register(instance);
+		witness.awaitLatest(pushTimeout(), "contains instance", list -> containsAddress(list, instance.address()));
+		provider.subscribe(key, new PushRecorder("self"));
+		provider.unregister(instance);
+		witness.awaitLatest(pushTimeout(), "instance removed", list -> !containsAddress(list, instance.address()));
+		provider.close();
+		Thread.sleep(quietPeriod().toMillis());
+
+		assertEquals(List.of(), events, "normal operations must not report registration loss / restore");
+		System.out.printf("[TCK %s] registration listener supported=%s, events during normal operations=%s%n",
+				getClass().getSimpleName(), supported, events);
 	}
 
 	@Test

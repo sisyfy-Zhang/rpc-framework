@@ -2,3 +2,4 @@
 memory=com.feynman.rpc.core.testutil.InMemoryRegistryFactory
 failing=com.feynman.rpc.core.testutil.FailingRegistryFactory
 flaky=com.feynman.rpc.core.testutil.FlakyRegistryFactory
+lossy=com.feynman.rpc.core.testutil.LossyRegistryFactory

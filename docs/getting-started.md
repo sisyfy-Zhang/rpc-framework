@@ -442,6 +442,15 @@ rpc:
       # 有界队列：满了的请求回 SERVER_OVERLOADED（业务未执行，配了重试的调用方会换节点）
       queue-capacity: 1000
 
+# Actuator：health 组件 rpc（已注册 = UP；尚未注册、注册丢失或停机中 = OUT_OF_SERVICE）接进 readiness 组，并列出组件明细
+management:
+  endpoint:
+    health:
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,rpc
+
 logging:
   level:
     com.feynman.rpc: INFO
@@ -662,36 +671,145 @@ INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.
 INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.UserService::default -> com.feynman.rpc.examples.provider.UserServiceImpl
 INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.UserFacade::default -> com.feynman.rpc.examples.provider.UserFacadeImpl
 INFO  [main] com.feynman.rpc.core.RpcServer : RpcServer bound on port 9000 (advertised as 192.168.0.103:9000), services=[com.feynman.rpc.examples.api.InventoryService::default, com.feynman.rpc.examples.api.UserService::default, com.feynman.rpc.examples.api.UserFacade::default]
-INFO  [main] c.f.r.e.provider.ProviderApplication : Started ProviderApplication in 2.032 seconds (process running for 2.746)
+INFO  [main] c.f.r.e.provider.ProviderApplication : Started ProviderApplication in 2.975 seconds (process running for 3.939)
 INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.InventoryService::default at 192.168.0.103:9000
 INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.UserService::default at 192.168.0.103:9000
 INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.UserFacade::default at 192.168.0.103:9000
-INFO  [-server-biz-4-1] c.f.r.examples.provider.UserServiceImpl : UserServiceImpl.save called with User{id=1, name=zzz}
+WARN  [-server-biz-4-2] c.f.rpc.core.server.ServiceDispatcher : com.feynman.rpc.examples.api.InventoryService::default#reserve (request 2) threw com.feynman.rpc.examples.api.InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
+INFO  [-server-biz-4-4] c.f.rpc.examples.provider.TenantFilter : buyers called for tenant acme
+INFO  [-server-biz-4-5] c.f.r.examples.provider.UserServiceImpl : UserServiceImpl.save called with User{id=1, name=zzz}
 ```
+
+（`WARN` 那一行是业务异常的服务端日志：异常照常回给调用方，见下面的验证清单。）
 
 consumer 启动、调用、退出：
 
 ```text
-INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of com.feynman.rpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
 INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of com.feynman.rpc.examples.api.InventoryService::default updated: [192.168.0.103:9000]
-INFO  [main] c.f.r.e.consumer.ConsumerApplication : Started ConsumerApplication in 2.4 seconds (process running for 3.119)
+INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of com.feynman.rpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
+INFO  [main] c.f.r.e.consumer.ConsumerApplication : Started ConsumerApplication in 3.487 seconds (process running for 4.328)
+INFO  [main] c.f.r.e.consumer.CallShapesRunner : left=7
+INFO  [main] c.f.r.e.consumer.CallShapesRunner : InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
+INFO  [main] c.f.r.e.consumer.CallShapesRunner : async buyers=[User{id=1, name=order-1}]
+INFO  [main] c.f.r.e.consumer.CallShapesRunner : buyers(tenant=acme)=1
 INFO  [main] c.f.rpc.examples.consumer.DemoRunner : Remote saveUser returned User{id=1, name=zzz}
-INFO  [main] com.feynman.rpc.core.RpcClient : RpcClient closed in 123ms (all in-flight calls completed)
+INFO  [main] com.feynman.rpc.core.RpcClient : RpcClient closed in 130ms (all in-flight calls completed)
 ```
 
 ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`，节点数据是
 `weight=1&proto=2&ts=...&pid=...` 形式的元数据。停掉 provider（Ctrl+C）后节点立即消失。
 
-**验证清单**。`DemoRunner` 只发了一次同步调用；其余三种调用形态用上面已经抄好的 bean 就能验证，写进你自己的
-`ApplicationRunner`（构造器注入 `OrderGateway`，`InventoryService inventory = orderGateway.inventory()`）即可。
-`InventoryServiceImpl` 每个 SKU 初始 10 件，下表按顺序对同一个 `sku` 调用：
+**验证清单**。`DemoRunner` 只发了一次同步调用；业务异常跨进程、异步、attachments 三种形态由下面这个 runner 演示（consumer
+启动时与 `DemoRunner` 一起执行，任何一步失败都会让启动失败，日志就是上面 `CallShapesRunner` 那四行），provider 侧用一个
+`ServerFilter` 读 attachment（`ServerFilter` / `ClientFilter` bean 由 starter 自动接入）。这两个文件也照抄进工程：
 
-| 形态 | 调用 | 预期 |
-|---|---|---|
-| 同步 | `gateway.register(1, "zzz")`（`DemoRunner` 已做）；`orderGateway.placeOrder(sku, 3, "order-1")` | `User{id=1, name=zzz}`；返回 `7` |
-| 业务异常跨进程 | `inventory.reserve(sku, 100, "order-2")`，`catch (InsufficientStockException e)` | 抛出的就是 `InsufficientStockException`，消息与服务端一致（`sku … has 7 left, order order-2 wants 100`），远端堆栈在 `e.getCause()`；`orderGateway.placeOrder(sku, 100, …)` 因此返回 `-1` |
-| 异步 | `inventory.buyersAsync(sku).get(5, TimeUnit.SECONDS)` | `[User{id=1, name=order-1}]` |
-| attachments | 调用前 `RpcContext.setAttachment("tenant", "acme")`，再调 `inventory.buyers(sku)`；provider 侧在业务方法里用 `RpcContext.getServerAttachment("tenant")`（或在 `ServerFilter` bean 里用 `invocation.getAttachment("tenant")`）读取 | 读到 `acme`。attachments 只随**紧接着的下一次**调用发出，发出即清空，不会串到之后的调用（`RpcContext` 在 `com.feynman.rpc.core`） |
+`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/CallShapesRunner.java`：
+
+```java
+package com.feynman.rpc.examples.consumer;
+
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+import com.feynman.rpc.core.RpcContext;
+import com.feynman.rpc.examples.api.InsufficientStockException;
+import com.feynman.rpc.examples.api.InventoryService;
+import com.feynman.rpc.examples.api.User;
+
+/** 启动后再演示三种调用形态：业务异常跨进程、异步、attachments（同步调用见 {@link DemoRunner}）。 */
+@Component
+@ConditionalOnProperty(prefix = "examples.consumer", name = "demo-call", havingValue = "true", matchIfMissing = true)
+public class CallShapesRunner implements ApplicationRunner {
+
+	private static final Logger log = LoggerFactory.getLogger(CallShapesRunner.class);
+
+	private final OrderGateway orders;
+
+	public CallShapesRunner(OrderGateway orders) {
+		this.orders = orders;
+	}
+
+	@Override
+	public void run(ApplicationArguments args) throws Exception {
+		demo(3001L).forEach(line -> log.info("{}", line));
+	}
+
+	/** 对同一个 SKU（初始 10 件）依次调用，返回每一步的结果。 */
+	public List<String> demo(long skuId) throws Exception {
+		InventoryService inventory = orders.inventory();
+		int left = inventory.reserve(skuId, 3, "order-1");
+		String rejected;
+		try {
+			inventory.reserve(skuId, 100, "order-2");
+			rejected = "unexpected success";
+		} catch (InsufficientStockException e) {                      // 业务异常按类型还原；远端堆栈在 e.getCause()
+			rejected = "InsufficientStockException: " + e.getMessage();
+		}
+		List<User> buyers = inventory.buyersAsync(skuId).get(5, TimeUnit.SECONDS);   // 异步：返回 CompletableFuture
+		RpcContext.setAttachment("tenant", "acme");                  // 只随紧接着的下一次调用发出，发出即清空
+		int tagged = inventory.buyers(skuId).size();                 // provider 的 TenantFilter 读到 tenant=acme
+		return List.of("left=" + left, rejected, "async buyers=" + buyers, "buyers(tenant=acme)=" + tagged);
+	}
+}
+```
+
+`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/TenantFilter.java`：
+
+```java
+package com.feynman.rpc.examples.provider;
+
+import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import com.feynman.rpc.core.filter.Invocation;
+import com.feynman.rpc.core.filter.Invoker;
+import com.feynman.rpc.core.filter.Result;
+import com.feynman.rpc.core.filter.ServerFilter;
+
+/**
+ * 服务端 Filter 示例：读取调用方用 {@code RpcContext.setAttachment("tenant", ...)} 带来的 attachment。
+ * ServerFilter bean 由 starter 自动接入。Filter 里从 {@link Invocation} 读；业务方法里用
+ * {@code RpcContext.getServerAttachment("tenant")}（入站上下文在链尾、调用业务方法前才绑定到线程上）。
+ */
+@Component
+public class TenantFilter implements ServerFilter {
+
+	private static final Logger log = LoggerFactory.getLogger(TenantFilter.class);
+
+	private volatile String lastTenant;
+
+	@Override
+	public CompletableFuture<Result> invoke(Invoker next, Invocation invocation) {
+		String tenant = invocation.getAttachment("tenant");
+		lastTenant = tenant;
+		if (tenant != null) {
+			log.info("{} called for tenant {}", invocation.methodName(), tenant);
+		}
+		return next.invoke(invocation);
+	}
+
+	/** 最近一次调用带来的 tenant，没带为 null（集成测试用它确认 attachment 只随下一次调用发出）。 */
+	public String lastTenant() {
+		return lastTenant;
+	}
+}
+```
+
+要点：
+- 业务异常按类型还原：消息与服务端一致，远端堆栈挂在 `e.getCause()` 上；异常类要在接口所在包（第 4 节约束）。
+- 异步方法的 `thenApply` 等回调在 IO 线程上执行，不要在里面阻塞（第 8 节）。
+- `RpcContext.setAttachment` 只对当前线程紧接着的下一次调用生效，发出即清空，不会串到之后的调用；服务端业务方法里用
+  `RpcContext.getServerAttachment(key)` 读，Filter 里用 `invocation.getAttachment(key)` 读。
 
 ### 7.1 指标
 
@@ -765,10 +883,24 @@ curl -s localhost:8080/actuator/prometheus | grep '^rpc_server_calls_seconds_cou
 - `rpc.server.host`：容器 / 多网卡环境显式设置，否则自动探测的地址可能是消费端连不到的那个。
 - `rpc.server.deregister-grace: 1s`，并确认 `spring.lifecycle.timeout-per-shutdown-phase` 与 Kubernetes 的
   `terminationGracePeriodSeconds` 都大于 `deregister-grace + shutdown-timeout + 5s`。
-- 把健康组件 `rpc` 接到 readiness：`management.endpoint.health.group.readiness.include: readinessState,rpc`（Actuator 在 classpath 上时
-  自动装配）。启动后全部服务注册成功才 UP，尚未注册成功（启动时注册中心不可达，后台在重试）或停机中为 OUT_OF_SERVICE；
-  注意已经注册过之后注册中心中途断开（会话丢失）时它仍报 UP，恢复后自动重新注册。Boot 缺省不在 `/actuator/health` 里列出各组件，
-  要看 `rpc` 的明细设 `management.endpoint.health.show-components: always`（或对 readiness 组单独设）。
+- 把健康组件 `rpc` 接到 readiness（Actuator 在 classpath 上时自动装配）。示例的 `provider.yml` 已经这样配（Boot 缺省不列出各组件，
+  `show-components: always` 之后才能按路径读 `/actuator/health/rpc`）：
+
+```yaml
+# Actuator：health 组件 rpc（已注册 = UP；尚未注册、注册丢失或停机中 = OUT_OF_SERVICE）接进 readiness 组，并列出组件明细
+management:
+  endpoint:
+    health:
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,rpc
+```
+
+  启动后全部服务注册成功才 UP；尚未注册成功（启动时注册中心不可达，后台在重试）、注册过之后节点丢失尚未重建，或停机中为
+  OUT_OF_SERVICE。"节点丢失"目前只有 ZooKeeper 实现会报告：会话过期时临时节点随之消失，health 立即转 OUT_OF_SERVICE，
+  节点在新会话上重建后回到 UP；ZooKeeper 整体不可达时，要等会话超时（`session-timeout-ms`，缺省 30s）Curator 才判定会话丢失，
+  这之前节点在服务端仍然存在。Nacos 实现不报告（nacos-client 没有公开的连接事件），断连期间仍报 UP。
 - 只给幂等方法设置 `retries`：连接在请求写出后断开时，客户端无法判断服务端是否已执行，重试可能导致重复执行。
 - 返回 `CompletableFuture` 的方法：`thenApply` 等回调在 Netty IO 线程上执行，不要在里面阻塞；需要时用 `thenApplyAsync(fn, executor)`。
   在这些回调里调用**同步**方法会直接抛 `IllegalStateException`（"called on this RpcClient's IO event-loop thread"）——阻塞事件循环会让

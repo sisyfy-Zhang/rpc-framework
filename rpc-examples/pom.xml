@@ -38,6 +38,11 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
     </dependency>
+    <!-- 接入文档第 2 节要求的依赖之一：health 组件 rpc（readiness）；有 MeterRegistry 时 starter 自动接入指标 Filter -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
     <!-- PlainProvider 的可选 metrics-port 选项：服务端指标 Filter / Gauge 与内嵌 Prometheus 抓取端点 -->
     <dependency>
       <groupId>${project.groupId}</groupId>

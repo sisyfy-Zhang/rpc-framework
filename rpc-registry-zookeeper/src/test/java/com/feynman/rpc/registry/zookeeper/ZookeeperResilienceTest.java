@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.curator.framework.CuratorFramework;
@@ -31,6 +32,7 @@ import org.junit.jupiter.api.Test;
 
 import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.registry.InstanceMetadata;
+import com.feynman.rpc.core.registry.RegistrationListener;
 import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.core.registry.RegistryException;
 import com.feynman.rpc.core.registry.ServiceInstance;
@@ -140,6 +142,43 @@ class ZookeeperResilienceTest {
 		provider.register(second);
 		recorder.awaitLatest(Duration.ofSeconds(5), "sees the second instance",
 				list -> PushRecorder.containsAddress(list, second.address()) && PushRecorder.containsAddress(list, instance.address()));
+	}
+
+	/**
+	 * 会话过期时向 {@link RegistrationListener} 报告丢失，节点在新会话上重建完成后报告恢复：两个事件成对、按序，
+	 * 恢复时节点确实属于新会话。RpcServer 据此让 isRegistered() / health 在这段时间里为"不可被发现"。
+	 */
+	@Test
+	void sessionExpiryIsReportedAsLost_thenRestoredAfterReRegistration() throws Exception {
+		ServiceInstance instance = instance(9104);
+		ZookeeperRegistry provider = registry();
+		List<String> events = new CopyOnWriteArrayList<>();
+		assertTrue(provider.addRegistrationListener(new RegistrationListener() {
+			@Override
+			public void onRegistrationsLost() {
+				events.add("lost");
+			}
+
+			@Override
+			public void onRegistrationsRestored() {
+				events.add("restored");
+			}
+		}));
+		provider.register(instance);
+		long oldSession = sessionOf(provider);
+		Thread.sleep(300);
+		assertEquals(List.of(), events, "a healthy session reports nothing");
+
+		KillSession.kill(provider.curator().getZookeeperClient().getZooKeeper());
+
+		await("lost then restored").atMost(10, TimeUnit.SECONDS).pollInterval(Duration.ofMillis(20))
+				.until(() -> events.equals(List.of("lost", "restored")));
+		Stat stat = stat(instance);
+		assertNotNull(stat);
+		assertEquals(sessionOf(provider), stat.getEphemeralOwner(), "restored only after the node lives on the new session");
+		assertTrue(stat.getEphemeralOwner() != oldSession);
+		Thread.sleep(300);
+		assertEquals(List.of("lost", "restored"), events, "no further events once restored");
 	}
 
 	/** 订阅方自己的会话被杀：CuratorCache 在新会话上重建，之后的变化照样推送。 */

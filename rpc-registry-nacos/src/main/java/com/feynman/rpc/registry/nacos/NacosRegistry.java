@@ -52,6 +52,11 @@ import com.feynman.rpc.core.registry.ServiceInstance;
  *   <li>线程：Nacos 客户端自己创建并命名线程（{@code com.alibaba.nacos.*}、{@code nacos-grpc-*} 等，部分是进程级共享的），
  *       本类无法让它们带上实例前缀，契约里的线程泄漏检查对 Nacos 跳过。本类自己的订阅重试线程名为
  *       {@code rpc-registry-nacos-{实例哈希}-subscribe}，close 时关闭。</li>
+ *   <li><b>不报告注册丢失</b>（不实现 {@link Registry#addRegistrationListener}）：nacos-client 2.4.3 的公开 API
+ *       （{@code NamingService}）没有连接 / 会话事件，gRPC 连接的 {@code ConnectionEventListener} 是内部的
+ *       {@code NamingGrpcRedoService}，挂在不对外暴露的 RpcClient 上；只能轮询 {@code getServerStatus()}，那报告的是"连得上服务端"而不是
+ *       "我的实例还在"。断连期间 Nacos 服务端会摘除本连接的临时实例，客户端重连后由它自己的 redo 机制重新注册——
+ *       这段时间 RpcServer.isRegistered() / health 组件 {@code rpc} 仍为 UP。</li>
  * </ul>
  *
  * <p>{@link RegistryConfig#properties()} 原样作为 Nacos 客户端属性（如 {@code namespace}、{@code username}、

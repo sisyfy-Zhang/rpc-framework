@@ -20,6 +20,7 @@ import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.core.testutil.FailingRegistryFactory;
 import com.feynman.rpc.core.testutil.FlakyRegistryFactory;
 import com.feynman.rpc.core.testutil.InMemoryRegistryFactory;
+import com.feynman.rpc.core.testutil.LossyRegistryFactory;
 import com.feynman.rpc.core.testutil.SimpleTestSerializer;
 
 /**
@@ -69,6 +70,43 @@ class RpcServerRegistrationTest {
 			server.registered().get(5, TimeUnit.SECONDS);
 			assertTrue(server.isRegistered());
 			assertEquals(1, InMemoryRegistryFactory.instances(ns, ServiceKey.of(Pong.class)).size());
+		}
+	}
+
+	/**
+	 * 注册中心报告"已注册的节点丢失"（如 ZK 会话过期）时 isRegistered() 变 false，重建完成后恢复 true；
+	 * registered() 只表示"曾经全部注册完"，不随之变化。
+	 */
+	@Test
+	void reportedRegistrationLossFlipsIsRegisteredUntilRestored() throws Exception {
+		String ns = "lossy-" + UUID.randomUUID();
+		try (RpcServer server = RpcServer.builder().serializer(SimpleTestSerializer.NAME).port(0).host("127.0.0.1").registry(RegistryConfig.of("lossy", ns)).build()) {
+			server.export(Ping.class, s -> s);
+			server.start();
+			server.registered().get(5, TimeUnit.SECONDS);
+			assertTrue(server.isRegistered());
+
+			LossyRegistryFactory.lose(ns);
+			assertFalse(server.isRegistered(), "registrations lost: not discoverable");
+			assertTrue(server.registered().isDone(), "registered() means 'was fully registered once' and is not reset");
+
+			LossyRegistryFactory.restore(ns);
+			assertTrue(server.isRegistered());
+		}
+	}
+
+	/** 不实现回调的 Registry（缺省 addRegistrationListener 返回 false）：注册成功之后 isRegistered() 一直为 true，行为不变。 */
+	@Test
+	void registryWithoutLossReportingKeepsTheOldBehaviour() throws Exception {
+		String ns = "ns-" + UUID.randomUUID();
+		assertFalse(new InMemoryRegistryFactory().create(InMemoryRegistryFactory.config(ns)).addRegistrationListener(null));
+		try (RpcServer server = RpcServer.builder().serializer(SimpleTestSerializer.NAME).port(0).host("127.0.0.1").registry(InMemoryRegistryFactory.config(ns)).build()) {
+			server.export(Ping.class, s -> s);
+			server.start();
+			server.registered().get(5, TimeUnit.SECONDS);
+			assertTrue(server.isRegistered());
+			Thread.sleep(200);
+			assertTrue(server.isRegistered());
 		}
 	}
 

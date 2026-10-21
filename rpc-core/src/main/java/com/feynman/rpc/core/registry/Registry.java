@@ -58,6 +58,20 @@ public interface Registry extends AutoCloseable {
 	/** 取消订阅；本方法返回之后 {@code listener} 不会再被回调，同一服务的其他监听者不受影响。 */
 	void unsubscribe(ServiceKey key, InstanceListener listener);
 
+	/**
+	 * <b>可选能力</b>：监听"本会话注册过的节点是否仍在注册中心"。实现支持时登记 {@code listener} 并返回 true，之后在
+	 * 节点丢失（如 ZooKeeper 会话过期）时回调 {@link RegistrationListener#onRegistrationsLost()}，在新会话上把它们全部
+	 * 重建完成后回调 {@link RegistrationListener#onRegistrationsRestored()}。
+	 *
+	 * <p>缺省实现返回 false、永不回调：不实现它的第三方 Registry 行为完全不变，调用方（RpcServer）只能认为
+	 * "注册成功之后一直有效"。回调在实现自己的线程上执行，listener 不应阻塞；close 之后不再回调。
+	 *
+	 * @return 实现是否会报告注册丢失 / 恢复
+	 */
+	default boolean addRegistrationListener(RegistrationListener listener) {
+		return false;
+	}
+
 	/** 关闭会话：注册过的临时节点随会话消失，所有订阅停止回调，实现自己的线程结束。可重复调用。 */
 	@Override
 	void close();
