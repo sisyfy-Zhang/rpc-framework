@@ -6,6 +6,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 import com.feynman.rpc.core.RpcException;
 
@@ -27,10 +28,17 @@ class ConnectionPool {
 	private final int port;
 	private final List<Slot> slots;
 	private final AtomicInteger cursor = new AtomicInteger(0);
+	/** 轮询时跳过了一条已激活但不可写的连接、改用另一条可写连接的次数（所属客户端共用）。 */
+	private final LongAdder unwritableSwitches;
 	private volatile boolean closed = false;
 
 	ConnectionPool(Bootstrap bootstrap, String host, int port, int size) {
+		this(bootstrap, host, port, size, new LongAdder());
+	}
+
+	ConnectionPool(Bootstrap bootstrap, String host, int port, int size, LongAdder unwritableSwitches) {
 		this.bootstrap = bootstrap;
+		this.unwritableSwitches = unwritableSwitches;
 		this.host = host;
 		this.port = port;
 		this.slots = new CopyOnWriteArrayList<>();
@@ -54,25 +62,44 @@ class ConnectionPool {
 	}
 
 	/**
-	 * 取一条可写的连接。没有已激活的连接但有正在建立的连接时，等这次建连完成再交出去——
+	 * 取一条连接：轮询，优先已激活且可写（{@link Channel#isWritable()}，待写字节没超过高水位）的；已激活的都不可写时
+	 * 交出轮询到的第一条（照常写，不阻塞调用方——超过出站硬上限的由 NettyClient 拒绝）。
+	 * 没有已激活的连接但有正在建立的连接时，等这次建连完成再交出去——
 	 * 不能直接往未连接的 channel 上写：Netty 会让这次写以 NotYetConnectedException 失败，
 	 * 而不是缓冲到连上为止（旧实现的注释假设会缓冲，首个请求因此偶发失败）。
+	 *
+	 * <p>可写性在这里（调用方线程，取连接时）判断，不在事件循环上写出时重新选连接：后者要把请求从一个事件循环转投另一个，
+	 * 而可写性是一读即可的 volatile 状态，取连接时的判断已经足够近。
 	 */
 	CompletableFuture<Channel> acquire() {
 		int size = slots.size();
 		ChannelFuture connecting = null;
+		Channel unwritable = null;
 		for (int i = 0; i < size; i++) {
 			Slot slot = slots.get(Math.floorMod(cursor.getAndIncrement(), size));
 			ChannelFuture connect = slot.connect;
 			if (connect == null) {
 				continue;
 			}
-			if (connect.channel().isActive()) {
-				return CompletableFuture.completedFuture(connect.channel());
+			Channel channel = connect.channel();
+			if (channel.isActive()) {
+				if (channel.isWritable()) {
+					if (unwritable != null) {
+						unwritableSwitches.increment();
+					}
+					return CompletableFuture.completedFuture(channel);
+				}
+				if (unwritable == null) {
+					unwritable = channel;
+				}
+				continue;
 			}
 			if (connecting == null && !connect.isDone()) {
 				connecting = connect;
 			}
+		}
+		if (unwritable != null) {
+			return CompletableFuture.completedFuture(unwritable);
 		}
 		if (connecting == null) {
 			return CompletableFuture.failedFuture(new RpcException("No active connection to " + host + ":" + port));

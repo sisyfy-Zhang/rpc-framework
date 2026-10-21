@@ -177,6 +177,14 @@ final class RpcCallTarget implements CallTarget {
 		return metadata().stats();
 	}
 
+	@Override
+	public Map<String, String> clientStats() {
+		Map<String, String> out = new java.util.LinkedHashMap<>();
+		out.put(BackpressureStats.CLIENT_SEND_BUFFER_REJECTIONS_KEY, String.valueOf(client.sendBufferRejections()));
+		out.put(BackpressureStats.CLIENT_UNWRITABLE_SWITCHES_KEY, String.valueOf(client.unwritableConnectionSwitches()));
+		return out;
+	}
+
 	private BenchService metadata() {
 		BenchService m = metadata;
 		if (m == null) {

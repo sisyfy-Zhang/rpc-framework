@@ -183,7 +183,7 @@ public final class RpcServer implements AutoCloseable {
 			registryFactory = ExtensionLoader.getExtensionLoader(RegistryFactory.class).getExtension(config.registry().type());
 		}
 		byte fallbackCode = serializers.preferred().code();
-		NettyServer server = new NettyServer(dispatcher, config.executor(), fallbackCode, config.ioThreads(), config.flushConsolidation());
+		NettyServer server = new NettyServer(dispatcher, fallbackCode, config);
 		InetSocketAddress bound;
 		try {
 			bound = server.bind(config.port());
@@ -378,6 +378,24 @@ public final class RpcServer implements AutoCloseable {
 	public int runningBusinessTasks() {
 		NettyServer server = transport;
 		return server == null ? 0 : server.runningBusinessTasks();
+	}
+
+	/**
+	 * 出站背压（{@code RpcServerConfig.outboundBackpressure}）因连接不可写而暂停读的累计次数（全部连接，含已关闭的）。
+	 * 稳态下持续增长说明有客户端读回包跟不上、或水位线相对回包大小偏低。未启动时为 0。
+	 */
+	public long autoReadPauses() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.autoReadPauses();
+	}
+
+	/**
+	 * 因连接待写字节超过 {@code RpcServerConfig.outboundHardLimit} 而直接回 SERVER_OVERLOADED 的累计请求数（业务没执行）。
+	 * 未启动时为 0。
+	 */
+	public long outboundOverloadRejections() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.outboundOverloadRejections();
 	}
 
 	/**

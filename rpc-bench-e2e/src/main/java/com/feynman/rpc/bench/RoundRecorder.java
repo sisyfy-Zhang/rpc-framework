@@ -81,6 +81,11 @@ final class RoundRecorder {
 	 * 每请求值在 {@link #toJson()} 里按窗口内完成的请求数补上；非 Linux 一端记 n/a，采样线程没能完成时整项为 unknown。
 	 */
 	private volatile Object io = EnvironmentProbe.UNKNOWN;
+	/**
+	 * 统计窗口内 rpc 服务端的出站背压计数（{@link BackpressureStats#delta}）：暂停读次数与硬上限拒绝数；服务端没有这些计数
+	 * （对比对象、HTTP 端点）记 n/a，采样线程没能完成时为 unknown。
+	 */
+	private volatile Object backpressure = EnvironmentProbe.UNKNOWN;
 
 	RoundRecorder(int round, Profile profile) {
 		this.round = round;
@@ -168,6 +173,10 @@ final class RoundRecorder {
 		this.io = io;
 	}
 
+	void backpressure(Object backpressure) {
+		this.backpressure = backpressure;
+	}
+
 	void finish() {
 		this.endNanos = System.nanoTime();
 		this.endedAt = Instant.now();
@@ -249,6 +258,7 @@ final class RoundRecorder {
 		json.put("cpu", cpu);
 		json.put("gc", gc);
 		json.put("io", ioWithPerRequest(windowSuccess.sum() + windowErrors.sum()));
+		json.put("backpressure", backpressure);
 		boolean warmup = warmupCompleted();
 		List<String> reasons = new ArrayList<>();
 		if (!warmup) {

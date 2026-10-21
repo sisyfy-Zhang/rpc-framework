@@ -147,8 +147,15 @@ class RpcAutoConfigurationTest {
 				Map.entry("rpc.client.io-threads", "3"),
 				Map.entry("rpc.client.sync-wait-grace", "250ms"),
 				Map.entry("rpc.client.flush-consolidation", "false"),
+				Map.entry("rpc.client.write-buffer-low", "16KB"),
+				Map.entry("rpc.client.write-buffer-high", "128KB"),
+				Map.entry("rpc.client.outbound-hard-limit", "4MB"),
 				Map.entry("rpc.server.weight", "7"),
 				Map.entry("rpc.server.flush-consolidation", "false"),
+				Map.entry("rpc.server.write-buffer-low", "65536"),
+				Map.entry("rpc.server.write-buffer-high", "256KB"),
+				Map.entry("rpc.server.outbound-backpressure", "false"),
+				Map.entry("rpc.server.outbound-hard-limit", "0"),
 				Map.entry("rpc.server.io-threads", "2"),
 				Map.entry("rpc.server.shutdown-timeout", "4s"),
 				Map.entry("rpc.server.deregister-grace", "1500ms"),
@@ -171,6 +178,9 @@ class RpcAutoConfigurationTest {
 		assertEquals(3, client.ioThreads());
 		assertEquals(Duration.ofMillis(250), client.syncWaitGrace());
 		assertFalse(client.flushConsolidation());
+		assertEquals(16 * 1024, client.writeBufferLow());
+		assertEquals(128 * 1024, client.writeBufferHigh());
+		assertEquals(4L * 1024 * 1024, client.outboundHardLimit());
 		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
 				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
 		assertEquals(expectedOptions, client.serializerOptions());
@@ -181,6 +191,10 @@ class RpcAutoConfigurationTest {
 		assertEquals(7, server.weight());
 		assertEquals(2, server.ioThreads());
 		assertFalse(server.flushConsolidation());
+		assertEquals(64 * 1024, server.writeBufferLow(), "a plain number is bytes");
+		assertEquals(256 * 1024, server.writeBufferHigh());
+		assertFalse(server.outboundBackpressure());
+		assertEquals(0, server.outboundHardLimit(), "0 = hard limit off");
 		assertEquals(new ExecutorConfig.VirtualThreads(64), server.executor());
 		assertEquals(Duration.ofSeconds(4), server.shutdownTimeout());
 		assertEquals(1024, server.remoteStackTraceMaxBytes());
@@ -219,6 +233,23 @@ class RpcAutoConfigurationTest {
 		assertEquals(RpcServerConfig.DEFAULT_IO_THREADS, server.ioThreads());
 		assertTrue(client.flushConsolidation(), "flush consolidation is on by default");
 		assertTrue(server.flushConsolidation(), "flush consolidation is on by default");
+		assertEquals(RpcClientConfig.DEFAULT_WRITE_BUFFER_LOW, client.writeBufferLow());
+		assertEquals(RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH, client.writeBufferHigh());
+		assertEquals(16L * RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH, client.outboundHardLimit());
+		assertEquals(RpcServerConfig.DEFAULT_WRITE_BUFFER_LOW, server.writeBufferLow());
+		assertEquals(RpcServerConfig.DEFAULT_WRITE_BUFFER_HIGH, server.writeBufferHigh());
+		assertTrue(server.outboundBackpressure(), "outbound backpressure is on by default");
+		assertEquals(16L * RpcServerConfig.DEFAULT_WRITE_BUFFER_HIGH, server.outboundHardLimit());
+	}
+
+	@Test
+	void settingOnlyTheHighWaterMarkKeepsTheDefaultLowAndDerivesTheHardLimit() {
+		RpcProperties properties = new RpcProperties();
+		properties.getServer().setWriteBufferHigh(org.springframework.util.unit.DataSize.ofMegabytes(1));
+		RpcServerConfig server = properties.toServerConfig();
+		assertEquals(RpcServerConfig.DEFAULT_WRITE_BUFFER_LOW, server.writeBufferLow());
+		assertEquals(1024 * 1024, server.writeBufferHigh());
+		assertEquals(16L * 1024 * 1024, server.outboundHardLimit(), "hard limit follows the configured high water mark");
 	}
 
 	@Test

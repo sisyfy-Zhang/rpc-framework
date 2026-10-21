@@ -8,6 +8,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.feynman.rpc.core.RpcException;
 import com.feynman.rpc.core.RpcSerializationException;
@@ -15,6 +19,7 @@ import com.feynman.rpc.core.codec.AttachmentsCodec;
 import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
+import com.feynman.rpc.core.config.RpcClientConfig;
 import com.feynman.rpc.core.internal.FlushConsolidation;
 import com.feynman.rpc.core.loadbalance.LoadStats;
 import com.feynman.rpc.core.protocol.OutboundBody;
@@ -29,12 +34,15 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.FastThreadLocalThread;
@@ -46,16 +54,30 @@ import io.netty.util.concurrent.FastThreadLocalThread;
  *
  * <p>只认识地址和协议帧，不认识服务、Filter、Cluster——那些在 RpcClient 里组装。
  * 框架内部类型，不是给业务直接使用的 API。
+ *
+ * <p><b>出站背压</b>（缺陷 F1 的客户端一侧）：连接设 {@code RpcClientConfig.writeBufferWaterMark}；取连接时优先可写的连接
+ * （{@link ConnectionPool#acquire()}）；写出时连接不可写且待写字节超过 {@code outboundHardLimit} 的请求不写出，
+ * 以"未发出"的 RpcException 失败（可安全换节点重试的传输失败），计入 {@link #sendBufferRejections()}，每条连接第一次记 warn。
+ * 只是不可写、没到硬上限时照常写：不阻塞调用方、不自旋等待——客户端的积压本来就受"调用方并发 × 超时"约束。
  */
 public final class NettyClient implements AutoCloseable {
 
+	private static final Logger log = LoggerFactory.getLogger(NettyClient.class);
 	/** 建连超时：远短于 Netty 默认的 30s，宕掉的节点应该尽快让位给 Cluster 的重试。 */
 	private static final int CONNECT_TIMEOUT_MS = 3000;
+	/** 这条连接是否已经为出站硬上限记过 warn。 */
+	private static final AttributeKey<Boolean> SEND_BUFFER_WARNED = AttributeKey.valueOf("rpc.sendBufferWarned");
 
 	private final EventLoopGroup ioGroup;
 	private final PendingRequests pending = new PendingRequests();
 	private final ConnectionManager connections;
 	private final Serializers serializers;
+	/** 每条连接待写字节的硬上限，0 = 不检查（{@code RpcClientConfig.outboundHardLimit}）。 */
+	private final long outboundHardLimit;
+	/** 因出站硬上限以"未发出"失败的请求数。 */
+	private final LongAdder sendBufferRejections = new LongAdder();
+	/** 取连接时因不可写换连接的次数。 */
+	private final LongAdder unwritableSwitches = new LongAdder();
 
 	/**
 	 * @param loadStats 所属客户端的每地址在途统计：下线节点的连接据此判断何时排空（见 ConnectionManager）
@@ -67,6 +89,15 @@ public final class NettyClient implements AutoCloseable {
 	/** @param ioThreads IO 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcClientConfig.ioThreads} */
 	public NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads) {
 		this(serializers, connectionsPerNode, loadStats, ioThreads, null, true);
+	}
+
+	/**
+	 * 按 RpcClientConfig 里与传输相关的项创建：{@code connectionsPerNode}、{@code ioThreads}、{@code flushConsolidation}、
+	 * {@code writeBufferWaterMark}、{@code outboundHardLimit}。其余项（注册中心、Cluster 等）不在这里用。
+	 */
+	public NettyClient(Serializers serializers, LoadStats loadStats, RpcClientConfig config) {
+		this(serializers, config.connectionsPerNode(), loadStats, config.ioThreads(), null, config.flushConsolidation(),
+				config.writeBufferLow(), config.writeBufferHigh(), config.outboundHardLimit());
 	}
 
 	/**
@@ -85,7 +116,15 @@ public final class NettyClient implements AutoCloseable {
 
 	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator,
 			boolean flushConsolidation) {
+		this(serializers, connectionsPerNode, loadStats, ioThreads, allocator, flushConsolidation, RpcClientConfig.DEFAULT_WRITE_BUFFER_LOW,
+				RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH,
+				(long) RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH * RpcClientConfig.DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER);
+	}
+
+	private NettyClient(Serializers serializers, int connectionsPerNode, LoadStats loadStats, int ioThreads, ByteBufAllocator allocator,
+			boolean flushConsolidation, int writeBufferLow, int writeBufferHigh, long outboundHardLimit) {
 		this.serializers = serializers;
+		this.outboundHardLimit = outboundHardLimit;
 		byte[] supportedCodes = serializers.codesByPriority();
 
 		this.ioGroup = new NioEventLoopGroup(ioThreads, new DefaultThreadFactory("rpc-client-io"));
@@ -93,7 +132,8 @@ public final class NettyClient implements AutoCloseable {
 				.group(ioGroup)
 				.channel(NioSocketChannel.class)
 				.option(ChannelOption.SO_KEEPALIVE, true)
-				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS);
+				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS)
+				.option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(writeBufferLow, writeBufferHigh));
 		if (allocator != null) {
 			bootstrap.option(ChannelOption.ALLOCATOR, allocator);
 		}
@@ -113,7 +153,7 @@ public final class NettyClient implements AutoCloseable {
 				ch.pipeline().addLast(new ClientHandler(pending, supportedCodes));
 			}
 		});
-		this.connections = new ConnectionManager(bootstrap, connectionsPerNode, loadStats);
+		this.connections = new ConnectionManager(bootstrap, connectionsPerNode, loadStats, unwritableSwitches);
 	}
 
 	/** 让连接池与"当前需要的提供者集合"一致：新地址建池，不再需要的地址排空后关闭。 */
@@ -207,6 +247,7 @@ public final class NettyClient implements AutoCloseable {
 	/**
 	 * 在连接的事件循环上写出：编码器（同一线程）分配帧缓冲区。排队期间已超时 / 已失败的请求不再写出——
 	 * 超时的调用方早已放弃，再编码、再占发送缓冲区只会在过载时把内存越堆越高。
+	 * 连接不可写且待写字节超过出站硬上限时同样不写出（见类注释）：取连接时已优先可写的连接，拿到不可写的说明这个节点的连接都不可写。
 	 */
 	private void writeOnEventLoop(Channel channel, long requestId, RpcMessage message, Set<Long> onChannel) {
 		if (!pending.isWaiting(requestId)) {
@@ -219,12 +260,38 @@ public final class NettyClient implements AutoCloseable {
 			pending.fail(requestId, new RpcException("Connection to " + channel.remoteAddress() + " closed before the request was sent"));
 			return;
 		}
+		if (outboundHardLimit > 0 && !channel.isWritable()) {
+			long pendingBytes = pendingWriteBytes(channel);
+			if (pendingBytes > outboundHardLimit) {
+				onChannel.remove(requestId);
+				rejectSendBufferFull(channel, requestId, pendingBytes);
+				return;
+			}
+		}
 		channel.writeAndFlush(message).addListener(f -> {
 			if (!f.isSuccess()) {
 				// 写失败（含编码失败）立即让这次请求失败，而不是挂到超时
 				pending.fail(requestId, new RpcException("Failed to send request to " + channel.remoteAddress(), f.cause()));
 			}
 		});
+	}
+
+	/** 出站硬上限：请求没有写出，以可重试的传输失败结束；计数，每条连接第一次记 warn。 */
+	private void rejectSendBufferFull(Channel channel, long requestId, long pendingBytes) {
+		sendBufferRejections.increment();
+		String reason = "Send buffer to " + channel.remoteAddress() + " holds " + pendingBytes
+				+ " bytes not yet written to the socket (> outboundHardLimit " + outboundHardLimit + "); request not sent";
+		if (channel.attr(SEND_BUFFER_WARNED).setIfAbsent(Boolean.TRUE) == null) {
+			log.warn("{}; the provider is not reading requests fast enough. Further rejections on this connection are counted in"
+					+ " sendBufferRejections without logging", reason);
+		}
+		pending.fail(requestId, new RpcException(reason));
+	}
+
+	/** 连接此刻的待写字节（已交给 Netty、还没写进套接字的，含未冲刷的）；连接已关闭时为 0。 */
+	static long pendingWriteBytes(Channel channel) {
+		ChannelOutboundBuffer buffer = channel.unsafe().outboundBuffer();
+		return buffer == null ? 0 : buffer.totalPendingWriteBytes();
 	}
 
 	/** 整帧超限（或 attachments 本身不合法）时返回让本次请求失败的异常，否则 null。阈值与编码器相同。 */
@@ -260,6 +327,16 @@ public final class NettyClient implements AutoCloseable {
 			}
 		}
 		return false;
+	}
+
+	/** 因连接待写字节超过出站硬上限而以"未发出"失败的累计请求数。 */
+	public long sendBufferRejections() {
+		return sendBufferRejections.sum();
+	}
+
+	/** 取连接时跳过不可写的连接、改用另一条可写连接的累计次数（{@code connectionsPerNode > 1} 时才可能发生）。 */
+	public long unwritableConnectionSwitches() {
+		return unwritableSwitches.sum();
 	}
 
 	/** 当前在途（已发出未收到响应）的请求数，用于泄漏断言。 */

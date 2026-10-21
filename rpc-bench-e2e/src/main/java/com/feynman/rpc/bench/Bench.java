@@ -102,11 +102,13 @@ public final class Bench {
 			return pluginServer(transport, rawArgs, out);
 		}
 		options.allowOnly("transport", "port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port", "io-threads",
-				"executor", "flush-consolidation");
+				"executor", "flush-consolidation", "outbound-backpressure", "write-buffer-water-mark");
 		int port = options.intValue("port");
 		int ioThreads = options.has("io-threads") ? options.intValue("io-threads") : 0;
 		ExecutorConfig executor = executor(options.value("executor", BenchServer.EXECUTOR_FIXED));
 		boolean flushConsolidation = onOff("flush-consolidation", options.value("flush-consolidation", "on"));
+		boolean outboundBackpressure = onOff("outbound-backpressure", options.value("outbound-backpressure", "on"));
+		int[] waterMark = waterMark(options.value("write-buffer-water-mark", null));
 		Integer metricsPort = options.has("metrics-port") ? options.intValue("metrics-port") : null;
 		Integer httpPort = options.has("http-port") ? options.intValue("http-port") : null;
 		String host = options.value("host", null);
@@ -121,7 +123,8 @@ public final class Bench {
 		MeterRegistry metrics = metricsPort == null ? null : PrometheusEndpoint.newRegistry();
 		BenchServer server;
 		try {
-			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation);
+			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation,
+					outboundBackpressure, waterMark);
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -152,7 +155,9 @@ public final class Bench {
 				+ (registry == null ? " registry=none" : " registry=zk://" + registry.address()) + " serializer=" + serializer
 				+ (http == null ? "" : " http_port=" + http.port()) + " transport=rpc io_threads=" + server.environment().get("server_io_threads")
 				+ " executor=" + server.environment().get("server_executor_kind") + " flush_consolidation="
-				+ server.environment().get("server_flush_consolidation"));
+				+ server.environment().get("server_flush_consolidation") + " outbound_backpressure="
+				+ server.environment().get("server_outbound_backpressure") + " write_buffer_water_mark="
+				+ server.environment().get("server_write_buffer_water_mark"));
 		out.flush();
 		stopped.await();
 		return OK;
@@ -170,6 +175,42 @@ public final class Bench {
 			case BenchServer.EXECUTOR_DIRECT -> ExecutorConfig.direct();
 			default -> throw new UsageException("--executor must be fixed, virtual or direct, got \"" + kind + "\"");
 		};
+	}
+
+	/**
+	 * {@code server --write-buffer-water-mark <low>:<high>}（字节，可带 K / M 后缀，如 {@code 256K:1M}）：
+	 * {@code RpcServerConfig.writeBufferWaterMark}；不给 = 框架缺省（null）。
+	 */
+	static int[] waterMark(String value) {
+		if (value == null) {
+			return null;
+		}
+		String[] parts = value.trim().split(":");
+		if (parts.length != 2) {
+			throw new UsageException("--write-buffer-water-mark must be <low>:<high> (bytes, K/M suffix allowed), got \"" + value + "\"");
+		}
+		return new int[] { size(parts[0], value), size(parts[1], value) };
+	}
+
+	private static int size(String text, String whole) {
+		String t = text.trim().toUpperCase(java.util.Locale.ROOT);
+		long multiplier = 1;
+		if (t.endsWith("K")) {
+			multiplier = 1024;
+			t = t.substring(0, t.length() - 1);
+		} else if (t.endsWith("M")) {
+			multiplier = 1024 * 1024;
+			t = t.substring(0, t.length() - 1);
+		}
+		try {
+			long bytes = Long.parseLong(t) * multiplier;
+			if (bytes < 0 || bytes > Integer.MAX_VALUE) {
+				throw new NumberFormatException();
+			}
+			return (int) bytes;
+		} catch (NumberFormatException e) {
+			throw new UsageException("--write-buffer-water-mark: \"" + text + "\" is not a size in bytes (K/M suffix allowed) in \"" + whole + "\"");
+		}
 	}
 
 	private static boolean onOff(String option, String value) {
@@ -438,7 +479,7 @@ public final class Bench {
 				usage:
 				  server --port <p> [--host <advertised-host>] (--registry zk://host:port | --no-registry) [--serializer protobuf]
 				         [--metrics-port <p>] [--http-port <p>] [--io-threads <n>] [--executor fixed|virtual|direct]
-				         [--flush-consolidation on|off]
+				         [--flush-consolidation on|off] [--outbound-backpressure on|off] [--write-buffer-water-mark <low>:<high>]
 				  server --transport <name> --port <p> ...   (comparison server from a CallTargetProvider on the classpath)
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)

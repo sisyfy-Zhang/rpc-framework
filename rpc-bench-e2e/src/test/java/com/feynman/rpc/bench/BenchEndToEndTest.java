@@ -190,6 +190,12 @@ class BenchEndToEndTest {
 					assertEquals(EnvironmentProbe.NA, path(round, "io", side), "rounds[].io off Linux: " + round.get("io"));
 				}
 			}
+			// 统计窗口内服务端的出站背压计数（rpc 服务端经 stats() 回传累计值，压测端做差）
+			assertTrue(path(round, "backpressure", "window", "auto_read_pauses") instanceof Number, "rounds[].backpressure: "
+					+ round.get("backpressure"));
+			assertTrue(path(round, "backpressure", "cumulative_at_window_end", "outbound_overload_rejections") instanceof Number);
+			assertTrue(path(round, "backpressure", "window", "client_send_buffer_rejections") instanceof Number, "harness RpcClient counters");
+			assertTrue(path(round, "backpressure", "window", "client_unwritable_switches") instanceof Number);
 			List<?> success = (List<?>) path(round, "timeseries", "success");
 			assertTrue(success.size() >= 3, "per-second series covers the round");
 			assertTrue(number(success.get(0)) > 0 && number(success.get(2)) > 0);
@@ -204,7 +210,9 @@ class BenchEndToEndTest {
 		assertTrue(md.startsWith("# " + id + "\n"));
 		assertTrue(md.contains("（正式）"));
 		assertTrue(md.contains("不可外推"));
-		assertTrue(md.contains("| GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 |"), md);
+		assertTrue(md.contains("| GC 停顿 客户端/服务端 (ms) | write 系统调用/请求 客户端/服务端 | 暂停读次数 |"), md);
+		assertEquals("on", path(json, "server_environment", "server_outbound_backpressure"), "outbound backpressure is on by default");
+		assertEquals("32768:65536", path(json, "server_environment", "server_write_buffer_water_mark"));
 		assertEquals("fixed", path(json, "profile", "parsed", "target", "server_executor"), "rpc cards default to the framework's executor");
 		assertEquals(Boolean.TRUE, path(json, "validity", "server_executor", "matches"));
 		assertEquals("default (on)", path(json, "run", "harness_options", "flush_consolidation"));
@@ -274,6 +282,26 @@ class BenchEndToEndTest {
 		assertEquals("off", path(r.json(), "run", "harness_options", "flush_consolidation"));
 		assertEquals("off", path(r.json(), "run", "target", "flush_consolidation"));
 		assertEquals("on", path(r.json(), "server_environment", "server_flush_consolidation"));
+	}
+
+	/** {@code server --outbound-backpressure off --write-buffer-water-mark 256K:1M}：对照实验的服务端开关，如实记进服务端环境。 */
+	@Test
+	void outboundBackpressureAndWaterMarkAreRecordedInTheServerEnvironment() throws Exception {
+		try (BenchServer other = BenchServer.start(0, "127.0.0.1", null, "protobuf", null, 0,
+				com.feynman.rpc.core.config.ExecutorConfig.defaults(), true, false, Bench.waterMark("256K:1M"))) {
+			assertEquals("off", other.environment().get("server_outbound_backpressure"));
+			assertEquals("262144:1048576", other.environment().get("server_write_buffer_water_mark"));
+			assertEquals(String.valueOf(16L * 1024 * 1024), other.environment().get("server_outbound_hard_limit"));
+			Map<String, String> stats = new BenchServiceImpl(other.environment(), () -> BenchServer.backpressureStats(other.rpcServer()))
+					.stats();
+			assertEquals("0", stats.get(BackpressureStats.AUTO_READ_PAUSES_KEY));
+			assertEquals("0", stats.get(BackpressureStats.OUTBOUND_OVERLOAD_REJECTIONS_KEY));
+		}
+		assertEquals(null, Bench.waterMark(null));
+		org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] { 1000, 2048 }, Bench.waterMark("1000:2K"));
+		for (String bad : List.of("64K", "a:b", "1:2:3", "-1:4K", "1:9999999999")) {
+			org.junit.jupiter.api.Assertions.assertThrows(Bench.UsageException.class, () -> Bench.waterMark(bad), bad);
+		}
 	}
 
 	@Test

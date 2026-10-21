@@ -121,11 +121,13 @@ final class LoadDriver {
 			Map<Integer, long[]> cpuBefore = cpu == null ? null : cpuSnapshot();
 			GcSampler.Snapshot clientBefore = GcSampler.snapshot();
 			IoSampler.Snapshot clientIoBefore = IoSampler.snapshot();
+			Map<String, String> clientStatsBefore = clientStats(target);
 			Map<String, String> serverBefore = serverStats(target);
 			sleepUntil(windowEnd);
 			Map<Integer, long[]> cpuAfter = cpu == null ? null : cpuSnapshot();
 			GcSampler.Snapshot clientAfter = GcSampler.snapshot();
 			IoSampler.Snapshot clientIoAfter = IoSampler.snapshot();
+			Map<String, String> clientStatsAfter = clientStats(target);
 			Map<String, String> serverAfter = serverBefore == null ? null : serverStats(target);
 			if (cpu != null) {
 				recorder.cpu(cpuBefore == null || cpuAfter == null ? EnvironmentProbe.UNKNOWN : cpu.measure(cpuBefore, cpuAfter, windowMs));
@@ -142,6 +144,7 @@ final class LoadDriver {
 			io.put("client", clientIoBefore == null || clientIoAfter == null ? EnvironmentProbe.NA : IoSampler.delta(clientIoBefore, clientIoAfter));
 			io.put("server", ioSide(serverBefore, serverAfter));
 			recorder.io(io);
+			recorder.backpressure(BackpressureStats.delta(serverBefore, serverAfter, clientStatsBefore, clientStatsAfter));
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		} catch (RuntimeException e) {
@@ -164,6 +167,15 @@ final class LoadDriver {
 		try {
 			return target.serverStats();
 		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	/** 压测端客户端的累计计数（{@link CallTarget#clientStats()}）；取不到时 null。 */
+	private static Map<String, String> clientStats(CallTarget target) {
+		try {
+			return target.clientStats();
+		} catch (RuntimeException e) {
 			return null;
 		}
 	}

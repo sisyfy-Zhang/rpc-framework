@@ -32,7 +32,10 @@ import io.netty.util.ReferenceCountUtil;
  * <p>拒绝（都回 SERVER_OVERLOADED，业务方法没有执行，客户端可安全地换节点重试）：
  * <ul>
  *   <li>在途闸门已关（RpcServer 正在优雅停机的 DRAINING 阶段）：消息写明 {@code "server shutting down"}；</li>
- *   <li>业务执行器队列满 / 并发达到上限：消息写明 {@code "server overloaded"}。</li>
+ *   <li>业务执行器队列满 / 并发达到上限：消息写明 {@code "server overloaded"}；</li>
+ *   <li>这条连接的待写字节超过出站硬上限（{@code RpcServerConfig.outboundHardLimit}，对端读得太慢）：消息写明
+ *       {@code "server overloaded: outbound buffer"}（固定短常量），计入 {@code outboundOverloadRejections}，每条连接第一次另记一行 warn。
+ *       连接不可写时 {@link OutboundBackpressure} 已经停读，落到这里的只是停读之前已经读进来、还没解码完的帧。</li>
  * </ul>
  * 心跳与协商不经过闸门：停机期间连接仍然健康，客户端不应因为心跳失败而误判连接已死、触发重连风暴。
  *
@@ -60,6 +63,12 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 	private final LongAdder replyWriteFailures;
 	/** 本连接是否已经为回包写失败记过 warn。只在事件循环上写；偶发重复一行 warn 无害，不需要更强的同步。 */
 	private volatile boolean replyWriteFailureWarned;
+	/** 出站硬上限（字节），0 = 不检查。 */
+	private final long outboundHardLimit;
+	/** 所属服务端因出站硬上限拒绝的请求数（全部连接共用）。 */
+	private final LongAdder outboundOverloadRejections;
+	/** 本连接是否已经为出站硬上限记过 warn。只在事件循环上读写。 */
+	private boolean outboundOverloadWarned;
 
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode) {
 		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, new LongAdder());
@@ -67,11 +76,22 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode,
 			LongAdder replyWriteFailures) {
+		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures, 0, new LongAdder());
+	}
+
+	/**
+	 * @param outboundHardLimit          这条连接待写字节的硬上限（字节），超过时新请求回 SERVER_OVERLOADED；0 = 不检查
+	 * @param outboundOverloadRejections 所属服务端因此拒绝的请求计数
+	 */
+	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode,
+			LongAdder replyWriteFailures, long outboundHardLimit, LongAdder outboundOverloadRejections) {
 		this.dispatcher = dispatcher;
 		this.bizExecutor = bizExecutor;
 		this.gate = gate;
 		this.fallbackSerializerCode = fallbackSerializerCode;
 		this.replyWriteFailures = replyWriteFailures;
+		this.outboundHardLimit = outboundHardLimit;
+		this.outboundOverloadRejections = outboundOverloadRejections;
 	}
 
 	@Override
@@ -108,6 +128,13 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 			}
 			return;
 		}
+		if (outboundHardLimit > 0) {
+			long pendingBytes = OutboundBackpressure.pendingWriteBytes(ctx.channel());
+			if (pendingBytes > outboundHardLimit) {
+				rejectOutboundOverload(ctx, request, pendingBytes);
+				return;
+			}
+		}
 		if (!gate.tryEnter()) {
 			rejectNow(ctx, request, "server shutting down: request rejected while draining in-flight requests");
 			return;
@@ -123,6 +150,26 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 			rejectNow(ctx, request, e.getMessage());
 		}
 	}
+
+	/**
+	 * 出站硬上限：不交给执行器（业务不执行），回 SERVER_OVERLOADED；计数，每条连接第一次记 warn。回包里的原因是固定的短常量
+	 * {@value #OUTBOUND_OVERLOAD_REASON}：被拒绝时这条连接本来就不可写，每个拒绝帧多带的字节都会加进积压（direct 执行器下一批帧
+	 * 的拒绝帧尤其如此），细节（待写字节、硬上限）只进日志。
+	 */
+	private void rejectOutboundOverload(ChannelHandlerContext ctx, RpcMessage request, long pendingBytes) {
+		outboundOverloadRejections.increment();
+		if (!outboundOverloadWarned) {
+			outboundOverloadWarned = true;
+			log.warn("Rejecting requests from {} with SERVER_OVERLOADED: the outbound buffer of this connection holds {} bytes not yet"
+					+ " written to the socket (> outboundHardLimit {}); the client is not reading responses. Further rejections on this"
+					+ " connection are counted in outboundOverloadRejections without logging",
+					ctx.channel().remoteAddress(), pendingBytes, outboundHardLimit);
+		}
+		rejectNow(ctx, request, OUTBOUND_OVERLOAD_REASON);
+	}
+
+	/** 出站硬上限拒绝时回包里的原因（与执行器拒绝的 "server overloaded" 同一风格）。 */
+	static final String OUTBOUND_OVERLOAD_REASON = "server overloaded: outbound buffer";
 
 	private void rejectNow(ChannelHandlerContext ctx, RpcMessage request, String reason) {
 		try {

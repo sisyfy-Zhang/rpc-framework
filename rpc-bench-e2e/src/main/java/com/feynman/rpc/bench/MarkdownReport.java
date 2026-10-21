@@ -222,6 +222,7 @@ final class MarkdownReport {
 		header.add("服务端核 CPU");
 		header.add("GC 停顿 客户端/服务端 (ms)");
 		header.add("write 系统调用/请求 客户端/服务端");
+		header.add("暂停读次数");
 		header.add("有效");
 		md.append("| ").append(String.join(" | ", header)).append(" |\n|");
 		md.append("---|".repeat(header.size())).append('\n');
@@ -249,6 +250,7 @@ final class MarkdownReport {
 			cells.add(cpu.isEmpty() ? cpuMissing(round.get("cpu")) : CpuSampler.pct(cpu.get("server_busy_pct")));
 			cells.add(round.get("gc") == null ? "—" : gcPause(round, "client") + " / " + gcPause(round, "server"));
 			cells.add(round.get("io") == null ? "—" : IoSampler.cell(round, "client", "syscw") + " / " + IoSampler.cell(round, "server", "syscw"));
+			cells.add(BackpressureStats.cell(round));
 			cells.add(Boolean.TRUE.equals(round.get("valid")) ? "是" : "否：" + String.join("；", strings(round.get("invalid_reasons"))));
 			md.append("| ");
 			for (int i = 0; i < cells.size(); i++) {

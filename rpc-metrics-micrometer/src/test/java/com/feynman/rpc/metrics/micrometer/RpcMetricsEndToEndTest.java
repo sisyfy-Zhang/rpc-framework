@@ -147,6 +147,13 @@ class RpcMetricsEndToEndTest {
 		assertEquals(1.0, gauge(RpcClientMetrics.INFLIGHT));
 		assertEquals(1.0, gauge(RpcServerMetrics.INFLIGHT));
 		assertTrue(gauge(RpcClientMetrics.CONNECTIONS) >= 1.0);
+		// 出站背压的计数器（FunctionCounter，正常负载下为 0）
+		assertEquals(0.0, registry.find(RpcServerMetrics.AUTO_READ_PAUSES).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcServerMetrics.OUTBOUND_OVERLOAD_REJECTIONS).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcClientMetrics.SEND_BUFFER_REJECTIONS).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcClientMetrics.UNWRITABLE_SWITCHES).functionCounter().count());
+		assertEquals(2, serverMetrics.counters().size());
+		assertEquals(2, clientMetrics.counters().size());
 		await().atMost(5, TimeUnit.SECONDS).until(() -> gauge(RpcServerMetrics.CONNECTIONS) == gauge(RpcClientMetrics.CONNECTIONS));
 		assertEquals("slept 500", slow.get(5, TimeUnit.SECONDS));
 		await().atMost(5, TimeUnit.SECONDS).until(() -> gauge(RpcClientMetrics.INFLIGHT) == 0.0 && gauge(RpcServerMetrics.INFLIGHT) == 0.0);
@@ -163,6 +170,8 @@ class RpcMetricsEndToEndTest {
 		serverMetrics.close();
 		assertNull(registry.find(RpcClientMetrics.INFLIGHT).gauge(), "unbound gauges leave the registry");
 		assertNull(registry.find(RpcServerMetrics.CONNECTIONS).gauge());
+		assertNull(registry.find(RpcServerMetrics.AUTO_READ_PAUSES).functionCounter(), "unbound counters leave the registry");
+		assertNull(registry.find(RpcClientMetrics.SEND_BUFFER_REJECTIONS).functionCounter());
 		clientMetrics.close(); // 可重复调用
 	}
 

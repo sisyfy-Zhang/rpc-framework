@@ -264,6 +264,8 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `io-threads` | `ioThreads` | 0 | IO 事件循环线程数；0 = Netty 缺省（2 × 可用核数），只影响本客户端 |
 | `sync-wait-grace` | `syncWaitGrace` | 1s | 同步调用等待的第二道上界：最多等 deadline 剩余时间 + 该值，定时器没按时触发时也不会无限挂住（docs/pitfalls.md 第 34 条）；异步方法不受约束 |
 | `flush-consolidation` | `flushConsolidation` | true | 连接 pipeline 首位加 Netty 的 `FlushConsolidationHandler`（合并 flush，不改协议字节、不加定时器）；关掉只用于对照实验 |
+| `write-buffer-low` / `write-buffer-high` | `writeBufferWaterMark(low, high)` | 32KB / 64KB | 每条连接的写缓冲水位线（Netty `WRITE_BUFFER_WATER_MARK`，缺省即 Netty 缺省；支持 `64KB` 写法，纯数字按字节）。待写字节超过 high 时连接不可写，同一节点有多条连接时优先选可写的 |
+| `outbound-hard-limit` | `outboundHardLimit` | high × 16 | 一条连接不可写且待写字节超过它时，新请求不写出、以"未发出"的传输失败结束（failover 且 `retries > 0` 时换节点）；0 = 关闭 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
 引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。
@@ -281,6 +283,9 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `remote-stack-trace-max-bytes` | `remoteStackTraceMaxBytes` | 8192 | 回传堆栈上限（最小 256） |
 | `io-threads` | `ioThreads` | 0 | IO 事件循环（worker）线程数；0 = Netty 缺省（2 × 可用核数）。业务方法在 executor 上执行，与它无关 |
 | `flush-consolidation` | `flushConsolidation` | true | 同客户端：业务线程并发回包时多个回包合成一次写出；关掉只用于对照实验 |
+| `write-buffer-low` / `write-buffer-high` | `writeBufferWaterMark(low, high)` | 32KB / 64KB | 每条已接受连接的写缓冲水位线（同客户端）：回包待写字节超过 high 时连接不可写 |
+| `outbound-backpressure` | `outboundBackpressure` | true | 出站背压：连接不可写时暂停读它、恢复可写再读，不读回包的客户端不能让回包在直接内存里无界堆积；暂停读超过读空闲 30s 的连接被关闭。关掉只用于对照实验（docs/probes/outbound-backpressure.md） |
+| `outbound-hard-limit` | `outboundHardLimit` | high × 16 | 连接待写字节超过它时，新到的请求直接回 `SERVER_OVERLOADED`（业务不执行）；0 = 关闭，只在背压开时生效 |
 | `executor.type` | `executor(ExecutorConfig)` | `fixed` | `fixed` / `virtual` / `direct`（opt-in：业务方法在 IO 线程上执行。**业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类**） |
 | `executor.threads` | `ExecutorConfig.fixed(threads, queue)` | CPU 核数 × 2 | 固定池线程数 |
 | `executor.queue-capacity` | 同上 | 1000 | 固定池排队上限，满了回 `SERVER_OVERLOADED` |

@@ -549,6 +549,11 @@ WSL2、同机 loopback、1KB 回显、闭环 64（P1 对比对象节与任务简
 | F2 | 服务端回包写失败静默：`ctx.writeAndFlush(reply)` 无监听器 | O12:158 | 编码失败（前置检查之外的情况）或连接已断时无日志，客户端只能等超时或连接关闭 | 加一个记 debug/warn 的监听器（与客户端 O3:205-210 对称） |
 | F3 | 异步方法的用户回调在客户端 IO 线程上执行（已在 P4 与 getting-started HEAD:609 文档化），但**在回调里发起同步 RPC** 没有任何防护 | O1:82-95、O2:362 | `join()` 阻塞事件循环；若嵌套调用的连接恰在同一事件循环上，响应永远读不到，只能等 20s 超时，期间该事件循环上的所有连接停摆 | 同步代理入口检测"当前线程是本客户端的事件循环"时直接抛 `IllegalStateException`（成本一次 `inEventLoop` 判断） |
 
+**后记（F1，阶段 2b 任务 16）**：已修，缺省开。服务端：连接不可写时停读（`OutboundBackpressure`，`setAutoRead(false)`），恢复可写再读；
+待写字节超过出站硬上限（缺省 high × 16）时新请求回 SERVER_OVERLOADED；水位线两端可配（缺省 32KiB / 64KiB = Netty 缺省）。
+客户端：取连接时优先可写的连接，不可写且超过硬上限的请求以"未发出"失败（可换节点重试）。"只发不读"对照测试与正式卡 A/B 见
+[docs/probes/outbound-backpressure.md](../probes/outbound-backpressure.md)。
+
 另：retained slice 持有整个读块导致的直接内存放大（T5 ④）属设计取舍而非缺陷，列入存疑待探针。
 
 ## 出处不足或存疑的结论

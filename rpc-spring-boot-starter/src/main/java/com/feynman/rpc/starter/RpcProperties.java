@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.unit.DataSize;
 
 import com.feynman.rpc.core.config.ExecutorConfig;
 import com.feynman.rpc.core.config.RpcClientConfig;
@@ -27,9 +28,10 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
  *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s,
- *             flush-consolidation: true }
+ *             flush-consolidation: true, write-buffer-low: 32KB, write-buffer-high: 64KB, outbound-hard-limit: 1MB }
  *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
  *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192, flush-consolidation: true,
+ *             write-buffer-low: 32KB, write-buffer-high: 64KB, outbound-backpressure: true, outbound-hard-limit: 1MB,
  *             executor: { type: fixed, threads: 16, queue-capacity: 1000 } }   # 或 { type: virtual, max-concurrent: 10000 }
  *                                                                          # 或 { type: direct, max-concurrent: 10000 }（见 ExecutorConfig.direct 的警示）
  * </pre>
@@ -130,7 +132,26 @@ public class RpcProperties {
 		if (client.flushConsolidation != null) {
 			builder.flushConsolidation(client.flushConsolidation);
 		}
+		if (client.writeBufferLow != null || client.writeBufferHigh != null) {
+			builder.writeBufferWaterMark(bytes("rpc.client.write-buffer-low", client.writeBufferLow, RpcClientConfig.DEFAULT_WRITE_BUFFER_LOW),
+					bytes("rpc.client.write-buffer-high", client.writeBufferHigh, RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH));
+		}
+		if (client.outboundHardLimit != null) {
+			builder.outboundHardLimit(client.outboundHardLimit.toBytes());
+		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
+	}
+
+	/** DataSize → int 字节数；未设置时取 core 的缺省值（水位线两项只设了一项时，另一项保持缺省）。 */
+	private static int bytes(String property, DataSize value, int defaultBytes) {
+		if (value == null) {
+			return defaultBytes;
+		}
+		long bytes = value.toBytes();
+		if (bytes > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException(property + " must be at most " + Integer.MAX_VALUE + " bytes: " + value);
+		}
+		return (int) bytes;
 	}
 
 	/** 把已设置的 rpc.* / rpc.server.* 写进 builder；未设置的项不碰，保留 core 的缺省值。 */
@@ -162,6 +183,16 @@ public class RpcProperties {
 		}
 		if (server.flushConsolidation != null) {
 			builder.flushConsolidation(server.flushConsolidation);
+		}
+		if (server.writeBufferLow != null || server.writeBufferHigh != null) {
+			builder.writeBufferWaterMark(bytes("rpc.server.write-buffer-low", server.writeBufferLow, RpcServerConfig.DEFAULT_WRITE_BUFFER_LOW),
+					bytes("rpc.server.write-buffer-high", server.writeBufferHigh, RpcServerConfig.DEFAULT_WRITE_BUFFER_HIGH));
+		}
+		if (server.outboundBackpressure != null) {
+			builder.outboundBackpressure(server.outboundBackpressure);
+		}
+		if (server.outboundHardLimit != null) {
+			builder.outboundHardLimit(server.outboundHardLimit.toBytes());
 		}
 		Executor executor = server.executor;
 		if (executor.type == ExecutorType.VIRTUAL) {
@@ -265,6 +296,43 @@ public class RpcProperties {
 		 */
 		private Boolean flushConsolidation;
 
+		/** 每条连接写缓冲的低水位（默认 32KB，即 Netty 缺省）：待写字节降到它以下时连接恢复可写。纯数字按字节。 */
+		private DataSize writeBufferLow;
+
+		/**
+		 * 每条连接写缓冲的高水位（默认 64KB，即 Netty 缺省）：待写字节超过它时连接变为不可写，同一节点有多条连接时优先选可写的。
+		 */
+		private DataSize writeBufferHigh;
+
+		/**
+		 * 每条连接待写字节的硬上限（默认高水位 × 16，0 = 关闭）：连接不可写且超过它时，新请求不写出、以可重试的传输失败结束。
+		 */
+		private DataSize outboundHardLimit;
+
+		public DataSize getWriteBufferLow() {
+			return writeBufferLow;
+		}
+
+		public void setWriteBufferLow(DataSize writeBufferLow) {
+			this.writeBufferLow = writeBufferLow;
+		}
+
+		public DataSize getWriteBufferHigh() {
+			return writeBufferHigh;
+		}
+
+		public void setWriteBufferHigh(DataSize writeBufferHigh) {
+			this.writeBufferHigh = writeBufferHigh;
+		}
+
+		public DataSize getOutboundHardLimit() {
+			return outboundHardLimit;
+		}
+
+		public void setOutboundHardLimit(DataSize outboundHardLimit) {
+			this.outboundHardLimit = outboundHardLimit;
+		}
+
 		public Boolean getFlushConsolidation() {
 			return flushConsolidation;
 		}
@@ -366,6 +434,56 @@ public class RpcProperties {
 		 * 关掉只用于对照实验。
 		 */
 		private Boolean flushConsolidation;
+
+		/** 每条已接受连接写缓冲的低水位（默认 32KB，即 Netty 缺省）：待写字节降到它以下时恢复可写（背压开时恢复读）。纯数字按字节。 */
+		private DataSize writeBufferLow;
+
+		/** 每条已接受连接写缓冲的高水位（默认 64KB，即 Netty 缺省）：回包待写字节超过它时连接变为不可写（背压开时暂停读）。 */
+		private DataSize writeBufferHigh;
+
+		/**
+		 * 出站背压（默认 true）：连接不可写时暂停读它，恢复可写再读，客户端不读回包时回包积压被封顶。
+		 * 暂停读超过 30s 的连接被读空闲关闭。关掉只用于对照实验。
+		 */
+		private Boolean outboundBackpressure;
+
+		/**
+		 * 每条连接待写字节的硬上限（默认高水位 × 16，0 = 关闭）：超过时新请求直接回 SERVER_OVERLOADED（业务不执行）。
+		 * 只在 outbound-backpressure 开着时生效。
+		 */
+		private DataSize outboundHardLimit;
+
+		public DataSize getWriteBufferLow() {
+			return writeBufferLow;
+		}
+
+		public void setWriteBufferLow(DataSize writeBufferLow) {
+			this.writeBufferLow = writeBufferLow;
+		}
+
+		public DataSize getWriteBufferHigh() {
+			return writeBufferHigh;
+		}
+
+		public void setWriteBufferHigh(DataSize writeBufferHigh) {
+			this.writeBufferHigh = writeBufferHigh;
+		}
+
+		public Boolean getOutboundBackpressure() {
+			return outboundBackpressure;
+		}
+
+		public void setOutboundBackpressure(Boolean outboundBackpressure) {
+			this.outboundBackpressure = outboundBackpressure;
+		}
+
+		public DataSize getOutboundHardLimit() {
+			return outboundHardLimit;
+		}
+
+		public void setOutboundHardLimit(DataSize outboundHardLimit) {
+			this.outboundHardLimit = outboundHardLimit;
+		}
 
 		public Boolean getFlushConsolidation() {
 			return flushConsolidation;

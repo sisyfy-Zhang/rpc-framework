@@ -63,8 +63,22 @@ final class BenchServer implements AutoCloseable {
 	 */
 	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
 			ExecutorConfig executor, boolean flushConsolidation) throws Exception {
+		return start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation, true, null);
+	}
+
+	/**
+	 * @param outboundBackpressure {@code RpcServerConfig.outboundBackpressure}（{@code server --outbound-backpressure}），
+	 *                             记进 {@code server_outbound_backpressure}
+	 * @param waterMark            {@code {low, high}}（{@code server --write-buffer-water-mark}）；null = 框架缺省。实际值记进
+	 *                             {@code server_write_buffer_water_mark}（{@code low:high}，字节）
+	 */
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
+			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark) throws Exception {
 		var builder = RpcServer.builder().port(port).serializer(serializer).ioThreads(ioThreads).executor(executor)
-				.flushConsolidation(flushConsolidation);
+				.flushConsolidation(flushConsolidation).outboundBackpressure(outboundBackpressure);
+		if (waterMark != null) {
+			builder.writeBufferWaterMark(waterMark[0], waterMark[1]);
+		}
 		if (metrics != null) {
 			builder.serverFilter(new MicrometerServerFilter(metrics));
 		}
@@ -85,7 +99,10 @@ final class BenchServer implements AutoCloseable {
 			environment.put("server_executor", describe(server.config().executor()));
 			environment.put("server_executor_kind", kind(server.config().executor()));
 			environment.put("server_flush_consolidation", server.config().flushConsolidation() ? "on" : "off");
-			server.export(BenchService.class, new BenchServiceImpl(environment));
+			environment.put("server_outbound_backpressure", server.config().outboundBackpressure() ? "on" : "off");
+			environment.put("server_write_buffer_water_mark", server.config().writeBufferLow() + ":" + server.config().writeBufferHigh());
+			environment.put("server_outbound_hard_limit", String.valueOf(server.config().outboundHardLimit()));
+			server.export(BenchService.class, new BenchServiceImpl(environment, () -> backpressureStats(server)));
 			if (metrics != null) {
 				RpcServerMetrics.bind(server, metrics);
 			}
@@ -100,6 +117,14 @@ final class BenchServer implements AutoCloseable {
 
 	int port() {
 		return server.port();
+	}
+
+	/** 统计端点里的出站背压计数（累计值，压测端在窗口起止各取一次做差，进 {@code rounds[].backpressure}）。 */
+	static Map<String, String> backpressureStats(RpcServer server) {
+		Map<String, String> out = new LinkedHashMap<>();
+		out.put(BackpressureStats.AUTO_READ_PAUSES_KEY, String.valueOf(server.autoReadPauses()));
+		out.put(BackpressureStats.OUTBOUND_OVERLOAD_REJECTIONS_KEY, String.valueOf(server.outboundOverloadRejections()));
+		return out;
 	}
 
 	/** 业务执行器的一句话描述（缺省：固定池 2 × 可用核数、有界队列 1000；业务方法不在 IO 线程上执行）。 */

@@ -38,6 +38,10 @@ import com.feynman.rpc.core.serialize.Serializer;
  *
  * <p>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的 {@code FlushConsolidationHandler}，
  * 见 {@link Builder#flushConsolidation(boolean)}。
+ *
+ * <p>{@code writeBufferLow} / {@code writeBufferHigh}（默认 32KiB / 64KiB，即 Netty 缺省）：每条连接的
+ * {@code WRITE_BUFFER_WATER_MARK}；{@code outboundHardLimit}（默认 high × 16）：一条连接的待写字节超过它且不可写时，
+ * 新请求不再写出、以"未发出"失败。见 {@link Builder#writeBufferWaterMark(int, int)} 与 {@link Builder#outboundHardLimit(long)}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -53,7 +57,10 @@ public record RpcClientConfig(
 		List<String> exceptionAllowlist,
 		int ioThreads,
 		Duration syncWaitGrace,
-		boolean flushConsolidation) {
+		boolean flushConsolidation,
+		int writeBufferLow,
+		int writeBufferHigh,
+		long outboundHardLimit) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
 	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
@@ -65,6 +72,14 @@ public record RpcClientConfig(
 	public static final Duration DEFAULT_SYNC_WAIT_GRACE = Duration.ofSeconds(1);
 	/** 缺省合并 flush（{@code FlushConsolidationHandler}），见 {@link Builder#flushConsolidation(boolean)}。 */
 	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = true;
+	/** 写缓冲低水位缺省值：与 Netty {@code WriteBufferWaterMark.DEFAULT} 相同（32KiB）。 */
+	public static final int DEFAULT_WRITE_BUFFER_LOW = 32 * 1024;
+	/** 写缓冲高水位缺省值：与 Netty {@code WriteBufferWaterMark.DEFAULT} 相同（64KiB）。 */
+	public static final int DEFAULT_WRITE_BUFFER_HIGH = 64 * 1024;
+	/** {@code outboundHardLimit} 未显式设置时取高水位的这么多倍。 */
+	public static final int DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER = 16;
+	/** 记录构造参数里的 {@code outboundHardLimit} 取这个值（任意负数）表示"按高水位推出缺省值"。 */
+	public static final long OUTBOUND_HARD_LIMIT_DEFAULT = -1;
 
 	public RpcClientConfig {
 		if (registry == null) {
@@ -103,12 +118,36 @@ public record RpcClientConfig(
 		if (syncWaitGrace.isNegative()) {
 			throw new IllegalArgumentException("syncWaitGrace must not be negative: " + syncWaitGrace);
 		}
+		checkWaterMark(writeBufferLow, writeBufferHigh);
+		outboundHardLimit = resolveOutboundHardLimit(outboundHardLimit, writeBufferHigh);
 	}
 
 	static void checkIoThreads(int ioThreads) {
 		if (ioThreads < 0 || ioThreads > MAX_IO_THREADS) {
 			throw new IllegalArgumentException("ioThreads must be 0 (Netty default) .. " + MAX_IO_THREADS + ": " + ioThreads);
 		}
+	}
+
+	/** 与 Netty {@code WriteBufferWaterMark} 相同的约束，另要求 high ≥ 1（0 会让每次写都翻成不可写）。 */
+	static void checkWaterMark(int low, int high) {
+		if (low < 0) {
+			throw new IllegalArgumentException("writeBufferLow must be >= 0: " + low);
+		}
+		if (high < 1 || high < low) {
+			throw new IllegalArgumentException("writeBufferHigh must be >= 1 and >= writeBufferLow (" + low + "): " + high);
+		}
+	}
+
+	/** 负数 → high × {@value #DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER}；0 = 关闭；正数必须 ≥ high（低于高水位的硬上限没有意义）。 */
+	static long resolveOutboundHardLimit(long outboundHardLimit, int high) {
+		if (outboundHardLimit < 0) {
+			return (long) high * DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER;
+		}
+		if (outboundHardLimit > 0 && outboundHardLimit < high) {
+			throw new IllegalArgumentException("outboundHardLimit must be 0 (off) or >= writeBufferHigh (" + high + "): "
+					+ outboundHardLimit);
+		}
+		return outboundHardLimit;
 	}
 
 	public static Builder<RpcClientConfig> builder() {
@@ -143,6 +182,9 @@ public record RpcClientConfig(
 		private int ioThreads = DEFAULT_IO_THREADS;
 		private Duration syncWaitGrace = DEFAULT_SYNC_WAIT_GRACE;
 		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
+		private int writeBufferLow = DEFAULT_WRITE_BUFFER_LOW;
+		private int writeBufferHigh = DEFAULT_WRITE_BUFFER_HIGH;
+		private long outboundHardLimit = OUTBOUND_HARD_LIMIT_DEFAULT;
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -264,10 +306,37 @@ public record RpcClientConfig(
 			return this;
 		}
 
+		/**
+		 * 每条连接的写缓冲水位线（字节，默认 32KiB / 64KiB，即 Netty 缺省），设到 {@code ChannelOption.WRITE_BUFFER_WATER_MARK}。
+		 * 待写字节（已交给 Netty、还没写进套接字的请求帧）超过 high 时连接变为不可写，降到 low 以下恢复。
+		 * {@code connectionsPerNode > 1} 时取连接优先选可写的那条；全部不可写时照常写（不阻塞调用方），
+		 * 直到待写字节超过 {@link #outboundHardLimit(long)}。
+		 */
+		public Builder<T> writeBufferWaterMark(int low, int high) {
+			this.writeBufferLow = low;
+			this.writeBufferHigh = high;
+			return this;
+		}
+
+		/**
+		 * 每条连接待写字节的硬上限（字节，默认高水位 × {@value RpcClientConfig#DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER}，0 = 关闭）。
+		 * 连接不可写且待写字节超过它时，新请求不写出，以 {@code RpcException}（消息含 "request not sent"）失败——
+		 * 请求确定没有发出，属于可安全换节点重试的传输失败（failover 且 {@code retries > 0} 时换节点）。
+		 * 防的是对端不读 / 网络拥塞时请求帧在本端直接内存里无界堆积。
+		 */
+		public Builder<T> outboundHardLimit(long outboundHardLimit) {
+			if (outboundHardLimit < 0) {
+				throw new IllegalArgumentException("outboundHardLimit must be >= 0 (0 = off): " + outboundHardLimit);
+			}
+			this.outboundHardLimit = outboundHardLimit;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
-					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation));
+					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation,
+					writeBufferLow, writeBufferHigh, outboundHardLimit));
 		}
 	}
 }

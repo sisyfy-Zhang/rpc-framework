@@ -14,6 +14,7 @@ import com.feynman.rpc.core.codec.RpcEncoder;
 import com.feynman.rpc.core.codec.RpcFrameDecoder;
 import com.feynman.rpc.core.codec.RpcMessageDecoder;
 import com.feynman.rpc.core.config.ExecutorConfig;
+import com.feynman.rpc.core.config.RpcServerConfig;
 import com.feynman.rpc.core.internal.FlushConsolidation;
 import com.feynman.rpc.core.internal.InFlightGate;
 
@@ -23,6 +24,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -42,6 +44,10 @@ import io.netty.util.concurrent.GlobalEventExecutor;
  * <p>停机分三步，由 RpcServer 编排（中间夹着它自己的步骤）：{@link #startDraining()} 关闸（新请求回
  * SERVER_OVERLOADED "server shutting down"，心跳照常）→ {@link #awaitDrained(Duration)} 等在途归零 →
  * {@link #close(boolean)} 关监听端口与全部连接、关 IO 线程组、关业务执行器。
+ *
+ * <p>出站背压（{@code RpcServerConfig.outboundBackpressure}，缺省开）：已接受连接的 pipeline 在 FlushConsolidationHandler 之后
+ * 加 {@link OutboundBackpressure}（不可写时停读），ServerHandler 另按 {@code outboundHardLimit} 拒绝待写字节过多的连接上的新请求。
+ * 水位线（{@code writeBufferWaterMark}）不论开关都设到子连接上（缺省值与 Netty 缺省相同）。
  */
 public final class NettyServer implements AutoCloseable {
 
@@ -67,6 +73,16 @@ public final class NettyServer implements AutoCloseable {
 	private final boolean flushConsolidation;
 	/** 回包写失败的次数（全部连接），见 ServerHandler 类注释。 */
 	private final LongAdder replyWriteFailures = new LongAdder();
+	/** 子连接的写缓冲水位线（{@code RpcServerConfig.writeBufferWaterMark}）。 */
+	private final WriteBufferWaterMark waterMark;
+	/** 是否加 {@link OutboundBackpressure}（{@code RpcServerConfig.outboundBackpressure}）。 */
+	private final boolean outboundBackpressure;
+	/** 每条连接待写字节的硬上限，0 = 不检查；背压关闭时也为 0。 */
+	private final long outboundHardLimit;
+	/** 因连接不可写而暂停读的次数（全部连接）。 */
+	private final LongAdder autoReadPauses = new LongAdder();
+	/** 因出站硬上限回 SERVER_OVERLOADED 的请求数（全部连接）。 */
+	private final LongAdder outboundOverloadRejections = new LongAdder();
 
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode) {
 		this(dispatcher, executorConfig, fallbackSerializerCode, 0, null, true);
@@ -75,6 +91,14 @@ public final class NettyServer implements AutoCloseable {
 	/** @param ioThreads worker 事件循环线程数，0 = Netty 缺省（2 × 可用核数），见 {@code RpcServerConfig.ioThreads} */
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads) {
 		this(dispatcher, executorConfig, fallbackSerializerCode, ioThreads, null, true);
+	}
+
+	/**
+	 * 按 RpcServerConfig 里与传输相关的项创建：业务执行器、{@code ioThreads}、{@code flushConsolidation}、
+	 * {@code writeBufferWaterMark}、{@code outboundBackpressure}、{@code outboundHardLimit}。其余项（端口、注册中心等）不在这里用。
+	 */
+	public NettyServer(ServiceDispatcher dispatcher, byte fallbackSerializerCode, RpcServerConfig config) {
+		this(dispatcher, fallbackSerializerCode, config, null);
 	}
 
 	/**
@@ -94,13 +118,22 @@ public final class NettyServer implements AutoCloseable {
 
 	private NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode, int ioThreads,
 			ByteBufAllocator childAllocator, boolean flushConsolidation) {
+		this(dispatcher, fallbackSerializerCode, RpcServerConfig.builder().executor(executorConfig).ioThreads(ioThreads)
+				.flushConsolidation(flushConsolidation).build(), childAllocator);
+	}
+
+	/** @param childAllocator 非 null 时作为已接受连接的 {@link ChannelOption#ALLOCATOR}（测试用） */
+	NettyServer(ServiceDispatcher dispatcher, byte fallbackSerializerCode, RpcServerConfig config, ByteBufAllocator childAllocator) {
 		this.dispatcher = dispatcher;
 		this.fallbackSerializerCode = fallbackSerializerCode;
 		this.childAllocator = childAllocator;
-		this.flushConsolidation = flushConsolidation;
+		this.flushConsolidation = config.flushConsolidation();
+		this.waterMark = new WriteBufferWaterMark(config.writeBufferLow(), config.writeBufferHigh());
+		this.outboundBackpressure = config.outboundBackpressure();
+		this.outboundHardLimit = config.outboundBackpressure() ? config.outboundHardLimit() : 0;
 		this.bossGroup = new NioEventLoopGroup(1, new DefaultThreadFactory("rpc-server-boss"));
-		this.workerGroup = new NioEventLoopGroup(ioThreads, new DefaultThreadFactory("rpc-server-worker"));
-		this.bizExecutor = new BusinessExecutor(executorConfig);
+		this.workerGroup = new NioEventLoopGroup(config.ioThreads(), new DefaultThreadFactory("rpc-server-worker"));
+		this.bizExecutor = new BusinessExecutor(config.executor());
 	}
 
 	/** 同步绑定端口；失败时抛出，调用方负责 {@link #close(boolean)}。 */
@@ -109,7 +142,8 @@ public final class NettyServer implements AutoCloseable {
 				.group(bossGroup, workerGroup)
 				.channel(NioServerSocketChannel.class)
 				.option(ChannelOption.SO_BACKLOG, 128)
-				.childOption(ChannelOption.SO_KEEPALIVE, true);
+				.childOption(ChannelOption.SO_KEEPALIVE, true)
+				.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, waterMark);
 		if (childAllocator != null) {
 			bootstrap.childOption(ChannelOption.ALLOCATOR, childAllocator);
 		}
@@ -121,11 +155,17 @@ public final class NettyServer implements AutoCloseable {
 					// 最靠近 transport：业务线程回包的 flush 合成一个 flush 任务、读循环里的 flush 推迟到 channelReadComplete
 					FlushConsolidation.addFirst(ch.pipeline());
 				}
+				if (outboundBackpressure) {
+					// 在 FlushConsolidationHandler 之后：后者收到"不可写"时先冲刷积压的写，这里看到的是冲刷之后的可写状态
+					ch.pipeline().addLast(OutboundBackpressure.HANDLER_NAME, new OutboundBackpressure(autoReadPauses));
+				}
 				ch.pipeline().addLast(new RpcFrameDecoder());
 				ch.pipeline().addLast(new RpcMessageDecoder());
+				// 读空闲 30s 关连接：暂停读（背压）期间同样计时，长期不读回包的客户端最终被关掉
 				ch.pipeline().addLast(new IdleStateHandler(30, 20, 0, TimeUnit.SECONDS));
 				ch.pipeline().addLast(new RpcEncoder());
-				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures));
+				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures,
+						outboundHardLimit, outboundOverloadRejections));
 			}
 		});
 		try {
@@ -182,6 +222,16 @@ public final class NettyServer implements AutoCloseable {
 	/** 回包写失败（连接已断、编码器拒绝）的累计次数，见 ServerHandler 类注释。 */
 	public long replyWriteFailures() {
 		return replyWriteFailures.sum();
+	}
+
+	/** 因连接不可写而暂停读的累计次数（全部连接），见 {@link OutboundBackpressure}。 */
+	public long autoReadPauses() {
+		return autoReadPauses.sum();
+	}
+
+	/** 因连接待写字节超过出站硬上限而回 SERVER_OVERLOADED 的累计请求数（全部连接）。 */
+	public long outboundOverloadRejections() {
+		return outboundOverloadRejections.sum();
 	}
 
 	/** 排队中的任务数。 */

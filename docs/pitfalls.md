@@ -564,3 +564,31 @@ hs_err 是 `G1 virtual space` mmap 失败。
   这时出现的任何"怪现象"先看提交内存，再看代码。
 - JDK 21 的线程转储不带虚拟线程状态；要区分"没人唤醒"与"唤醒了但没载体"，挂住时要留堆转储（看 `VirtualThread.state` 与
   future 的 result），只有线程转储不够。
+
+## 35. 出站背压：可写性事件会嵌套乱序到达；PARANOID 下"多久没新写"不等于服务端停了
+
+**现象**（阶段 2b 任务 16，实现出站背压时）：
+1. （读 Netty 源码推演出、再用测试构造出的场景，实现一开始就按下面的修法写，没有在运行中踩到）"不可写就 `setAutoRead(false)`、
+   可写就 `setAutoRead(true)`"若按事件方向切换，会把**可写**的连接停读：
+   读循环里先 `writeAndFlush` 一个小回包（flush 被 FlushConsolidationHandler 推迟），再写一个越过高水位的回包。
+2. "只发不读"对照测试（`NonReadingClientTest`）的背压关一侧，峰值待写字节三次运行分别是 0.94MB、1.0MB、11.8MB，预期是约 21MB。
+
+**根因**：
+1. `ChannelOutboundBuffer` 在事件循环上越过高水位时**同步**触发 `channelWritabilityChanged`；pipeline 首位的 FlushConsolidationHandler
+   在"变为不可写"里先冲刷它推迟的 flush。套接字一次收下时，这次冲刷里待写字节降到低水位以下，**嵌套**触发"恢复可写"——
+   它先于外层的"不可写"到达下游 handler。按方向切换会先恢复（本来就没停）、再停读，停在错误的状态，且之后不会再有"恢复可写"事件。
+2. 测试判"服务端已稳定"用的是"300ms 没有新的写"。PARANOID 泄漏检测下每次缓冲区访问都记一份栈，服务端事件循环一轮读
+   （16 × 64KiB 的小请求）能花掉几百毫秒，这期间业务线程已经回包、写任务排在事件循环队列里，写次数不动——"没有新写"只是事件循环忙。
+   线程转储里两边的事件循环都停在 `ResourceLeakDetector$TraceRecord.<init>`。
+
+**修法**：
+- `OutboundBackpressure` 不看事件方向，每次事件都按 `channel.isWritable()` 的**当前值**对账（另记"是不是自己停的读"）；
+  `OutboundBackpressureTest.reconcilesWithTheCurrentStateWhenFlushConsolidationDrainsInsideTheEvent` 固定这个场景。
+- 测试改为等确定的终态：背压关时等写满全部回包次数；背压开时等"读已暂停、在途为零、写与业务调用次数 1s 不变"。两端套接字缓冲区
+  在测试里固定为 64KiB（SO_SNDBUF / SO_RCVBUF），出站缓冲区里的数字不再取决于内核自动调整。改后背压关一侧稳定在 22.8MB。
+
+**教训**：
+- Netty 的状态类事件（可写性、autoRead）在同一线程上可以嵌套触发，handler 里应按当前状态对账，而不是按"这次事件说了什么"切换。
+- 测试里的"等稳定"要等一个由被测对象定义的终态，不要用"一段时间没变化"——被测路径在调试级别的检测（PARANOID、JFR、断点）下
+  会慢一个数量级，静默期就不再意味着完成。
+- 停读之后读空闲计时照常走：长期不读回包的客户端会在读空闲阈值（服务端 30s）后被关掉，这是兜底而不是缺陷，但要写进文档。

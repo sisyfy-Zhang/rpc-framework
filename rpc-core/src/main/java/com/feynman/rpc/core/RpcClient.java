@@ -122,8 +122,7 @@ public final class RpcClient implements AutoCloseable {
 				.getExtension(config.registry().type());
 		this.registry = registryFactory.create(config.registry());
 		try {
-			this.transport = new NettyClient(serializers, config.connectionsPerNode(), loadStats, config.ioThreads(),
-					config.flushConsolidation());
+			this.transport = new NettyClient(serializers, loadStats, config);
 		} catch (RuntimeException e) {
 			registry.close();
 			cluster.close();
@@ -230,6 +229,19 @@ public final class RpcClient implements AutoCloseable {
 	/** 已发出、尚未收到响应的请求数。正常结束的调用之后应回到 0，可作为泄漏断言。 */
 	public int pendingRequests() {
 		return transport.pendingRequests();
+	}
+
+	/**
+	 * 因连接待写字节超过 {@code RpcClientConfig.outboundHardLimit}（对端读请求跟不上）而没有写出、以"未发出"失败的累计请求数。
+	 * 这类失败是可安全换节点重试的传输失败。
+	 */
+	public long sendBufferRejections() {
+		return transport.sendBufferRejections();
+	}
+
+	/** 取连接时跳过不可写的连接、改用同一节点另一条可写连接的累计次数（{@code connectionsPerNode > 1} 时才可能发生）。 */
+	public long unwritableConnectionSwitches() {
+		return transport.unwritableConnectionSwitches();
 	}
 
 	private ServiceDirectory directoryFor(ServiceKey key) {

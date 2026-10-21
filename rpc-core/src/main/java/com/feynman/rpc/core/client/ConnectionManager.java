@@ -7,6 +7,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,8 @@ final class ConnectionManager {
 	private final Bootstrap bootstrap;
 	private final int connectionsPerNode;
 	private final LoadStats loadStats;
+	/** 取连接时因不可写换连接的次数，见 {@link ConnectionPool#acquire()}。 */
+	private final LongAdder unwritableSwitches;
 	private final ConcurrentHashMap<String, ConnectionPool> pools = new ConcurrentHashMap<>();
 	/** 已下线、等在途归零后关闭的连接池。 */
 	private final ConcurrentHashMap<String, ConnectionPool> draining = new ConcurrentHashMap<>();
@@ -48,9 +51,14 @@ final class ConnectionManager {
 	}
 
 	ConnectionManager(Bootstrap bootstrap, int connectionsPerNode, LoadStats loadStats) {
+		this(bootstrap, connectionsPerNode, loadStats, new LongAdder());
+	}
+
+	ConnectionManager(Bootstrap bootstrap, int connectionsPerNode, LoadStats loadStats, LongAdder unwritableSwitches) {
 		this.bootstrap = bootstrap;
 		this.connectionsPerNode = connectionsPerNode;
 		this.loadStats = loadStats;
+		this.unwritableSwitches = unwritableSwitches;
 	}
 
 	/** 确保到该地址有连接池；已存在则是空操作，不会重连。该地址正在排空时直接恢复使用原连接池。 */
@@ -64,7 +72,7 @@ final class ConnectionManager {
 			pools.put(address, revived);
 			return;
 		}
-		pools.put(address, new ConnectionPool(bootstrap, host, port, connectionsPerNode));
+		pools.put(address, new ConnectionPool(bootstrap, host, port, connectionsPerNode, unwritableSwitches));
 	}
 
 	/**

@@ -37,6 +37,15 @@ public interface CallTarget extends AutoCloseable {
 	}
 
 	/**
+	 * 压测端客户端此刻的累计计数（与 {@link #serverStats()} 同一形式，值压平成字符串），每轮统计窗口起止各取一次。
+	 * rpc 卡：出站背压的 {@code RpcClient.sendBufferRejections()} / {@code unwritableConnectionSwitches()}（键见
+	 * {@link BackpressureStats}）。缺省实现（对比对象、HTTP 卡）返回空表。
+	 */
+	default Map<String, String> clientStats() {
+		return Map.of();
+	}
+
+	/**
 	 * 进 JSON 的 {@code run.target}：怎么连的、客户端的关键配置。约定的键：{@code transport}、{@code mode}、{@code address}、
 	 * {@code providers}（实际提供者地址列表）、{@code serializer}、{@code connection_model}（连接与多路复用方式，一句话）、
 	 * {@code io_threads}、{@code retries}、{@code call_style}。

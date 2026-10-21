@@ -38,7 +38,7 @@ MeterRegistry registry = ...;                       // 任何 MeterRegistry
 RpcServer server = RpcServer.builder()
         .serverFilter(new MicrometerServerFilter(registry))
         .build();
-RpcServerMetrics.bind(server, registry);             // rpc.server.inflight / rpc.server.connections
+RpcServerMetrics.bind(server, registry);             // rpc.server.inflight / rpc.server.connections / 出站背压计数
 
 RpcClient client = RpcClient.builder()
         .clientFilter(new MicrometerClientFilter(registry))
@@ -85,6 +85,10 @@ Micrometer 名（点分）在 Prometheus 里转成下划线，Timer 带 `_second
 | `rpc.client.connections` | `rpc_client_connections` | Gauge | 绑定时给的 tag | 到全部提供者已激活的连接数（含下线后排空中的），`RpcClient.activeConnections()` |
 | `rpc.server.inflight` | `rpc_server_inflight` | Gauge | 绑定时给的 tag | 已进入服务端（排队或执行中，含业务返回了未完成 future 的）、尚未回包的请求数，`RpcServer.inFlight()` |
 | `rpc.server.connections` | `rpc_server_connections` | Gauge | 绑定时给的 tag | 已接受、尚未关闭的入站连接数，`RpcServer.activeConnections()` |
+| `rpc.server.autoread.pauses` | `rpc_server_autoread_pauses_total` | FunctionCounter | 绑定时给的 tag | 出站背压因连接不可写（待写字节超过高水位）而暂停读的累计次数，`RpcServer.autoReadPauses()`；稳态下持续增长说明有客户端读回包跟不上（[docs/probes/outbound-backpressure.md](probes/outbound-backpressure.md)） |
+| `rpc.server.outbound.overload.rejections` | `rpc_server_outbound_overload_rejections_total` | FunctionCounter | 绑定时给的 tag | 连接待写字节超过出站硬上限而直接回 SERVER_OVERLOADED 的累计请求数，`RpcServer.outboundOverloadRejections()` |
+| `rpc.client.send.buffer.rejections` | `rpc_client_send_buffer_rejections_total` | FunctionCounter | 绑定时给的 tag | 连接待写字节超过出站硬上限、没有写出就以传输失败结束的累计请求数，`RpcClient.sendBufferRejections()` |
+| `rpc.client.unwritable.switches` | `rpc_client_unwritable_switches_total` | FunctionCounter | 绑定时给的 tag | 取连接时跳过不可写连接、改用同一节点另一条连接的累计次数，`RpcClient.unwritableConnectionSwitches()` |
 
 tag 约定：
 

@@ -31,6 +31,12 @@ import com.feynman.rpc.core.serialize.Serializer;
  *       {@link Builder#ioThreads(int)}。</li>
  *   <li>{@code flushConsolidation}（默认 true）：连接 pipeline 最靠近 transport 处是否加 Netty 的
  *       {@code FlushConsolidationHandler}（合并 flush），见 {@link Builder#flushConsolidation(boolean)}。</li>
+ *   <li>{@code writeBufferLow} / {@code writeBufferHigh}（默认 32KiB / 64KiB，即 Netty 缺省）：每条已接受连接的
+ *       {@code WRITE_BUFFER_WATER_MARK}，见 {@link Builder#writeBufferWaterMark(int, int)}。</li>
+ *   <li>{@code outboundBackpressure}（默认 true）：连接不可写时暂停读这条连接，恢复可写再读，见
+ *       {@link Builder#outboundBackpressure(boolean)}。</li>
+ *   <li>{@code outboundHardLimit}（默认 high × 16，0 = 关闭）：连接待写字节超过它时，新到的请求直接回 SERVER_OVERLOADED，见
+ *       {@link Builder#outboundHardLimit(long)}。</li>
  * </ul>
  */
 public record RpcServerConfig(
@@ -47,7 +53,11 @@ public record RpcServerConfig(
 		Duration shutdownTimeout,
 		Duration deregisterGrace,
 		int ioThreads,
-		boolean flushConsolidation) {
+		boolean flushConsolidation,
+		int writeBufferLow,
+		int writeBufferHigh,
+		boolean outboundBackpressure,
+		long outboundHardLimit) {
 
 	public static final int DEFAULT_PORT = 9000;
 	public static final int DEFAULT_REMOTE_STACK_TRACE_MAX_BYTES = 8192;
@@ -57,6 +67,14 @@ public record RpcServerConfig(
 	public static final int DEFAULT_IO_THREADS = RpcClientConfig.DEFAULT_IO_THREADS;
 	/** 同 {@link RpcClientConfig#DEFAULT_FLUSH_CONSOLIDATION}。 */
 	public static final boolean DEFAULT_FLUSH_CONSOLIDATION = RpcClientConfig.DEFAULT_FLUSH_CONSOLIDATION;
+	/** 同 {@link RpcClientConfig#DEFAULT_WRITE_BUFFER_LOW}。 */
+	public static final int DEFAULT_WRITE_BUFFER_LOW = RpcClientConfig.DEFAULT_WRITE_BUFFER_LOW;
+	/** 同 {@link RpcClientConfig#DEFAULT_WRITE_BUFFER_HIGH}。 */
+	public static final int DEFAULT_WRITE_BUFFER_HIGH = RpcClientConfig.DEFAULT_WRITE_BUFFER_HIGH;
+	/** 缺省开启出站背压（不可写时暂停读），见 {@link Builder#outboundBackpressure(boolean)}。 */
+	public static final boolean DEFAULT_OUTBOUND_BACKPRESSURE = true;
+	/** 同 {@link RpcClientConfig#OUTBOUND_HARD_LIMIT_DEFAULT}：记录构造参数里的负数表示"高水位 × 16"。 */
+	public static final long OUTBOUND_HARD_LIMIT_DEFAULT = RpcClientConfig.OUTBOUND_HARD_LIMIT_DEFAULT;
 	/** 堆栈被截断时追加的标记（计入字节上限）。 */
 	public static final String TRUNCATION_MARKER = "…(truncated)";
 	/** 上限至少能放下标记本身和一行有意义的内容。 */
@@ -95,6 +113,8 @@ public record RpcServerConfig(
 			throw new IllegalArgumentException("deregisterGrace must not be negative: " + deregisterGrace);
 		}
 		RpcClientConfig.checkIoThreads(ioThreads);
+		RpcClientConfig.checkWaterMark(writeBufferLow, writeBufferHigh);
+		outboundHardLimit = RpcClientConfig.resolveOutboundHardLimit(outboundHardLimit, writeBufferHigh);
 	}
 
 	public static Builder<RpcServerConfig> builder() {
@@ -119,6 +139,10 @@ public record RpcServerConfig(
 		private Duration deregisterGrace = DEFAULT_DEREGISTER_GRACE;
 		private int ioThreads = DEFAULT_IO_THREADS;
 		private boolean flushConsolidation = DEFAULT_FLUSH_CONSOLIDATION;
+		private int writeBufferLow = DEFAULT_WRITE_BUFFER_LOW;
+		private int writeBufferHigh = DEFAULT_WRITE_BUFFER_HIGH;
+		private boolean outboundBackpressure = DEFAULT_OUTBOUND_BACKPRESSURE;
+		private long outboundHardLimit = OUTBOUND_HARD_LIMIT_DEFAULT;
 
 		public Builder(Function<RpcServerConfig, T> finisher) {
 			this.finisher = finisher;
@@ -232,10 +256,48 @@ public record RpcServerConfig(
 			return this;
 		}
 
+		/**
+		 * 每条已接受连接的写缓冲水位线（字节，默认 32KiB / 64KiB，即 Netty 缺省），设到子连接的
+		 * {@code ChannelOption.WRITE_BUFFER_WATER_MARK}。回包的待写字节（已交给 Netty、还没写进套接字）超过 high 时连接变为不可写，
+		 * 降到 low 以下恢复；{@link #outboundBackpressure(boolean)} 开着时据此暂停 / 恢复读这条连接。
+		 */
+		public Builder<T> writeBufferWaterMark(int low, int high) {
+			this.writeBufferLow = low;
+			this.writeBufferHigh = high;
+			return this;
+		}
+
+		/**
+		 * 出站背压（默认 true）：连接变为不可写时暂停读它（{@code setAutoRead(false)}），恢复可写时再读。
+		 * 一个只发请求不读响应的客户端（或拥塞的网络）因此不能让回包在直接内存里无界堆积：不再读新请求，已在途的照常完成，
+		 * 积压被"在途数 × 回包大小"封顶。业务执行器的队列 / 并发上限管不到这件事——在途计数在回包交给 Netty 时就已归还。
+		 *
+		 * <p>暂停读期间连接的读空闲计时照常走：持续暂停超过读空闲阈值（30s）时连接被关闭，这是"长期不读的客户端"的兜底。
+		 * 关掉它（连同 {@link #outboundHardLimit(long)} 的拒绝）只用于对照实验，见 docs/probes/outbound-backpressure.md。
+		 */
+		public Builder<T> outboundBackpressure(boolean outboundBackpressure) {
+			this.outboundBackpressure = outboundBackpressure;
+			return this;
+		}
+
+		/**
+		 * 每条连接待写字节的硬上限（字节，默认高水位 × {@value RpcClientConfig#DEFAULT_OUTBOUND_HARD_LIMIT_MULTIPLIER}，0 = 关闭）。
+		 * 待写字节超过它时，新到的请求不交给业务执行器，直接回 SERVER_OVERLOADED（业务没执行，客户端可安全换节点重试）。
+		 * 暂停读之后理论上只剩"暂停前已读进来、还没解码完的那一批帧"会落到这里；它防的是那一批帧的回包把积压推得过高
+		 * （例如 direct 执行器下小请求换大回包）。只在 {@link #outboundBackpressure(boolean)} 开着时生效。
+		 */
+		public Builder<T> outboundHardLimit(long outboundHardLimit) {
+			if (outboundHardLimit < 0) {
+				throw new IllegalArgumentException("outboundHardLimit must be >= 0 (0 = off): " + outboundHardLimit);
+			}
+			this.outboundHardLimit = outboundHardLimit;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcServerConfig(port, host, registry, serializer, executor, weight, serverFilters,
 					remoteStackTrace, serializerOptions, remoteStackTraceMaxBytes, shutdownTimeout, deregisterGrace, ioThreads,
-					flushConsolidation));
+					flushConsolidation, writeBufferLow, writeBufferHigh, outboundBackpressure, outboundHardLimit));
 		}
 	}
 }
