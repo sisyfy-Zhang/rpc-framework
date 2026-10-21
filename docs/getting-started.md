@@ -38,6 +38,12 @@ mvn install -DskipTests
 实际项目里接口通常放在一个独立的 `xxx-api` 模块，provider 与 consumer 各是一个应用；为了 15 分钟跑通，下面把它们放在同一个工程里
 （`rpc-examples` 就是这样组织的：`api` / `provider` / `consumer` 三个包）。
 
+- 下文每段代码前标的是它在 `rpc-examples` 里的路径；照抄时把前缀 `rpc-examples/` 换成你的工程根目录，**保留包名**
+  `com.feynman.rpc.examples.*`（要换成自己的包名就三个包一起换，并同步改 import）。
+- 删掉 start.spring.io 生成的 `DemoApplication` 与 `src/test` 下的 `DemoApplicationTests`：同一工程里会有 provider、consumer
+  两个启动类（第 5、6 节），多出来的第三个 main 只会让 `mvn spring-boot:run` 更难选；删了 `DemoApplication` 而留着
+  `DemoApplicationTests` 会让 `mvn test` 找不到 `@SpringBootConfiguration`。
+
 在 `pom.xml` 里加入（先导入 BOM `rpc-bom`，各 rpc-* 模块就不用逐个写版本；BOM 只管本框架模块，不覆盖 Spring Boot 管理的第三方版本）：
 
 ```xml
@@ -99,12 +105,15 @@ mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
 java -cp "target/classes:$(cat target/classpath.txt)" com.feynman.rpc.examples.EmbeddedZooKeeper
 ```
 
+（Windows 的 classpath 分隔符是 `;`，PowerShell 写法见 [rpc-examples/README.md](../rpc-examples/README.md#运行)。）
+
 写自动化测试时，在测试里直接 `new TestingServer(true)`（依赖 `org.apache.curator:curator-test`，test scope），
 把 `getConnectString()` 作为 `rpc.registry.address` 传给应用即可——本仓库的集成测试全部这样做，不依赖 Docker。
 
 ## 4. 定义接口与 DTO
 
-接口、DTO、业务异常放在 provider 与 consumer 共享的包里：
+接口、DTO、业务异常放在 provider 与 consumer 共享的包里（本节 5 个文件：三个接口、一个 DTO、一个业务异常——下文的 provider 与
+consumer 代码都依赖它们，少一个就编译不过）：
 
 `rpc-examples/src/main/java/com/feynman/rpc/examples/api/UserFacade.java`：
 
@@ -119,6 +128,52 @@ public interface UserFacade {
 	User saveUser(User user);
 
 	void saveUsers(List<User> users);
+}
+```
+
+`rpc-examples/src/main/java/com/feynman/rpc/examples/api/UserService.java`：
+
+```java
+package com.feynman.rpc.examples.api;
+
+import java.util.List;
+
+/** 领域服务：provider 内部被 UserFacade 本地调用，同时也对外暴露（演示一个进程暴露多个接口）。 */
+public interface UserService {
+
+	void save(User user);
+
+	void saveList(List<User> users);
+}
+```
+
+`rpc-examples/src/main/java/com/feynman/rpc/examples/api/InventoryService.java`：
+
+```java
+package com.feynman.rpc.examples.api;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * 库存服务（下单 → 预占库存的调用形态）：多参数、基本类型与包装类型混用、泛型返回、异步方法、业务异常。
+ * 服务端按"方法名 + 参数类型签名"分发、按声明的泛型类型逐个反序列化参数，所以这些写法与本地接口没有区别。
+ */
+public interface InventoryService {
+
+	/**
+	 * 预占库存。
+	 *
+	 * @return 预占后的剩余库存
+	 * @throws InsufficientStockException 库存不足（业务失败，不重试）
+	 */
+	int reserve(long skuId, Integer quantity, String orderNo);
+
+	/** 某 SKU 的购买者（按预占顺序）。 */
+	List<User> buyers(long skuId);
+
+	/** 同上，异步形态：返回值的声明类型是 {@code CompletableFuture<List<User>>}，框架按 T = List&lt;User&gt; 反序列化。 */
+	CompletableFuture<List<User>> buyersAsync(long skuId);
 }
 ```
 
@@ -273,8 +328,61 @@ public class UserServiceImpl implements UserService {
 }
 ```
 
-启动类。示例模块里 provider 与 consumer 同在一个模块，所以用 `spring.config.name` 区分两份配置；你的工程里直接
-`SpringApplication.run(ProviderApplication.class, args)` 并使用默认的 `application.yml` 即可：
+`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/InventoryServiceImpl.java`：
+
+```java
+package com.feynman.rpc.examples.provider;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.feynman.rpc.examples.api.InsufficientStockException;
+import com.feynman.rpc.examples.api.InventoryService;
+import com.feynman.rpc.examples.api.User;
+import com.feynman.rpc.starter.RpcService;
+
+/** 内存版库存：每个 SKU 初始 10 件。 */
+@RpcService
+public class InventoryServiceImpl implements InventoryService {
+
+	private static final int INITIAL_STOCK = 10;
+
+	private final Map<Long, Integer> stock = new ConcurrentHashMap<>();
+	private final Map<Long, List<User>> buyers = new ConcurrentHashMap<>();
+
+	@Override
+	public synchronized int reserve(long skuId, Integer quantity, String orderNo) {
+		int left = stock.getOrDefault(skuId, INITIAL_STOCK);
+		if (quantity == null || quantity <= 0) {
+			throw new IllegalArgumentException("quantity must be positive: " + quantity);
+		}
+		if (left < quantity) {
+			throw new InsufficientStockException("sku " + skuId + " has " + left + " left, order " + orderNo + " wants " + quantity);
+		}
+		stock.put(skuId, left - quantity);
+		List<User> list = buyers.computeIfAbsent(skuId, k -> new ArrayList<>());
+		list.add(new User(list.size() + 1, orderNo));
+		return left - quantity;
+	}
+
+	@Override
+	public synchronized List<User> buyers(long skuId) {
+		return new ArrayList<>(buyers.getOrDefault(skuId, List.of()));
+	}
+
+	@Override
+	public CompletableFuture<List<User>> buyersAsync(long skuId) {
+		return CompletableFuture.completedFuture(buyers(skuId));
+	}
+}
+```
+
+启动类。provider 与 consumer 同在一个工程，各有一份配置，所以用 `spring.config.name` 区分（provider 读 `provider.yml`，
+consumer 读 `consumer.yml`），照抄即可。以后拆成两个独立应用时，各自 `SpringApplication.run(XxxApplication.class, args)`、
+用默认的 `application.yml`，去掉 `spring.config.name`：
 
 `rpc-examples/src/main/java/com/feynman/rpc/examples/provider/ProviderApplication.java`：
 
@@ -309,7 +417,7 @@ public class ProviderApplication {
 }
 ```
 
-配置（示例里叫 `provider.yml`，你的工程里就是 `application.yml`）：
+配置放在 `src/main/resources/provider.yml`（不是 `application.yml`：同一工程里 consumer 也会读到 `application.yml`）：
 
 `rpc-examples/src/main/resources/provider.yml`：
 
@@ -534,7 +642,20 @@ provider 的"注册完成"不等于 consumer 的"已经看到它"：consumer 若
 
 ## 7. 验证调用
 
-先启动 provider，再启动 consumer。provider 日志里应看到（下面是在本机实际运行 rpc-examples 的输出，去掉了时间戳与进程号；地址以实际为准）：
+在工程根目录开两个终端，先启动 provider（常驻，Ctrl+C 优雅下线），再启动 consumer（调用一次后退出）。工程里有两个启动类，
+`spring-boot:run` 必须指定 `main-class`，否则报 `Unable to find a single main class`：
+
+```bash
+# 终端 1：provider
+mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.provider.ProviderApplication
+# 终端 2：consumer
+mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.consumer.ConsumerApplication
+```
+
+同一个原因，这个"两个应用放一个工程"的布局不能直接 `mvn package` 成可执行 jar（`repackage` 同样报 `Unable to find a single main class`）：
+它只用来试跑；要部署时按第 2 节说的拆成独立应用，各自一个启动类。
+
+provider 日志里应看到（下面是在本机实际运行 rpc-examples 的输出，去掉了时间戳与进程号；地址以实际为准）：
 
 ```text
 INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.InventoryService::default -> com.feynman.rpc.examples.provider.InventoryServiceImpl
@@ -561,13 +682,26 @@ INFO  [main] com.feynman.rpc.core.RpcClient : RpcClient closed in 123ms (all in-
 ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`，节点数据是
 `weight=1&proto=2&ts=...&pid=...` 形式的元数据。停掉 provider（Ctrl+C）后节点立即消失。
 
+**验证清单**。`DemoRunner` 只发了一次同步调用；其余三种调用形态用上面已经抄好的 bean 就能验证，写进你自己的
+`ApplicationRunner`（构造器注入 `OrderGateway`，`InventoryService inventory = orderGateway.inventory()`）即可。
+`InventoryServiceImpl` 每个 SKU 初始 10 件，下表按顺序对同一个 `sku` 调用：
+
+| 形态 | 调用 | 预期 |
+|---|---|---|
+| 同步 | `gateway.register(1, "zzz")`（`DemoRunner` 已做）；`orderGateway.placeOrder(sku, 3, "order-1")` | `User{id=1, name=zzz}`；返回 `7` |
+| 业务异常跨进程 | `inventory.reserve(sku, 100, "order-2")`，`catch (InsufficientStockException e)` | 抛出的就是 `InsufficientStockException`，消息与服务端一致（`sku … has 7 left, order order-2 wants 100`），远端堆栈在 `e.getCause()`；`orderGateway.placeOrder(sku, 100, …)` 因此返回 `-1` |
+| 异步 | `inventory.buyersAsync(sku).get(5, TimeUnit.SECONDS)` | `[User{id=1, name=order-1}]` |
+| attachments | 调用前 `RpcContext.setAttachment("tenant", "acme")`，再调 `inventory.buyers(sku)`；provider 侧在业务方法里用 `RpcContext.getServerAttachment("tenant")`（或在 `ServerFilter` bean 里用 `invocation.getAttachment("tenant")`）读取 | 读到 `acme`。attachments 只随**紧接着的下一次**调用发出，发出即清空，不会串到之后的调用（`RpcContext` 在 `com.feynman.rpc.core`） |
+
 ### 7.1 指标
 
 可选。`rpc-metrics-micrometer` 把每次调用记成 Micrometer Timer（`rpc.client.calls` / `rpc.server.calls`，tag 为 `service`、`method`、`status`），
 在途与连接数记成 Gauge；指标名、tag 取值与 PromQL 见 [observability.md](observability.md)。
 
-**Boot 应用**：加下面三个依赖，再在配置里暴露 Prometheus 端点（`management.endpoints.web.exposure.include` 加上 `prometheus`）。
+**Boot 应用**：加下面四个依赖，再暴露 Prometheus 端点（`management.endpoints.web.exposure.include` 加上 `prometheus`）。
 容器里有 `MeterRegistry`（Actuator 提供）时 starter 自动注册两个指标 Filter 并绑定 Gauge，不用写代码；`rpc.metrics.enabled: false` 关闭。
+`/actuator/prometheus` 是 HTTP 端点，需要 Web 服务器：本文的 `ProviderApplication` 用 `WebApplicationType.NONE` 启动、
+第 2 步也没有 Web 依赖，所以这里要加 `spring-boot-starter-webmvc`（Boot 4 的 Spring MVC starter），启动时再把应用类型切回 servlet。
 
 ```xml
 <dependency>
@@ -582,9 +716,21 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
   <groupId>io.micrometer</groupId>
   <artifactId>micrometer-registry-prometheus</artifactId>
 </dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-webmvc</artifactId>   <!-- 提供 HTTP 服务器；已是 Web 应用可省略 -->
+</dependency>
 ```
 
-抓取地址是 `http://<host>:<management 端口>/actuator/prometheus`。
+用命令行参数覆盖 `WebApplicationType.NONE` 并暴露端点（也可以写进 `provider.yml`），再跑一次 consumer 后抓取：
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.provider.ProviderApplication "-Dspring-boot.run.arguments=--spring.main.web-application-type=servlet --management.endpoints.web.exposure.include=health,prometheus"
+curl -s localhost:8080/actuator/prometheus | grep '^rpc_server_calls_seconds_count'
+# rpc_server_calls_seconds_count{method="saveUser",service="com.feynman.rpc.examples.api.UserFacade",status="OK"} 1
+```
+
+抓取地址是 `http://<host>:<management 端口>/actuator/prometheus`（未单独设 `management.server.port` 时就是应用的 HTTP 端口，缺省 8080）。
 
 **纯 Java**：Filter 在 builder 上加，Gauge 用 `RpcServerMetrics.bind` / `RpcClientMetrics.bind` 绑定。下面是 `PlainProvider` 的写法
 （`--metrics-port 9466` 运行它，就能被 [docker/](../docker/README.md) 里预置的 Prometheus 抓到）：
@@ -619,7 +765,10 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
 - `rpc.server.host`：容器 / 多网卡环境显式设置，否则自动探测的地址可能是消费端连不到的那个。
 - `rpc.server.deregister-grace: 1s`，并确认 `spring.lifecycle.timeout-per-shutdown-phase` 与 Kubernetes 的
   `terminationGracePeriodSeconds` 都大于 `deregister-grace + shutdown-timeout + 5s`。
-- 把健康组件 `rpc` 接到 readiness：已注册才 UP，注册中心不可达或停机中为 OUT_OF_SERVICE（Actuator 在 classpath 上时自动装配）。
+- 把健康组件 `rpc` 接到 readiness：`management.endpoint.health.group.readiness.include: readinessState,rpc`（Actuator 在 classpath 上时
+  自动装配）。启动后全部服务注册成功才 UP，尚未注册成功（启动时注册中心不可达，后台在重试）或停机中为 OUT_OF_SERVICE；
+  注意已经注册过之后注册中心中途断开（会话丢失）时它仍报 UP，恢复后自动重新注册。Boot 缺省不在 `/actuator/health` 里列出各组件，
+  要看 `rpc` 的明细设 `management.endpoint.health.show-components: always`（或对 readiness 组单独设）。
 - 只给幂等方法设置 `retries`：连接在请求写出后断开时，客户端无法判断服务端是否已执行，重试可能导致重复执行。
 - 返回 `CompletableFuture` 的方法：`thenApply` 等回调在 Netty IO 线程上执行，不要在里面阻塞；需要时用 `thenApplyAsync(fn, executor)`。
   在这些回调里调用**同步**方法会直接抛 `IllegalStateException`（"called on this RpcClient's IO event-loop thread"）——阻塞事件循环会让

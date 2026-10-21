@@ -128,6 +128,10 @@
     <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-serialize-protobuf</artifactId>
   </dependency>
+  <dependency>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>rpc-serialize-fastjson2</artifactId>   <!-- 可选：第二种序列化，建连时与对端协商 -->
+  </dependency>
 </dependencies>
 ```
 
@@ -140,6 +144,8 @@ BOM 只管本框架自己的模块版本，不覆盖你工程里 Netty、Spring 
 接口与 DTO 放在双方共享的 API 包里（DTO 用普通类，**不要用 record**，见[已知边界](#已知边界)）。下面两段代码就是
 `rpc-examples` 的 [`PlainProvider`](rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainProvider.java) 与
 [`PlainConsumer`](rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainConsumer.java)，由集成测试 `PlainJavaExamplesTest` 跑通。
+其中的接口 `InventoryService`、实现 `InventoryServiceImpl`、DTO `User` 与业务异常 `InsufficientStockException` 的完整代码见
+[docs/getting-started.md 第 4、5 节](docs/getting-started.md#4-定义接口与-dto)。
 
 服务端：
 
