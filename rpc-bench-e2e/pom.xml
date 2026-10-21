@@ -1,9 +1,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-bench-e2e</artifactId>
   <name>rpc-bench-e2e</name>
@@ -13,24 +13,28 @@
   <properties>
     <!-- 命令行工具，不作为库发布 -->
     <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
   </properties>
 
   <dependencies>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-registry-zookeeper</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-protobuf</artifactId>
     </dependency>
     <!-- metrics-port 选项：指标 Filter / Gauge 与内嵌 /metrics 端点（缺省关闭，不影响不带该参数的压测路径） -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-metrics-micrometer</artifactId>
     </dependency>
     <dependency>

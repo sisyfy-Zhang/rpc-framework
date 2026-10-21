@@ -1,10 +1,38 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" child.project.url.inherit.append.path="false">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.feynman.rpc</groupId>
+  <!-- 坐标 groupId（io.github.sisyfy-zhang）与 Java 包名（com.feynman.rpc）不同：Maven Central 的 io.github.* 命名空间按 GitHub 账号验证。
+       版本号：开发期 X.Y.Z-SNAPSHOT，发布时改成 X.Y.Z 并打 vX.Y.Z tag（docs/releasing.md）；rpc-bom 不继承本 pom，版本要一起改。 -->
+  <groupId>io.github.sisyfy-zhang</groupId>
   <artifactId>rpc-parent</artifactId>
-  <version>0.0.1-SNAPSHOT</version>
+  <version>1.0.0-SNAPSHOT</version>
   <packaging>pom</packaging>
+  <name>rpc-parent</name>
+  <description>Parent POM of rpc-framework, a Netty-based Java RPC framework with pluggable registry, serializer, load-balancing and cluster SPIs.</description>
+  <!-- Central 必填元数据（name / description / url / licenses / developers / scm），所有子模块继承；
+       child.*.inherit.append.path=false：子模块的 url / scm 不在末尾拼 /artifactId（仓库没有按模块的独立页面） -->
+  <url>https://github.com/sisyfy-Zhang/rpc-framework</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>sisyfy-Zhang</id>
+      <name>sisyfy-Zhang</name>
+      <email>fyenmanc@gmail.com</email>
+    </developer>
+  </developers>
+  <scm child.scm.connection.inherit.append.path="false" child.scm.developerConnection.inherit.append.path="false" child.scm.url.inherit.append.path="false">
+    <connection>scm:git:https://github.com/sisyfy-Zhang/rpc-framework.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/sisyfy-Zhang/rpc-framework.git</developerConnection>
+    <url>https://github.com/sisyfy-Zhang/rpc-framework</url>
+    <tag>HEAD</tag>
+  </scm>
   <modules>
+  	<module>rpc-bom</module>
   	<module>rpc-core</module>
   	<module>rpc-registry-tck</module>
   	<module>rpc-registry-zookeeper</module>
@@ -69,6 +97,12 @@
     <!-- surefire 的 JVM 参数：jacoco:prepare-agent 把探针 agent 写进这个属性；默认空值让跳过 JaCoCo 时 @{argLine} 也能解析。
          额外参数（如 -Dio.netty.leakDetection.level=paranoid）用 -DargLine=... 传入，见 surefire 配置的注释。 -->
     <argLine></argLine>
+    <!-- 发布（-Prelease）用插件，只在 release profile 里生效 -->
+    <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
+    <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
+    <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
+    <!-- rpc-bom 不继承本 pom，它的 release profile 里写死了同一个版本，升级时两处一起改 -->
+    <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
   </properties>
 
   <dependencyManagement>
@@ -289,53 +323,53 @@
 
       <!-- 本项目自己的模块，方便子模块间互相依赖时不用重复写 version -->
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-core</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-registry-tck</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-registry-zookeeper</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-registry-nacos</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-serialize-fastjson2</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-serialize-protobuf</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-metrics-micrometer</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-examples</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>
       <!-- 对比模块（rpc-bench-compare-*）实现 harness 的公开 SPI（CallTarget / CallTargetProvider） -->
       <dependency>
-        <groupId>com.feynman.rpc</groupId>
+        <groupId>${project.groupId}</groupId>
         <artifactId>rpc-bench-e2e</artifactId>
         <version>${project.version}</version>
       </dependency>
@@ -426,6 +460,93 @@
             </plugin>
           </plugins>
         </pluginManagement>
+      </build>
+    </profile>
+    <profile>
+      <!-- 发布到 Maven Central（docs/releasing.md）：mvn -Prelease -DskipTests deploy。
+           发布面 = rpc-parent、rpc-bom 与 8 个库模块；示例 / 集成测试 / 压测模块在各自 pom 里设了
+           maven.deploy.skip / maven.source.skip / maven.javadoc.skip / gpg.skip，并列在下面的 excludeArtifacts 里。 -->
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>${maven-source-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>${maven-javadoc-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <!-- 只放过"缺注释"（missing），其余 doclint 检查（语法、引用、HTML、可访问性）照常报错并让构建失败 -->
+              <doclint>all,-missing</doclint>
+              <encoding>UTF-8</encoding>
+              <docencoding>UTF-8</docencoding>
+              <charset>UTF-8</charset>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>${maven-gpg-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <!-- 口令从环境变量 MAVEN_GPG_PASSPHRASE 读（插件缺省行为），不写进 pom / settings.xml；
+                   loopback 让 gpg 不弹 pinentry（CI 与无 TTY 环境）。用哪把钥匙：-Dgpg.keyname=<id>，缺省为钥匙环里的默认私钥。 -->
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>${central-publishing-maven-plugin.version}</version>
+            <extensions>true</extensions>
+            <configuration>
+              <!-- settings.xml 里 server id = central（用户名 / 密码 = Central Portal 的 user token），CI 由 setup-java 生成 -->
+              <publishingServerId>central</publishingServerId>
+              <!-- 只上传并等到校验通过；是否发布由人在 Central Portal 上点 Publish -->
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+              <!-- 本插件以扩展方式接管所有模块的 deploy，不看 maven.deploy.skip：不发布的模块必须按 artifactId 排除 -->
+              <excludeArtifacts>
+                <artifact>rpc-examples</artifact>
+                <artifact>rpc-integration-tests</artifact>
+                <artifact>rpc-benchmark</artifact>
+                <artifact>rpc-bench-e2e</artifact>
+                <artifact>rpc-bench-compare-grpc</artifact>
+                <artifact>rpc-bench-compare-dubbo</artifact>
+              </excludeArtifacts>
+            </configuration>
+          </plugin>
+        </plugins>
       </build>
     </profile>
   </profiles>

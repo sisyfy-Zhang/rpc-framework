@@ -1,18 +1,17 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-registry-tck</artifactId>
   <name>rpc-registry-tck</name>
-  <description>Registry SPI 的契约测试套件（TCK）：抽象 JUnit 测试基类 RegistryContractTest。
-    每个 RegistryFactory 实现（本仓库的 ZooKeeper / Nacos，或第三方实现）在自己的 test 里继承它、
-    提供工厂与后端启停钩子，即可跑同一套用例。测试代码放在 src/main 是因为它是给别人的测试继承的库。</description>
+  <!-- Registry SPI 的契约测试套件（TCK）：抽象 JUnit 测试基类 RegistryContractTest。 每个 RegistryFactory 实现（本仓库的 ZooKeeper / Nacos，或第三方实现）在自己的 test 里继承它、 提供工厂与后端启停钩子，即可跑同一套用例。测试代码放在 src/main 是因为它是给别人的测试继承的库。 -->
+  <description>Contract test kit (an abstract JUnit base class) that any Registry SPI implementation extends to run the same registry test suite.</description>
   <dependencies>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
     <!-- compile scope：使用方在自己的 test scope 引入本模块，这些依赖随之进入它们的测试类路径 -->

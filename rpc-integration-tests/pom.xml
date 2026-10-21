@@ -1,9 +1,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-integration-tests</artifactId>
   <name>rpc-integration-tests</name>
@@ -14,50 +14,54 @@
     <!-- 只有测试代码，产物不需要安装 / 发布 -->
     <maven.install.skip>true</maven.install.skip>
     <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
   </properties>
 
   <dependencies>
     <!-- 被测模块用 compile scope（本模块不安装、不发布，scope 对使用方没有影响）：jacoco:report-aggregate
          只汇总 compile / runtime / provided scope 的依赖，写成 test scope 会得到一份空报告。 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
     <!-- rpc-core 的 test-jar 只含 RpcLeakCheckExtension 与它的 META-INF/services 注册：
          配合本模块 junit-platform.properties 的自动检测，对每个集成测试类断言 rpc- 线程归零、在途为零 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
       <version>${project.version}</version>
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-registry-zookeeper</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-registry-nacos</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-protobuf</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-metrics-micrometer</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-spring-boot-starter</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-examples</artifactId>
     </dependency>
 
@@ -164,7 +168,7 @@
             <configuration>
               <artifactItems>
                 <artifactItem>
-                  <groupId>com.feynman.rpc</groupId>
+                  <groupId>${project.groupId}</groupId>
                   <artifactId>rpc-core</artifactId>
                   <version>${project.version}</version>
                   <outputDirectory>${project.build.outputDirectory}</outputDirectory>

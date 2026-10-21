@@ -1,18 +1,18 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-metrics-micrometer</artifactId>
   <name>rpc-metrics-micrometer</name>
-  <description>Micrometer 指标：客户端 / 服务端 Filter 把每次调用记成 Timer（service / method / status），Gauge 暴露在途与连接数；
-    可选的 PrometheusEndpoint 用 JDK HttpServer 暴露 /metrics。纯 Java，不依赖 Spring；rpc-core 不因它多出任何依赖。</description>
+  <!-- Micrometer 指标：客户端 / 服务端 Filter 把每次调用记成 Timer（service / method / status），Gauge 暴露在途与连接数； 可选的 PrometheusEndpoint 用 JDK HttpServer 暴露 /metrics。纯 Java，不依赖 Spring；rpc-core 不因它多出任何依赖。 -->
+  <description>Micrometer metrics for rpc-framework: per-call timers and in-flight / connection gauges recorded by client and server filters, plus an optional embedded Prometheus endpoint.</description>
 
   <dependencies>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
     <dependency>
@@ -43,7 +43,7 @@
     </dependency>
     <!-- 测试里跑真实的 RpcServer / RpcClient 往返，需要一个序列化实现 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
       <scope>test</scope>
     </dependency>

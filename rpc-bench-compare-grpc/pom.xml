@@ -1,9 +1,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-bench-compare-grpc</artifactId>
   <name>rpc-bench-compare-grpc</name>
@@ -14,13 +14,17 @@
   <properties>
     <!-- 压测工具，不作为库发布 -->
     <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
   </properties>
 
   <dependencies>
     <!-- harness 的公开 SPI（CallTarget / CallTargetProvider / ServerLauncher / ServerProbes / Profile / HarnessOptions）。
          只用这些公开类型，不碰 rpc-bench-e2e 的包内实现，也不依赖 rpc-core 以外的本仓库模块的运行时类。 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-bench-e2e</artifactId>
     </dependency>
     <!-- grpc-netty-shaded：Netty 被重定位到 io.grpc.netty.shaded.io.netty，与 harness 的 netty-all 4.1.136 互不影响 -->
@@ -92,7 +96,7 @@
             <configuration>
               <outputDirectory>${project.build.directory}/lib</outputDirectory>
               <includeScope>runtime</includeScope>
-              <excludeGroupIds>com.feynman.rpc</excludeGroupIds>
+              <excludeGroupIds>${project.groupId}</excludeGroupIds>
             </configuration>
           </execution>
         </executions>

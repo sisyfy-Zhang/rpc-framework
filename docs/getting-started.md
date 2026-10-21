@@ -21,7 +21,10 @@
 ## 1. 准备
 
 - JDK 21、Maven 3.9+。
-- 框架尚未发布到 Maven 仓库（阶段 3 发布后，这一步改为直接引用仓库坐标）。先把本仓库安装到本地 Maven 仓库：
+- 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `1.0.0`（发布中，坐标以 [Maven Central 页面](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)为准）。
+  **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`，代码里 import 的包是 `com.feynman.rpc.*`。
+- 在 Central 上线之前（或想用 main 上的最新代码），先把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成 `1.0.0-SNAPSHOT`。
+  第 3 步的方式 B（嵌入式 ZooKeeper）也要用到这份 clone：
 
 ```bash
 git clone https://github.com/sisyfy-Zhang/rpc-framework.git
@@ -35,36 +38,44 @@ mvn install -DskipTests
 实际项目里接口通常放在一个独立的 `xxx-api` 模块，provider 与 consumer 各是一个应用；为了 15 分钟跑通，下面把它们放在同一个工程里
 （`rpc-examples` 就是这样组织的：`api` / `provider` / `consumer` 三个包）。
 
-在 `pom.xml` 里加入：
+在 `pom.xml` 里加入（先导入 BOM `rpc-bom`，各 rpc-* 模块就不用逐个写版本；BOM 只管本框架模块，不覆盖 Spring Boot 管理的第三方版本）：
 
 ```xml
 <properties>
-  <rpc.version>0.0.1-SNAPSHOT</rpc.version>   <!-- 本地 install 的快照版本 -->
+  <rpc.version>1.0.0</rpc.version>   <!-- 用本地 install 的快照时改成 1.0.0-SNAPSHOT -->
 </properties>
+
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>io.github.sisyfy-zhang</groupId>
+      <artifactId>rpc-bom</artifactId>
+      <version>${rpc.version}</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
 
 <dependencies>
   <!-- Boot 集成：@RpcService / @RpcReference、rpc.* 配置、生命周期 -->
   <dependency>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-spring-boot-starter</artifactId>
-    <version>${rpc.version}</version>
   </dependency>
   <!-- 注册中心：ZooKeeper（换 Nacos 用 rpc-registry-nacos 并设 rpc.registry.type=nacos） -->
   <dependency>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-registry-zookeeper</artifactId>
-    <version>${rpc.version}</version>
   </dependency>
   <!-- 序列化：至少一个。Protostuff 是缺省（不配 rpc.serializer 时用它）；fastjson2 可读、便于调试，两者可以同时在 classpath 上，建连时协商 -->
   <dependency>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-serialize-protobuf</artifactId>
-    <version>${rpc.version}</version>
   </dependency>
   <dependency>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-serialize-fastjson2</artifactId>
-    <version>${rpc.version}</version>
   </dependency>
   <!-- 可选：有 Actuator 时自动注册健康组件 rpc（已启动且已注册 = UP） -->
   <dependency>
@@ -560,9 +571,8 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
 
 ```xml
 <dependency>
-  <groupId>com.feynman.rpc</groupId>
-  <artifactId>rpc-metrics-micrometer</artifactId>
-  <version>${rpc.version}</version>
+  <groupId>io.github.sisyfy-zhang</groupId>
+  <artifactId>rpc-metrics-micrometer</artifactId>   <!-- 版本由第 2 步导入的 rpc-bom 管理 -->
 </dependency>
 <dependency>
   <groupId>org.springframework.boot</groupId>

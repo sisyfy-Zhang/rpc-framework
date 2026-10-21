@@ -1,0 +1,88 @@
+# 发布到 Maven Central（Central Portal）：推送 vX.Y.Z tag 时触发，流程与前置条件见 docs/releasing.md。
+# 只做"签名 + 打包 + 上传 + 等校验通过"（autoPublish=false），真正发布由人在 central.sonatype.com 的 Deployments 页点 Publish。
+# 不重复跑测试：tag 指向的提交应已在 main 上通过 ci.yml。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+# 同一个 tag 不并发发布；不取消进行中的发布（上传到一半被取消会留下残缺的 deployment）
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MVN_FLAGS: -B -ntp
+
+jobs:
+  deploy:
+    name: deploy to Maven Central (manual publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      # 与 ci.yml 同一套 JDK 与缓存；server-* 参数让 setup-java 生成 ~/.m2/settings.xml：
+      # <server><id>central</id><username>${env.CENTRAL_USERNAME}</username><password>${env.CENTRAL_TOKEN}</password></server>，
+      # 真实值只在下面 deploy 步骤的 env 里注入，不落盘
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_TOKEN
+
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          test -n "$GPG_PRIVATE_KEY" || { echo "::error::secret GPG_PRIVATE_KEY is not set"; exit 1; }
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format long
+
+      - name: Tag must match the project version (v1.2.3 <-> 1.2.3, no SNAPSHOT)
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          expected="${tag#v}"
+          version=$(mvn $MVN_FLAGS -N -q -DforceStdout help:evaluate -Dexpression=project.version)
+          bom_version=$(mvn $MVN_FLAGS -q -DforceStdout -f rpc-bom/pom.xml help:evaluate -Dexpression=project.version)
+          echo "tag=$tag rpc-parent=$version rpc-bom=$bom_version"
+          [ "$version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-parent version $version"; exit 1; }
+          [ "$bom_version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-bom version $bom_version"; exit 1; }
+          case "$version" in *-SNAPSHOT) echo "::error::refusing to release a SNAPSHOT version ($version)"; exit 1;; esac
+
+      - name: mvn -Prelease deploy (sign, bundle, upload, wait until validated)
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+          # maven-gpg-plugin 缺省从这个环境变量读口令（配合 pom 里的 --pinentry-mode loopback）
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        # maven.test.skip：测试由 ci.yml 保证，同时让 rpc-core 的 test-jar 不生成、不发布；
+        # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败
+        run: mvn $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' deploy
+
+      # 便于核对上传了什么：各发布模块的 jar / sources / javadoc / pom 与 .asc，以及 central-publishing 打出的 bundle
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ github.ref_name }}
+          path: |
+            **/target/*.jar
+            **/target/*.asc
+            **/target/*.pom
+            **/target/central-publishing/
+            **/target/central-staging/
+            !rpc-examples/target/
+            !rpc-integration-tests/target/
+            !rpc-benchmark/target/
+            !rpc-bench-e2e/target/
+            !rpc-bench-compare-grpc/target/
+            !rpc-bench-compare-dubbo/target/
+          if-no-files-found: warn

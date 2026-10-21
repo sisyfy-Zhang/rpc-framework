@@ -1,14 +1,14 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-core</artifactId>
   <name>rpc-core</name>
-  <description>纯 Java 的 RPC 核心：RpcClient / RpcServer 实例与生命周期、协议编解码、Filter 链、四个 SPI。
-    不依赖任何容器；Spring 集成全部在 rpc-spring-boot-starter。</description>
+  <!-- 纯 Java 的 RPC 核心：RpcClient / RpcServer 实例与生命周期、协议编解码、Filter 链、四个 SPI。 不依赖任何容器；Spring 集成全部在 rpc-spring-boot-starter。 -->
+  <description>Pure-Java RPC core (RpcClient / RpcServer, protocol codec, filter chain and SPIs) with no container or Spring dependency.</description>
   <dependencies>
 	  <dependency>
 	    <groupId>io.netty</groupId>
@@ -116,6 +116,7 @@
         <artifactId>maven-jar-plugin</artifactId>
         <executions>
           <execution>
+            <!-- release（-Prelease）下用 -Dmaven.test.skip=true 构建：test-jar 目标随之跳过，不生成、不签名、不进 Central bundle，不对外发布；release 构建同时用 -pl '!rpc-integration-tests' 排除唯一使用它的模块 -->
             <id>leak-check-test-jar</id>
             <goals>
               <goal>test-jar</goal>

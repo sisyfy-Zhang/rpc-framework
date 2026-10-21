@@ -1,17 +1,17 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-spring-boot-starter</artifactId>
   <name>rpc-spring-boot-starter</name>
-  <description>Spring Boot 集成：@RpcService / @RpcReference 注解、rpc.* properties 绑定到不可变的
-    RpcClientConfig / RpcServerConfig、SmartLifecycle 非阻塞启停。rpc-core 本身不依赖 Spring。</description>
+  <!-- Spring Boot 集成：@RpcService / @RpcReference 注解、rpc.* properties 绑定到不可变的 RpcClientConfig / RpcServerConfig、SmartLifecycle 非阻塞启停。rpc-core 本身不依赖 Spring。 -->
+  <description>Spring Boot 4 auto-configuration for rpc-framework: @RpcService / @RpcReference, rpc.* properties and SmartLifecycle start / stop.</description>
   <dependencies>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
     <dependency>
@@ -32,7 +32,7 @@
     <!-- optional：有 Micrometer（且容器里有 MeterRegistry bean）的应用才装配 RpcMetricsAutoConfiguration，不传递给使用方。
          要指标的应用自己加 rpc-metrics-micrometer（它带 micrometer-core）；Boot 应用通常再加 Actuator 与 micrometer-registry-prometheus。 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-metrics-micrometer</artifactId>
       <optional>true</optional>
     </dependency>
@@ -53,7 +53,7 @@
     </dependency>
     <!-- 测试里跑一次真实的 export → reference → 调用往返，需要一个真实序列化实现 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
       <scope>test</scope>
     </dependency>

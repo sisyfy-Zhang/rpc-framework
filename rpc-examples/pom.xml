@@ -1,37 +1,46 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>com.feynman.rpc</groupId>
+    <groupId>io.github.sisyfy-zhang</groupId>
     <artifactId>rpc-parent</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
   </parent>
   <artifactId>rpc-examples</artifactId>
   <name>rpc-examples</name>
   <description>可运行的示例：Spring Boot provider（@RpcService）与 consumer（@RpcReference）、纯 Java provider / consumer，
     共用 api 包里的接口；另带本机试跑用的嵌入式 ZooKeeper。README 与接入文档里的代码片段都取自本模块。</description>
+
+  <properties>
+    <!-- 示例应用，不作为库发布 -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
+  </properties>
   <dependencies>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-spring-boot-starter</artifactId>
     </dependency>
     <!-- 注册中心：示例默认用 ZooKeeper（按需替换为 rpc-registry-nacos 并改 rpc.registry.type） -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-registry-zookeeper</artifactId>
     </dependency>
     <!-- 至少需要一个 Serializer 实现在 classpath 上。示例用 Protostuff（rpc.serializer=protobuf），同时带上 fastjson2：
          两端各自支持的实现在建连时协商，演示"对端不支持首选方式时自动退让" -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-protobuf</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-serialize-fastjson2</artifactId>
     </dependency>
     <!-- PlainProvider 的可选 metrics-port 选项：服务端指标 Filter / Gauge 与内嵌 Prometheus 抓取端点 -->
     <dependency>
-      <groupId>com.feynman.rpc</groupId>
+      <groupId>${project.groupId}</groupId>
       <artifactId>rpc-metrics-micrometer</artifactId>
     </dependency>
     <dependency>

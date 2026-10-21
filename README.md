@@ -73,6 +73,7 @@
 | 模块 | 作用 | 你需要依赖它吗 |
 |---|---|---|
 | `rpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
+| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本，只管本框架模块、不覆盖第三方版本（用法见[快速开始](#快速开始)） | 推荐 |
 | `rpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
 | `rpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
 | `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
@@ -95,31 +96,44 @@
 
 ## 快速开始
 
-先在仓库根目录安装到本地仓库（阶段 3 发布后改为直接引用仓库坐标）：
+依赖坐标：groupId 为 `io.github.sisyfy-zhang`，版本 `1.0.0`（发布中，坐标以 [Maven Central 页面](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)为准）。
+注意 **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证），
+代码里 import 的包仍是 `com.feynman.rpc.*`。
 
-```bash
-mvn install -DskipTests
-```
-
-依赖坐标（当前为本地 SNAPSHOT）：
+推荐先导入 BOM（`rpc-bom`），各模块就不用逐个写版本：
 
 ```xml
-<dependency>
-  <groupId>com.feynman.rpc</groupId>
-  <artifactId>rpc-spring-boot-starter</artifactId>   <!-- 纯 Java 用 rpc-core -->
-  <version>0.0.1-SNAPSHOT</version>
-</dependency>
-<dependency>
-  <groupId>com.feynman.rpc</groupId>
-  <artifactId>rpc-registry-zookeeper</artifactId>
-  <version>0.0.1-SNAPSHOT</version>
-</dependency>
-<dependency>
-  <groupId>com.feynman.rpc</groupId>
-  <artifactId>rpc-serialize-protobuf</artifactId>
-  <version>0.0.1-SNAPSHOT</version>
-</dependency>
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>io.github.sisyfy-zhang</groupId>
+      <artifactId>rpc-bom</artifactId>
+      <version>1.0.0</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+
+<dependencies>
+  <dependency>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>rpc-spring-boot-starter</artifactId>   <!-- 纯 Java 用 rpc-core -->
+  </dependency>
+  <dependency>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>rpc-registry-zookeeper</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>rpc-serialize-protobuf</artifactId>
+  </dependency>
+</dependencies>
 ```
+
+BOM 只管本框架自己的模块版本，不覆盖你工程里 Netty、Spring 等第三方依赖的版本。不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
+
+在 Central 上线之前（或想用 main 上的最新代码），在仓库根目录 `mvn install -DskipTests` 装到本地仓库，把上面的版本换成 `1.0.0-SNAPSHOT`。
 
 ### 1. 纯 Java
 
@@ -372,7 +386,7 @@ CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用
 - **阶段 1 · 证据基础设施**：`docker compose up` 一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy；Micrometer 指标 Filter 与 Grafana 面板（QPS、p99、在途、连接数、错误码）；压测 CLI 输出带环境与口径的 JSON / Markdown 报告；用 wrk / k6 交叉验证自研压测客户端（偏差 < 15%）。
   - 压测 harness 已就位：口径卡、子命令、WSL2 标准流程、报告字段与 harness 交叉验证见 [docs/benchmarking.md](docs/benchmarking.md)；README 中的压测数字只引用它生成的报告文件。
 - **阶段 2 · 跑数据**：同机吞吐与 p50 / p99（对照 gRPC-Java、Dubbo triple）；慢节点下 RoundRobin 与 P2C 的 p99；杀一个提供者的错误数与恢复时间；流量突增 3 倍时过载保护的效果；每组 3 轮，附环境说明与"不可外推"声明。
-- **阶段 3 · 发布**：CI 全绿；坐标发布到 Maven Central 或 GitHub Packages；空白 Boot 4 工程按接入文档 15 分钟跑通。
+- **阶段 3 · 发布**：CI 全绿；坐标发布到 Maven Central（`io.github.sisyfy-zhang`，流程见 [docs/releasing.md](docs/releasing.md)）；空白 Boot 4 工程按接入文档 15 分钟跑通。
 - **阶段 4 · 可选（每项自带对比实验）**：自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
 
 ## 文档
@@ -382,6 +396,7 @@ CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用
 - [docs/pitfalls.md](docs/pitfalls.md)：开发中踩过的坑（现象 / 根因 / 修法 / 教训）
 - [docs/benchmarking.md](docs/benchmarking.md)：端到端压测：口径卡字段、`server` / `run` / `report` / `crossval` 子命令、WSL2 标准流程、报告字段、harness 交叉验证
 - [docs/observability.md](docs/observability.md)：指标：指标名与 tag、status 取值、计时口径、PromQL 示例、Grafana 面板、纯 Java 内嵌 `/metrics`；中间件与面板的一键环境见 [docker/README.md](docker/README.md)
+- [docs/releasing.md](docs/releasing.md)：发布到 Maven Central：前置（Central 账号、命名空间、GPG、Secrets）、版本号规则、打 tag、release.yml 做了什么、在 Central Portal 点 Publish、回滚与重发
 - [docs/probes/protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
 - [rpc-examples/README.md](rpc-examples/README.md)：示例的运行方式
 
