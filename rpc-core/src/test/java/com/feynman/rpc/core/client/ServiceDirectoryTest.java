@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
+import com.feynman.rpc.core.registry.ServiceInstance;
 import com.feynman.rpc.core.testutil.Instances;
 
 import static org.awaitility.Awaitility.await;
@@ -91,7 +92,8 @@ class ServiceDirectoryTest {
 	void awaitProvidersWakesOnlyAfterOnChangeHasBuiltTheConnectionPools() throws Exception {
 		java.util.concurrent.atomic.AtomicLong onChangeReturnedAt = new java.util.concurrent.atomic.AtomicLong();
 		ServiceDirectory directory = new ServiceDirectory(Instances.KEY, true, d -> {
-			if (d.instances().isEmpty()) {
+			// onChange 按连接目标建池；路由视图（instances）此时还没发布，见 newProvidersAreRoutableOnlyAfterTheirConnectionPoolsArePrepared
+			if (d.connectionTargets().isEmpty()) {
 				return;
 			}
 			try {
@@ -131,5 +133,50 @@ class ServiceDirectoryTest {
 
 		directory.onInstancesChanged(List.of(Instances.at(1)));
 		assertTrue(directory.awaitProviders(Duration.ZERO), "a non-empty list needs no waiting, even with a zero budget");
+	}
+
+	/**
+	 * 回归（任务 13b）：路由视图（instances）只在 onChange（RpcClient 在里面按 connectionTargets 建连接池）返回之后才发布。
+	 * 以前先发布、后建池：onChange 执行期间读者已经看到新地址，调用在 ConnectionManager.acquire 上失败 "No connection pool"。
+	 */
+	@Test
+	void newProvidersAreRoutableOnlyAfterTheirConnectionPoolsArePrepared() {
+		List<List<ServiceInstance>> routableDuringOnChange = new java.util.ArrayList<>();
+		List<List<ServiceInstance>> targetsDuringOnChange = new java.util.ArrayList<>();
+		ServiceDirectory directory = new ServiceDirectory(Instances.KEY, true, d -> {
+			routableDuringOnChange.add(d.instances());
+			targetsDuringOnChange.add(d.connectionTargets());
+		});
+		directory.onInstancesChanged(List.of(Instances.at(1)));
+		assertEquals(List.of(List.of()), routableDuringOnChange, "while pools are being prepared the new provider must not be routable yet");
+		assertEquals(List.of(List.of(Instances.at(1))), targetsDuringOnChange, "onChange must already see the new provider as a target");
+		assertEquals(List.of(Instances.at(1)), directory.instances());
+
+		// 加一个：一次 onChange，期间路由视图仍是旧列表
+		routableDuringOnChange.clear();
+		targetsDuringOnChange.clear();
+		directory.onInstancesChanged(List.of(Instances.at(1), Instances.at(2)));
+		assertEquals(List.of(List.of(Instances.at(1))), routableDuringOnChange);
+		assertEquals(List.of(List.of(Instances.at(1), Instances.at(2))), targetsDuringOnChange);
+	}
+
+	/** 有地址下线：第一次 onChange 时它仍可路由、池仍在目标里；发布后第二次 onChange 才把它移出目标（排空）。 */
+	@Test
+	void removedProvidersLeaveTheRoutingViewBeforeTheirPoolsAreDrained() {
+		List<List<ServiceInstance>> routableDuringOnChange = new java.util.ArrayList<>();
+		List<List<ServiceInstance>> targetsDuringOnChange = new java.util.ArrayList<>();
+		ServiceDirectory replaced = new ServiceDirectory(Instances.KEY, true, d -> {
+			routableDuringOnChange.add(d.instances());
+			targetsDuringOnChange.add(d.connectionTargets());
+		});
+		replaced.onInstancesChanged(List.of(Instances.at(1), Instances.at(2)));
+		routableDuringOnChange.clear();
+		targetsDuringOnChange.clear();
+
+		replaced.onInstancesChanged(List.of(Instances.at(2), Instances.at(3)));
+		assertEquals(List.of(List.of(Instances.at(1), Instances.at(2)), List.of(Instances.at(2), Instances.at(3))), routableDuringOnChange);
+		assertEquals(List.of(List.of(Instances.at(1), Instances.at(2), Instances.at(3)), List.of(Instances.at(2), Instances.at(3))),
+				targetsDuringOnChange, "union first (new pool built, old kept), then narrowed after publishing");
+		assertEquals(List.of(Instances.at(2), Instances.at(3)), replaced.connectionTargets());
 	}
 }

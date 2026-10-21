@@ -592,3 +592,27 @@ hs_err 是 `G1 virtual space` mmap 失败。
 - 测试里的"等稳定"要等一个由被测对象定义的终态，不要用"一段时间没变化"——被测路径在调试级别的检测（PARANOID、JFR、断点）下
   会慢一个数量级，静默期就不再意味着完成。
 - 停读之后读空闲计时照常走：长期不读回包的客户端会在读空闲阈值（服务端 30s）后被关掉，这是兜底而不是缺陷，但要写进文档。
+
+## 36. 服务目录先发布再建连接池：providers() 已非空，第一次调用却偶发 "No connection pool"
+
+**现象**（阶段 3，任务 17、12、13 的全量构建各一次）：`UnreachableRegistryTest.clientReferenceDoesNotWaitForAnUnreachableRegistry_andCatchesUpOnceItAppears`
+等到 `client.providers(key)` 非空后立即调用，偶发 `RpcException: No connection pool for: 127.0.0.1:<port>`。单独重跑总是通过。
+
+**根因**：`ServiceDirectory.onInstancesChanged` 先把新列表写进 volatile 的 `instances`（路由视图：Cluster 每次选点、`RpcClient.providers()`
+都读它），再执行 `onChange`（`refreshConnections` → `ConnectionManager.ensurePool`）建连接池。两步之间读到新地址的调用在
+`ConnectionManager.acquire` 上找不到连接池，直接失败（有连接池时 acquire 会等 connect 完成）。D-015 只把 `onChange` 放到 `signal` 之前，
+保护的是 `awaitProviders` 的唤醒路径；直接读 `providers()` / 路由视图的调用方仍落在窗口里——javadoc 当时也写明了"检查时已非空"的路径不受保护。
+这不只是测试的问题：新提供者上线时，并发流量选中它就会以传输失败结束，failfast 下原样返回给调用方。
+进程内注册中心 + 忙等 `providers()` 非空即调用的复现测试（`ProvidersVisibleImpliesCallableTest`），修复前 200 轮里 199 轮失败。
+
+**修法**：目录分两个视图——路由视图 `instances()` 与连接目标 `connectionTargets()`（`refreshConnections` 改读后者）。一次推送三步走：
+先把连接目标扩成新旧列表的并集、执行 `onChange` 建池（下线地址的池暂留）；再发布路由视图；有地址下线时把连接目标收窄到新列表、
+第二次 `onChange` 让它排空。任何时刻路由视图里的地址都已有连接池，"`providers()` 非空即可发起调用"成立；下线地址先移出路由视图再排空。
+没有选"acquire 找不到池时等待 / 懒建池"：那要给 acquire 加等待与通知，刚下线的地址会挂到超时而不是快速失败换节点，懒建还会把已下线地址的池建回来。
+修复后复现测试 200 轮 0 失败。
+
+**教训**：
+- "对调用方可见"与"可以被使用"必须是同一时刻：先把依赖（连接池）准备好，再发布引用它的视图；下线反过来，先撤视图、再拆依赖。
+- 修一个可见性窗口时，要列出读这份状态的**所有**路径（这里有 awaitProviders 的唤醒、awaitProviders 的"已非空"、Cluster 选点、providers()），
+  只修其中一条（D-015）会把剩下的变成低概率偶发。
+- 低概率偶发先找能放大窗口的确定性复现（忙等读者、或在回调里注入延迟），再改代码；"单独重跑通过"不是结论。

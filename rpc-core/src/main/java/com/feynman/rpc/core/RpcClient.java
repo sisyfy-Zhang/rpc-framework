@@ -317,7 +317,8 @@ public final class RpcClient implements AutoCloseable {
 	}
 
 	/**
-	 * 连接池 = 所有已订阅服务的提供者地址并集；某地址不再被任何服务需要时，它的连接排空在途请求后关闭。
+	 * 连接池 = 所有已订阅服务的连接目标（{@link ServiceDirectory#connectionTargets()}：推送处理中是新旧列表的并集，
+	 * 所以路由视图里的地址总有连接池）的地址并集；某地址不再被任何服务需要时，它的连接排空在途请求后关闭。
 	 * 在注册中心的回调线程上执行。与 close() 的竞态：二者共用 lifecycleLock，CLOSED 之后这里什么都不做，
 	 * 因此 close 关完连接之后不会有迟到的推送再建出新的连接池。CLOSING（等在途）期间照常调整，
 	 * 下线的节点仍按排空流程处理。
@@ -329,7 +330,7 @@ public final class RpcClient implements AutoCloseable {
 			}
 			List<ServiceInstance> all = new ArrayList<>();
 			for (ServiceDirectory directory : directories.values()) {
-				all.addAll(directory.instances());
+				all.addAll(directory.connectionTargets());
 			}
 			transport.updateConnections(all);
 		}
