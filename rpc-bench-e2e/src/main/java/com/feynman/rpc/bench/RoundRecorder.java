@@ -86,8 +86,17 @@ final class RoundRecorder {
 	 * （对比对象、HTTP 端点）记 n/a，采样线程没能完成时为 unknown。
 	 */
 	private volatile Object backpressure = EnvironmentProbe.UNKNOWN;
+	/** 统计窗口内服务端执行器的拒绝数与排队等待（{@link ServerCounters#windowDelta}）；服务端没有这些计数时为 n/a。 */
+	private volatile Object serverExecutor = EnvironmentProbe.UNKNOWN;
+	/** 卡片声明了阶梯或故障时的每秒时间线（{@link FaultTimeline}）；否则 null，JSON 与原口径相同。 */
+	private final FaultTimeline timeline;
 
 	RoundRecorder(int round, Profile profile) {
+		this(round, profile, FaultPlan.NONE);
+	}
+
+	/** @param plan 本次运行的故障计划：卡片有阶梯或故障时建时间线，故障列表取 plan 的（已按 --fault-variant 替换） */
+	RoundRecorder(int round, Profile profile, FaultPlan plan) {
 		this.round = round;
 		Profile.Load load = profile.load();
 		this.open = !load.closed();
@@ -104,6 +113,12 @@ final class RoundRecorder {
 		this.startNanos = System.nanoTime();
 		this.windowStart = startNanos + load.windowStart().toNanos();
 		this.windowEnd = startNanos + load.windowEnd().toNanos();
+		this.timeline = load.timeline() ? new FaultTimeline(startNanos, profile, plan.active() ? plan.faults() : load.faults()) : null;
+	}
+
+	/** 本轮的时间线；卡片没有阶梯与故障时为 null。 */
+	FaultTimeline timeline() {
+		return timeline;
 	}
 
 	boolean inWindow(long nanos) {
@@ -121,6 +136,9 @@ final class RoundRecorder {
 	void success(long intendedStart, long actualStart, long done) {
 		successTotal.increment();
 		bucket(seriesSuccess, done);
+		if (timeline != null) {
+			timeline.success(intendedStart, done);
+		}
 		if (done < windowStart) {
 			successBeforeWindow.increment();
 			return;
@@ -138,6 +156,9 @@ final class RoundRecorder {
 	void error(String type, long done) {
 		errorTotal.increment();
 		bucket(seriesErrors, done);
+		if (timeline != null) {
+			timeline.error(type, done);
+		}
 		totalErrorsByType.computeIfAbsent(type, k -> new LongAdder()).increment();
 		if (inWindow(done)) {
 			windowErrors.increment();
@@ -175,6 +196,21 @@ final class RoundRecorder {
 
 	void backpressure(Object backpressure) {
 		this.backpressure = backpressure;
+	}
+
+	void serverExecutor(Object serverExecutor) {
+		this.serverExecutor = serverExecutor;
+	}
+
+	private volatile long roundStartEpochMs;
+
+	/** 本轮 t = 0 对应的墙钟毫秒（写进故障时间表，读回执行记录时换算）。 */
+	void roundStartEpochMs(long epochMs) {
+		this.roundStartEpochMs = epochMs;
+	}
+
+	long roundStartEpochMs() {
+		return roundStartEpochMs;
 	}
 
 	void finish() {
@@ -259,6 +295,7 @@ final class RoundRecorder {
 		json.put("gc", gc);
 		json.put("io", ioWithPerRequest(windowSuccess.sum() + windowErrors.sum()));
 		json.put("backpressure", backpressure);
+		json.put("server_executor", serverExecutor);
 		boolean warmup = warmupCompleted();
 		List<String> reasons = new ArrayList<>();
 		if (!warmup) {
@@ -271,7 +308,12 @@ final class RoundRecorder {
 			reasons.add("no successful call completed inside the steady window");
 		}
 		boolean dispatcherDelayed = dispatcherDelayed();
-		if (dispatcherDelayed) {
+		// 故障注入 / 阶梯卡（有时间线）：发出滞后超限只记标志、不判无效（见 BenchRunner 的声明）
+		boolean informational = timeline != null;
+		if (dispatcherDelayed && informational) {
+			json.put("dispatcher_delayed_informational", true);
+		}
+		if (dispatcherDelayed && !informational) {
 			reasons.add(DISPATCHER_DELAYED + ": 轮内发出滞后 p99 " + ms(dispatchLag.getValueAtPercentile(99)) + "ms > "
 					+ ms(DISPATCH_LAG_P99_MAX_NANOS) + "ms，调度线程本身被推迟，本轮不参与正式轮选取");
 		}
@@ -286,6 +328,9 @@ final class RoundRecorder {
 		series.put("success", toList(seriesSuccess));
 		series.put("errors", toList(seriesErrors));
 		json.put("timeseries", series);
+		if (timeline != null) {
+			json.putAll(timeline.toJson());
+		}
 		return json;
 	}
 

@@ -55,6 +55,7 @@ final class BenchHttpServer implements AutoCloseable {
 	static final String PING_PATH = "/ping";
 	static final String ENVIRONMENT_PATH = "/environment";
 	static final String STATS_PATH = "/stats";
+	static final String COUNTERS_PATH = "/counters";
 
 	private final EventLoopGroup boss;
 	private final EventLoopGroup workers;
@@ -72,6 +73,16 @@ final class BenchHttpServer implements AutoCloseable {
 	 * @param environment {@code GET /environment} 的内容（启动时采集一次）
 	 */
 	static BenchHttpServer start(int port, Map<String, String> environment) throws InterruptedException {
+		return start(port, environment, ServerProbes::stats, Map::of);
+	}
+
+	/**
+	 * @param stats    {@code GET /stats} 的内容（rpc bench server：与 {@code BenchService.stats()} 同一份，含出站背压与执行器计数）
+	 * @param counters {@code GET /counters} 的内容（rpc bench server：{@code BenchService.counters()}，见 {@link ServerCounters}）。
+	 *                 在 IO 线程上回答、不经业务执行器：故障注入实验每秒取一次，执行器排满时也取得到（经 RPC 取会排在压测请求后面、甚至被拒）
+	 */
+	static BenchHttpServer start(int port, Map<String, String> environment, java.util.function.Supplier<Map<String, String>> stats,
+			java.util.function.Supplier<Map<String, String>> counters) throws InterruptedException {
 		byte[] environmentJson = Json.write(new LinkedHashMap<String, Object>(environment)).getBytes(StandardCharsets.UTF_8);
 		EventLoopGroup boss = new NioEventLoopGroup(1, new DefaultThreadFactory("bench-http-boss"));
 		EventLoopGroup workers = new NioEventLoopGroup(0, new DefaultThreadFactory("bench-http-worker"));
@@ -85,7 +96,7 @@ final class BenchHttpServer implements AutoCloseable {
 						@Override
 						protected void initChannel(SocketChannel ch) {
 							ch.pipeline().addLast(new HttpServerCodec(), new HttpObjectAggregator(MAX_CONTENT_BYTES),
-									new Handler(environmentJson));
+									new Handler(environmentJson, stats, counters));
 						}
 					})
 					.bind(port).sync().channel();
@@ -111,10 +122,15 @@ final class BenchHttpServer implements AutoCloseable {
 	private static final class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
 		private final byte[] environmentJson;
+		private final java.util.function.Supplier<Map<String, String>> stats;
+		private final java.util.function.Supplier<Map<String, String>> counters;
 
-		Handler(byte[] environmentJson) {
+		Handler(byte[] environmentJson, java.util.function.Supplier<Map<String, String>> stats,
+				java.util.function.Supplier<Map<String, String>> counters) {
 			super(true); // 方法返回后释放请求；回显时先 retain 一次内容，由回包写出后释放
 			this.environmentJson = environmentJson;
+			this.stats = stats;
+			this.counters = counters;
 		}
 
 		@Override
@@ -153,9 +169,16 @@ final class BenchHttpServer implements AutoCloseable {
 				}
 				case STATS_PATH -> {
 					if (HttpMethod.GET.equals(method)) {
-						byte[] stats = Json.write(new LinkedHashMap<String, Object>(ServerProbes.stats()))
-								.getBytes(StandardCharsets.UTF_8);
-						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(stats), HttpHeaderValues.APPLICATION_JSON);
+						byte[] body = Json.write(new LinkedHashMap<String, Object>(stats.get())).getBytes(StandardCharsets.UTF_8);
+						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(body), HttpHeaderValues.APPLICATION_JSON);
+					} else {
+						respond(ctx, request, HttpResponseStatus.METHOD_NOT_ALLOWED, Unpooled.EMPTY_BUFFER, null);
+					}
+				}
+				case COUNTERS_PATH -> {
+					if (HttpMethod.GET.equals(method)) {
+						byte[] body = Json.write(new LinkedHashMap<String, Object>(counters.get())).getBytes(StandardCharsets.UTF_8);
+						respond(ctx, request, HttpResponseStatus.OK, Unpooled.wrappedBuffer(body), HttpHeaderValues.APPLICATION_JSON);
 					} else {
 						respond(ctx, request, HttpResponseStatus.METHOD_NOT_ALLOWED, Unpooled.EMPTY_BUFFER, null);
 					}

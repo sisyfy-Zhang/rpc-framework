@@ -17,7 +17,9 @@ import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.error.YAMLException;
 
+import com.feynman.rpc.core.cluster.Cluster;
 import com.feynman.rpc.core.extension.ExtensionLoader;
+import com.feynman.rpc.core.loadbalance.LoadBalance;
 import com.feynman.rpc.core.serialize.Serializer;
 
 /**
@@ -87,6 +89,7 @@ final class ProfileLoader {
 		Profile.Isolation isolation = isolation(top.section("isolation", true), problems);
 		Profile.Measure measure = measure(top.section("measure", true), problems, load);
 		List<Profile.Assertion> assertions = assertions(top.section("assert", false), problems);
+		crossCheckFaults(target, load, problems);
 
 		if (!problems.isEmpty()) {
 			throw new ProfileException(source, problems);
@@ -98,7 +101,8 @@ final class ProfileLoader {
 		if (s == null) {
 			return null;
 		}
-		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http", "server_executor");
+		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http", "server_executor", "load_balance",
+				"cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace");
 		// 内置 rpc / http + classpath 上的 CallTargetProvider（对比对象）；不认识的名字报错并列出可用的全部 transport
 		Map<String, CallTargetProvider> plugins;
 		try {
@@ -160,8 +164,41 @@ final class ProfileLoader {
 		} else if (s.has("server_executor")) {
 			problems.add("target.server_executor: only applies to transport = rpc (a comparison server's executor is its own server option)");
 		}
+		Profile.RpcOptions rpcOptions = rpcOptions(s, problems, transport, serverExecutor);
 		return new Profile.Target(transport, service, method, kind, size, serializer, providers == null ? 0 : providers, null, 0,
-				connections, serverExecutor);
+				connections, serverExecutor, rpcOptions);
+	}
+
+	/** rpc 卡的可选字段（负载均衡、容错、重试、服务端排队上限与业务等待）；其它 transport 写了就拒绝。 */
+	private static Profile.RpcOptions rpcOptions(Section s, List<String> problems, String transport, String serverExecutor) {
+		List<String> keys = List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace");
+		if (!Profile.TRANSPORT_RPC.equals(transport)) {
+			for (String key : keys) {
+				if (s.has(key)) {
+					problems.add("target." + key + ": only applies to transport = rpc");
+				}
+			}
+			return transport == null ? Profile.RpcOptions.DEFAULTS : null;
+		}
+		String loadBalance = s.has("load_balance")
+				? s.oneOf("load_balance", false, ExtensionLoader.getExtensionLoader(LoadBalance.class).getSupportedExtensions())
+				: null;
+		String cluster = s.has("cluster") ? s.oneOf("cluster", false, ExtensionLoader.getExtensionLoader(Cluster.class).getSupportedExtensions())
+				: null;
+		Integer retries = s.has("retries") ? s.integer("retries", false, 0, 10) : null;
+		Integer queue = s.has("server_queue_capacity") ? s.integer("server_queue_capacity", false, 0, 10_000_000) : null;
+		if (queue != null && serverExecutor != null && !"fixed".equals(serverExecutor)) {
+			problems.add("target.server_queue_capacity: only applies to server_executor: fixed (got " + serverExecutor + ")");
+		}
+		Duration work = s.has("server_work") ? s.duration("server_work", false) : null;
+		if (work != null && work.compareTo(Duration.ofSeconds(1)) > 0) {
+			problems.add("target.server_work: " + Durations.format(work) + " is longer than 1s; this is a simulated IO wait, not a sleep test");
+		}
+		Duration grace = s.has("server_deregister_grace") ? s.durationAllowZero("server_deregister_grace", false) : null;
+		if (grace != null && grace.compareTo(Duration.ofSeconds(30)) > 0) {
+			problems.add("target.server_deregister_grace: " + Durations.format(grace) + " is longer than 30s");
+		}
+		return new Profile.RpcOptions(loadBalance, cluster, retries, queue, work, grace);
 	}
 
 	/**
@@ -182,6 +219,11 @@ final class ProfileLoader {
 		}
 		if (s.has("connections")) {
 			problems.add("target.connections: does not apply to transport = http (the connection pool is target.http.connections)");
+		}
+		for (String key : List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace")) {
+			if (s.has(key)) {
+				problems.add("target." + key + ": only applies to transport = rpc");
+			}
 		}
 		Section http = s.section("http", false);
 		if (http == null) {
@@ -228,7 +270,7 @@ final class ProfileLoader {
 		if (s == null) {
 			return null;
 		}
-		s.allowOnly("model", "concurrency", "rate", "duration", "warmup", "steady_window", "rounds", "timeout");
+		s.allowOnly("model", "concurrency", "rate", "duration", "warmup", "steady_window", "rounds", "timeout", "steps", "faults");
 		String model = s.oneOf("model", true, Set.of(Profile.MODEL_CLOSED, Profile.MODEL_OPEN));
 		// 另一种模型的字段可以出现（例如卡片同时写了 concurrency 与 rate），只记录不使用
 		Integer concurrency = s.integer("concurrency", false, 1, 100_000);
@@ -236,10 +278,18 @@ final class ProfileLoader {
 			problems.add("load.concurrency: required when load.model = closed");
 		}
 		Integer rate = s.integer("rate", false, 1, 10_000_000);
-		if (Profile.MODEL_OPEN.equals(model) && s.raw("rate") == null) {
-			problems.add("load.rate: required when load.model = open");
+		boolean hasSteps = s.has("steps");
+		if (Profile.MODEL_OPEN.equals(model) && s.raw("rate") == null && !hasSteps) {
+			problems.add("load.rate: required when load.model = open (or give load.steps)");
 		}
 		Duration duration = s.duration("duration", true);
+		List<Profile.Step> steps = steps(s, problems, model, duration);
+		if (hasSteps && s.raw("rate") != null) {
+			problems.add("load.rate: do not combine with load.steps (the steps define the rate; the peak step is the in-flight cap)");
+		}
+		if (!steps.isEmpty()) {
+			rate = steps.stream().mapToInt(Profile.Step::rate).max().orElse(1);
+		}
 		Duration warmup = s.durationAllowZero("warmup", true);
 		Duration windowStart = null;
 		Duration windowEnd = null;
@@ -276,7 +326,132 @@ final class ProfileLoader {
 				problems.add("load: rate x timeout x 2 = " + (long) cap + " in-flight calls would be allowed; lower rate or timeout");
 			}
 		}
-		return new Profile.Load(model, concurrency, rate, duration, warmup, windowStart, windowEnd, rounds == null ? 0 : rounds, timeout);
+		List<Profile.Fault> faults = faults(s, problems, duration);
+		if (!faults.isEmpty() && rounds != null && rounds != 1) {
+			problems.add("load.rounds: must be 1 when load.faults is given (a fault such as kill-9 cannot be replayed in the next round; "
+					+ "repeat the experiment as separate runs on a fresh topology)");
+		}
+		return new Profile.Load(model, concurrency, rate, duration, warmup, windowStart, windowEnd, rounds == null ? 0 : rounds, timeout,
+				steps, faults);
+	}
+
+	/**
+	 * {@code load.steps}：开环阶梯，{@code [{rate, duration}, ...]}，按顺序切换速率；各级时长之和必须等于 {@code load.duration}。
+	 * 不写 = 原口径（单一速率）。
+	 */
+	private static List<Profile.Step> steps(Section s, List<String> problems, String model, Duration duration) {
+		List<Profile.Step> steps = new ArrayList<>();
+		if (!s.has("steps")) {
+			return steps;
+		}
+		Object raw = s.raw("steps");
+		if (!(raw instanceof List<?> list) || list.isEmpty()) {
+			problems.add("load.steps: expected a non-empty list of { rate, duration }, got " + describe(raw));
+			return steps;
+		}
+		if (Profile.MODEL_CLOSED.equals(model)) {
+			problems.add("load.steps: only applies to load.model = open");
+		}
+		Duration total = Duration.ZERO;
+		boolean complete = true;
+		for (int i = 0; i < list.size(); i++) {
+			Object item = list.get(i);
+			String path = "load.steps[" + i + "]";
+			if (!(item instanceof Map<?, ?> m)) {
+				problems.add(path + ": expected a mapping { rate, duration }, got " + describe(item));
+				complete = false;
+				continue;
+			}
+			Section step = new Section(path, m, problems);
+			step.allowOnly("rate", "duration");
+			Integer rate = step.integer("rate", true, 1, 10_000_000);
+			Duration d = step.duration("duration", true);
+			if (rate == null || d == null) {
+				complete = false;
+				continue;
+			}
+			total = total.plus(d);
+			steps.add(new Profile.Step(rate, d));
+		}
+		if (complete && duration != null && !total.equals(duration)) {
+			problems.add("load.steps: durations add up to " + Durations.format(total) + " but load.duration is " + Durations.format(duration));
+		}
+		return steps;
+	}
+
+	/**
+	 * {@code load.faults}：故障时间表 {@code [{at, kind, target, ...参数}]}。harness 不执行故障，只把时间表交给驱动脚本
+	 * （见 {@link Profile.Fault}）；这里校验 kind 与参数是否相配、时刻是否落在本轮之内。target 的范围在 {@link #crossCheckFaults} 里核对。
+	 */
+	private static List<Profile.Fault> faults(Section s, List<String> problems, Duration duration) {
+		List<Profile.Fault> faults = new ArrayList<>();
+		if (!s.has("faults")) {
+			return faults;
+		}
+		Object raw = s.raw("faults");
+		if (!(raw instanceof List<?> list) || list.isEmpty()) {
+			problems.add("load.faults: expected a non-empty list of { at, kind, target, ... }, got " + describe(raw));
+			return faults;
+		}
+		for (int i = 0; i < list.size(); i++) {
+			Object item = list.get(i);
+			String path = "load.faults[" + i + "]";
+			if (!(item instanceof Map<?, ?> m)) {
+				problems.add(path + ": expected a mapping { at, kind, target, ... }, got " + describe(item));
+				continue;
+			}
+			Section f = new Section(path, m, problems);
+			String kind = f.oneOf("kind", true, Profile.FAULT_KINDS);
+			Duration at = f.durationAllowZero("at", true);
+			Integer target = f.integer("target", true, 1, 1024);
+			Duration latency = null;
+			Duration jitter = null;
+			Duration timeout = null;
+			String stream = null;
+			if (Profile.TOXIC_LATENCY.equals(kind)) {
+				f.allowOnly("at", "kind", "target", "latency", "jitter", "stream");
+				latency = f.duration("latency", true);
+				jitter = f.has("jitter") ? f.durationAllowZero("jitter", false) : Duration.ZERO;
+				stream = f.has("stream") ? f.oneOf("stream", false, STREAMS) : "downstream";
+			} else if (Profile.TOXIC_TIMEOUT.equals(kind)) {
+				f.allowOnly("at", "kind", "target", "timeout", "stream");
+				timeout = f.has("timeout") ? f.durationAllowZero("timeout", false) : Duration.ZERO;
+				stream = f.has("stream") ? f.oneOf("stream", false, STREAMS) : "both";
+			} else {
+				f.allowOnly("at", "kind", "target");
+			}
+			if (at != null && duration != null && at.compareTo(duration) >= 0) {
+				problems.add(path + ".at: " + Durations.format(at) + " is not inside the round (load.duration " + Durations.format(duration) + ")");
+			}
+			if (kind != null && at != null && target != null) {
+				faults.add(new Profile.Fault(at, kind, target, latency, jitter, timeout, stream));
+			}
+		}
+		for (int i = 1; i < faults.size(); i++) {
+			if (faults.get(i).at().compareTo(faults.get(i - 1).at()) < 0) {
+				problems.add("load.faults: list the faults in time order (faults[" + i + "].at is earlier than faults[" + (i - 1) + "].at)");
+				break;
+			}
+		}
+		return faults;
+	}
+
+	private static final Set<String> STREAMS = Set.of("downstream", "upstream", "both");
+
+	/** 故障只用于 rpc 卡（驱动脚本按注册中心拓扑杀进程 / 加 toxic），target 必须是存在的提供者编号。 */
+	private static void crossCheckFaults(Profile.Target target, Profile.Load load, List<String> problems) {
+		if (target == null || load == null || load.faults().isEmpty()) {
+			return;
+		}
+		if (target.transport() != null && !target.rpc()) {
+			problems.add("load.faults: only applies to transport = rpc (the fault driver works on a bench-server topology)");
+		}
+		for (int i = 0; i < load.faults().size(); i++) {
+			int t = load.faults().get(i).target();
+			if (target.providers() > 0 && t > target.providers()) {
+				problems.add("load.faults[" + i + "].target: " + t + " but target.providers is " + target.providers());
+			}
+		}
 	}
 
 	private static Profile.Isolation isolation(Section s, List<String> problems) {

@@ -13,12 +13,24 @@ import com.feynman.rpc.core.RpcException;
  * {@link java.util.concurrent.TimeoutException}）、{@code status:<Status>}（其余 {@link RpcException}，
  * 按 {@link RpcException#status()}）、{@code payload_mismatch}（回显内容不对）、{@code http_status:<code>}（HTTP 目标回了非 200）、
  * 对比对象抛出的 {@link BenchCallException} 按它自带的桶名（如 {@code grpc_status:UNAVAILABLE}）、
+ * {@code transport}（本框架客户端自己产生的传输失败：连不上、没有可用连接、连接在回包前断开、写失败、出站硬上限未发出、客户端已关闭——
+ * 它们是基类 {@link RpcException}，状态码是缺省的 SERVER_ERROR，以前落进 {@code status:SERVER_ERROR}，与服务端回的错误混在一起）、
+ * {@code no_provider}（提供者列表为空）、
  * 其它异常记完整类名（{@code backlog_dropped} 由开环驱动直接记，不经这里）。
  */
 final class ErrorClassifier {
 
 	static final String TIMEOUT = "timeout";
 	static final String PAYLOAD_MISMATCH = "payload_mismatch";
+	static final String TRANSPORT = "transport";
+	static final String NO_PROVIDER = "no_provider";
+	/**
+	 * 本框架客户端在传输层自己产生的失败的消息前缀（{@code NettyClient} / {@code ConnectionPool} / {@code ConnectionManager} /
+	 * {@code ClientHandler} / {@code RpcClient}）：都是基类 {@link RpcException}，靠消息区分；改了这些消息要同步这里（有测试守着）。
+	 */
+	static final java.util.List<String> TRANSPORT_PREFIXES = java.util.List.of("No active connection to ", "Failed to connect to ",
+			"No connection pool for: ", "Connection to ", "Failed to send request to ", "Send buffer to ", "RpcClient closed");
+	static final String NO_PROVIDER_PREFIX = "No available provider for: ";
 
 	private ErrorClassifier() {
 	}
@@ -29,6 +41,17 @@ final class ErrorClassifier {
 			return TIMEOUT;
 		}
 		if (t instanceof RpcException rpc) {
+			if (t.getClass() == RpcException.class && t.getMessage() != null) {
+				String message = t.getMessage();
+				if (message.startsWith(NO_PROVIDER_PREFIX)) {
+					return NO_PROVIDER;
+				}
+				for (String prefix : TRANSPORT_PREFIXES) {
+					if (message.startsWith(prefix)) {
+						return TRANSPORT;
+					}
+				}
+			}
 			return "status:" + rpc.status();
 		}
 		if (t instanceof PayloadMismatchException) {

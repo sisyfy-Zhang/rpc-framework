@@ -12,6 +12,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import org.slf4j.Logger;
@@ -98,6 +100,12 @@ public final class RpcClient implements AutoCloseable {
 	private final List<String> exceptionPrefixes;
 	/** 在途调用（代理层）：close 关闸后新调用抛 IllegalStateException，已进入的调用 close 会等它们完成。 */
 	private final InFlightGate gate = new InFlightGate();
+	/** Cluster 发起的非首次尝试（重试）累计数，见 {@link #retryAttempts()}。 */
+	private final LongAdder retryAttempts = new LongAdder();
+	/** 重试换到了与上一次尝试不同的节点的累计数，见 {@link #retryNodeSwitches()}。 */
+	private final LongAdder retryNodeSwitches = new LongAdder();
+	/** 每个提供者地址的累计尝试 / 失败 / 超时，见 {@link #nodeCallStats()}。 */
+	private final Map<String, NodeCounters> nodeCounters = new ConcurrentHashMap<>();
 	/** 保护 state 与连接池重建（refreshConnections）。持有它时绝不调用 Registry（见 close()）。 */
 	private final Object lifecycleLock = new Object();
 	private volatile State state = State.OPEN;
@@ -244,6 +252,47 @@ public final class RpcClient implements AutoCloseable {
 		return transport.unwritableConnectionSwitches();
 	}
 
+	/**
+	 * Cluster 发起的<b>非首次</b>尝试的累计数（failover 换节点重试、failback 的延迟重试都算；failfast 恒为 0）。
+	 * 与"调用数"无关：一次调用重试两次计 2。只读观测。
+	 */
+	public long retryAttempts() {
+		return retryAttempts.sum();
+	}
+
+	/** 重试选中的节点与同一调用上一次尝试的节点不同的累计数（{@link #retryAttempts()} 的子集）。只读观测。 */
+	public long retryNodeSwitches() {
+		return retryNodeSwitches.sum();
+	}
+
+	/**
+	 * 按提供者地址（{@code host:port}）的累计计数快照（地址按字典序）：每次 Cluster 向某节点发出的尝试计一次
+	 * {@link NodeCallStats#attempts()}（含重试）。只读观测，用于故障注入实验的"各节点份额"与"按节点的失败"；见 {@link NodeCallStats}。
+	 */
+	public Map<String, NodeCallStats> nodeCallStats() {
+		Map<String, NodeCallStats> snapshot = new java.util.TreeMap<>();
+		nodeCounters.forEach((address, c) -> snapshot.put(address,
+				new NodeCallStats(c.attempts.sum(), c.failures.sum(), c.timeouts.sum())));
+		return snapshot;
+	}
+
+	/**
+	 * 一个提供者地址的累计计数。
+	 *
+	 * @param attempts 向该节点发出的尝试数（含重试；本次调用 deadline 在发出前已耗尽的不算）
+	 * @param failures 让 Cluster 看到"该节点此刻不可用"的失败：传输失败（连不上、连接断开、写失败、出站硬上限未发出）与
+	 *                 服务端拒绝 SERVER_OVERLOADED（过载 / 停机）
+	 * @param timeouts 超时：deadline 内没有收到该节点的响应，或该节点以 DEADLINE_EXCEEDED 拒绝了在它那里过期的请求
+	 */
+	public record NodeCallStats(long attempts, long failures, long timeouts) {
+	}
+
+	private static final class NodeCounters {
+		final LongAdder attempts = new LongAdder();
+		final LongAdder failures = new LongAdder();
+		final LongAdder timeouts = new LongAdder();
+	}
+
 	private ServiceDirectory directoryFor(ServiceKey key) {
 		ServiceDirectory existing = directories.get(key);
 		if (existing != null) {
@@ -288,8 +337,36 @@ public final class RpcClient implements AutoCloseable {
 
 	private CompletableFuture<Result> invokeCluster(ServiceDirectory directory, Invocation invocation, int retries) {
 		ClusterInvocation clusterInvocation = new ClusterInvocation(directory::instances, loadBalance, loadStats,
-				instance -> attempt(instance, invocation), retries, invocation.toString());
+				new AttemptTracker(invocation), retries, invocation.toString());
 		return cluster.invoke(clusterInvocation);
+	}
+
+	/**
+	 * 一次调用的"向某节点尝试"入口（交给 Cluster），顺带记下重试与换节点：同一调用的第二次及以后的尝试计入
+	 * {@link #retryAttempts}，节点与上一次不同时再计入 {@link #retryNodeSwitches}。同一调用的尝试是先后发生的
+	 * （下一次在上一次的 future 完成回调里发起），{@code previous} 用 volatile 保证跨线程可见。
+	 */
+	private final class AttemptTracker implements Function<ServiceInstance, CompletableFuture<Result>> {
+		private final Invocation invocation;
+		private volatile String previous;
+
+		AttemptTracker(Invocation invocation) {
+			this.invocation = invocation;
+		}
+
+		@Override
+		public CompletableFuture<Result> apply(ServiceInstance instance) {
+			String address = instance.address();
+			String last = previous;
+			if (last != null) {
+				retryAttempts.increment();
+				if (!last.equals(address)) {
+					retryNodeSwitches.increment();
+				}
+			}
+			previous = address;
+			return attempt(instance, invocation);
+		}
 	}
 
 	/**
@@ -318,6 +395,8 @@ public final class RpcClient implements AutoCloseable {
 		String address = instance.address();
 
 		loadStats.begin(address);
+		NodeCounters counters = nodeCounters.computeIfAbsent(address, a -> new NodeCounters());
+		counters.attempts.increment();
 		CompletableFuture<RpcMessage> response;
 		try {
 			// 调用方线程上只做序列化，不分配 ByteBuf：帧缓冲区由编码器在事件循环上分配（见 OutboundBody）
@@ -343,7 +422,11 @@ public final class RpcClient implements AutoCloseable {
 						try {
 							if (message.messageType() == MessageType.RESPONSE && message.status() == Status.SERVER_OVERLOADED) {
 								// 服务端拒绝（过载 / 停机）：业务没执行，与传输失败同一通道，Cluster 可排除该节点重试
+								counters.failures.increment();
 								throw new CompletionException(overloaded(message, address, invocation));
+							}
+							if (message.messageType() == MessageType.RESPONSE && message.status() == Status.DEADLINE_EXCEEDED) {
+								counters.timeouts.increment();
 							}
 							return decode(message, remoteMethod, invocation);
 						} finally {
@@ -352,14 +435,19 @@ public final class RpcClient implements AutoCloseable {
 					}
 					Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
 					if (cause instanceof TimeoutException) {
+						counters.timeouts.increment();
 						return Result.exception(new RpcDeadlineExceededException("no response within "
 								+ invocation.timeout().toMillis() + "ms from " + address + ": " + invocation, cause));
 					}
 					if (cause instanceof RpcSerializationException || cause instanceof RpcDeadlineExceededException) {
 						// 后者只来自调用方放弃等待（见上）：deadline 已过，进结果通道、不重试
+						if (cause instanceof RpcDeadlineExceededException) {
+							counters.timeouts.increment();
+						}
 						return Result.exception(cause);
 					}
 					// 传输失败：让 future 异常完成，Cluster 据此决定是否换节点重试
+					counters.failures.increment();
 					throw error instanceof CompletionException ce ? ce : new CompletionException(cause);
 				});
 	}

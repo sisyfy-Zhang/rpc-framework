@@ -183,7 +183,8 @@ final class MarkdownReport {
 		} else {
 			row(md, "序列化 / 提供者", str(target.get("serializer")) + " / " + str(target.get("providers")) + " 个");
 			row(md, "连接", str(runTarget.get("address")) + "，提供者 " + joined(runTarget.get("providers")) + "，每节点连接 "
-					+ str(runTarget.get("connections_per_node")) + "，负载均衡 " + str(runTarget.get("load_balance")) + "，重试 0");
+					+ str(runTarget.get("connections_per_node")) + "，负载均衡 " + str(runTarget.get("load_balance")) + "，重试 "
+					+ (runTarget.get("retries") == null ? "0" : str(runTarget.get("retries"))));
 		}
 		if (runTarget.get("connections_meaning") != null) {
 			// target.connections 的含义随 transport 不同；写明卡片的值（缺省 = 各框架缺省）与实际生效的连接数
@@ -191,7 +192,24 @@ final class MarkdownReport {
 					+ " → 实际 " + str(runTarget.get("connections_per_node")) + "（" + str(runTarget.get("connections_meaning")) + "）");
 		}
 		row(md, "负载模型", closed ? "闭环（closed），并发 " + str(load.get("concurrency")) + " 个虚拟用户"
-				: "开环（open），" + str(load.get("rate")) + " req/s 等间隔发出，在途上限 " + str(load.get("inflight_cap")));
+				: load.get("steps") instanceof List<?> steps && !steps.isEmpty()
+						? "开环（open）阶梯：" + String.join(" → ", steps.stream().map(st -> str(map(st).get("rate")) + " req/s × " + str(map(st).get("duration")))
+								.toList()) + "，在途上限 " + str(load.get("inflight_cap")) + "（按峰值）"
+						: "开环（open），" + str(load.get("rate")) + " req/s 等间隔发出，在途上限 " + str(load.get("inflight_cap")));
+		if (load.get("faults") instanceof List<?> faults && !faults.isEmpty()) {
+			Map<?, ?> runFaults = map(run.get("faults"));
+			List<String> items = new ArrayList<>();
+			for (Object f : faults) {
+				Map<?, ?> fault = map(f);
+				items.add(str(fault.get("at")) + " " + str(fault.get("kind")) + " #" + str(fault.get("target")));
+			}
+			row(md, "故障（卡片）", String.join("；", items) + (runFaults.isEmpty() ? "" : "。本次运行：" + str(runFaults.get("mode"))
+					+ (runFaults.get("variant") == null ? "" : "，变体 " + runFaults.get("variant"))));
+		}
+		if ("rpc".equals(target.get("transport")) && runTarget.get("cluster_options_source") != null) {
+			row(md, "负载均衡 / 容错 / 重试", str(runTarget.get("load_balance")) + " / " + str(runTarget.get("cluster")) + " / " + str(runTarget.get("retries"))
+					+ "（来源 " + str(runTarget.get("cluster_options_source")) + "）");
+		}
 		row(md, "时长", str(load.get("duration")) + " / 轮，预热 " + str(load.get("warmup")) + "，统计窗口 "
 				+ joinedBrackets(load.get("steady_window")) + "，共 " + str(load.get("rounds")) + " 轮");
 		row(md, "超时", str(load.get("timeout")));
@@ -235,10 +253,11 @@ final class MarkdownReport {
 			cells.add(str(path(round, "window", "requests")));
 			Map<?, ?> latency = map(round.get("latency_ms"));
 			for (String item : report) {
+				boolean dagger = Boolean.TRUE.equals(round.get("dispatcher_delayed_informational")) && item.startsWith("p");
 				cells.add(switch (item) {
 					case "throughput" -> num(round.get("throughput_rps"), 1);
 					case "errors_by_status" -> errors(round);
-					default -> num(latency.get(item), 3);
+					default -> num(latency.get(item), 3) + (dagger ? "†" : "");
 				});
 			}
 			if (!closed) {
@@ -259,6 +278,13 @@ final class MarkdownReport {
 			}
 		}
 		md.append('\n');
+		for (Object r : list(json.get("rounds"))) {
+			Map<?, ?> round = map(r);
+			if (Boolean.TRUE.equals(round.get("dispatcher_delayed_informational"))) {
+				md.append("† 第 ").append(str(round.get("round"))).append(" 轮发出滞后 p99 ").append(num(path(round, "dispatch_lag_ms", "p99"), 3))
+						.append(" ms（超过 1ms），延迟数字仅供参考（故障注入 / 阶梯卡只记标志、不判无效；错误数、恢复时间、节点份额不受影响）。\n\n");
+			}
+		}
 		md.append("正式轮：第 ").append(str(official)).append(" 轮（").append(str(summary.get("selection_rule"))).append("）。");
 		Map<?, ?> spread = map(summary.get("spread"));
 		List<String> spreads = new ArrayList<>();
@@ -272,6 +298,7 @@ final class MarkdownReport {
 			md.append("各轮极差：").append(String.join("，", spreads)).append("。");
 		}
 		md.append("\n\n");
+		TimelineReport.windowExecutorLine(md, list(json.get("rounds")), official);
 		for (Object r : list(json.get("rounds"))) {
 			Map<?, ?> round = map(r);
 			if (official != null && official.equals(round.get("round")) && IoSampler.hasGroups(round)) {
@@ -280,6 +307,8 @@ final class MarkdownReport {
 				md.append('\n');
 			}
 		}
+
+		TimelineReport.render(md, sub, list(json.get("rounds")));
 
 		md.append(sub).append(" 断言\n\n");
 		List<Object> asserts = list(validity.get("asserts"));

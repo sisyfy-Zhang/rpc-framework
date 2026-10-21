@@ -152,7 +152,10 @@ class RpcMetricsEndToEndTest {
 		assertEquals(0.0, registry.find(RpcServerMetrics.OUTBOUND_OVERLOAD_REJECTIONS).functionCounter().count());
 		assertEquals(0.0, registry.find(RpcClientMetrics.SEND_BUFFER_REJECTIONS).functionCounter().count());
 		assertEquals(0.0, registry.find(RpcClientMetrics.UNWRITABLE_SWITCHES).functionCounter().count());
-		assertEquals(2, serverMetrics.counters().size());
+		// 执行器过载 / 停机拒绝（FunctionCounter，正常负载下为 0）
+		assertEquals(0.0, registry.find(RpcServerMetrics.EXECUTOR_REJECTIONS).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcServerMetrics.SHUTDOWN_REJECTIONS).functionCounter().count());
+		assertEquals(4, serverMetrics.counters().size());
 		assertEquals(2, clientMetrics.counters().size());
 		await().atMost(5, TimeUnit.SECONDS).until(() -> gauge(RpcServerMetrics.CONNECTIONS) == gauge(RpcClientMetrics.CONNECTIONS));
 		assertEquals("slept 500", slow.get(5, TimeUnit.SECONDS));

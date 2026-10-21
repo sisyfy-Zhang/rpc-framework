@@ -19,7 +19,10 @@ import io.micrometer.core.instrument.Tags;
  *   <li>{@value #CONNECTIONS}：已接受、尚未关闭的入站连接数（{@link RpcServer#activeConnections()}）；</li>
  *   <li>{@value #AUTO_READ_PAUSES}（FunctionCounter）：出站背压因连接不可写而暂停读的累计次数（{@link RpcServer#autoReadPauses()}）；</li>
  *   <li>{@value #OUTBOUND_OVERLOAD_REJECTIONS}（FunctionCounter）：连接待写字节超过出站硬上限而直接回 SERVER_OVERLOADED 的累计请求数
- *       （{@link RpcServer#outboundOverloadRejections()}）。</li>
+ *       （{@link RpcServer#outboundOverloadRejections()}）；</li>
+ *   <li>{@value #EXECUTOR_REJECTIONS}（FunctionCounter）：业务执行器过载（队列满 / 并发达到上限）而回 SERVER_OVERLOADED 的累计请求数
+ *       （{@link RpcServer#executorRejections()}）；</li>
+ *   <li>{@value #SHUTDOWN_REJECTIONS}（FunctionCounter）：优雅停机期间回 SERVER_OVERLOADED 的累计请求数（{@link RpcServer#shutdownRejections()}）。</li>
  * </ul>
  * 未启动与已关闭时读数为 0。弱引用、{@link #close()} 与多实例 tag 的约定同 {@link RpcClientMetrics}。
  */
@@ -29,6 +32,8 @@ public final class RpcServerMetrics implements AutoCloseable {
 	public static final String CONNECTIONS = "rpc.server.connections";
 	public static final String AUTO_READ_PAUSES = "rpc.server.autoread.pauses";
 	public static final String OUTBOUND_OVERLOAD_REJECTIONS = "rpc.server.outbound.overload.rejections";
+	public static final String EXECUTOR_REJECTIONS = "rpc.server.executor.rejections";
+	public static final String SHUTDOWN_REJECTIONS = "rpc.server.shutdown.rejections";
 
 	private final MeterRegistry registry;
 	private final List<Gauge> gauges;
@@ -64,7 +69,16 @@ public final class RpcServerMetrics implements AutoCloseable {
 				.description("Requests answered SERVER_OVERLOADED because their connection's outbound buffer exceeded the hard limit")
 				.tags(tags)
 				.register(registry);
-		return new RpcServerMetrics(registry, List.of(inflight, connections), List.of(pauses, rejections));
+		FunctionCounter executorRejections = FunctionCounter.builder(EXECUTOR_REJECTIONS, server, RpcServer::executorRejections)
+				.description("Requests answered SERVER_OVERLOADED because the business executor was saturated (queue full / concurrency cap)")
+				.tags(tags)
+				.register(registry);
+		FunctionCounter shutdownRejections = FunctionCounter.builder(SHUTDOWN_REJECTIONS, server, RpcServer::shutdownRejections)
+				.description("Requests answered SERVER_OVERLOADED because the server was shutting down")
+				.tags(tags)
+				.register(registry);
+		return new RpcServerMetrics(registry, List.of(inflight, connections),
+				List.of(pauses, rejections, executorRejections, shutdownRejections));
 	}
 
 	/** 绑定的 Gauge（测试与诊断用）。 */

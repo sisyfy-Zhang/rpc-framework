@@ -83,6 +83,10 @@ public final class NettyServer implements AutoCloseable {
 	private final LongAdder autoReadPauses = new LongAdder();
 	/** 因出站硬上限回 SERVER_OVERLOADED 的请求数（全部连接）。 */
 	private final LongAdder outboundOverloadRejections = new LongAdder();
+	/** 业务执行器过载（队列满 / 并发达到上限）拒绝的请求数，见 ServerHandler。 */
+	private final LongAdder executorRejections = new LongAdder();
+	/** 停机期间（在途闸门已关、执行器已关闭）拒绝的请求数，见 ServerHandler。 */
+	private final LongAdder shutdownRejections = new LongAdder();
 
 	public NettyServer(ServiceDispatcher dispatcher, ExecutorConfig executorConfig, byte fallbackSerializerCode) {
 		this(dispatcher, executorConfig, fallbackSerializerCode, 0, null, true);
@@ -165,7 +169,7 @@ public final class NettyServer implements AutoCloseable {
 				ch.pipeline().addLast(new IdleStateHandler(30, 20, 0, TimeUnit.SECONDS));
 				ch.pipeline().addLast(new RpcEncoder());
 				ch.pipeline().addLast(new ServerHandler(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures,
-						outboundHardLimit, outboundOverloadRejections));
+						outboundHardLimit, outboundOverloadRejections, executorRejections, shutdownRejections));
 			}
 		});
 		try {
@@ -232,6 +236,16 @@ public final class NettyServer implements AutoCloseable {
 	/** 因连接待写字节超过出站硬上限而回 SERVER_OVERLOADED 的累计请求数（全部连接）。 */
 	public long outboundOverloadRejections() {
 		return outboundOverloadRejections.sum();
+	}
+
+	/** 业务执行器过载（队列满 / 并发达到上限）而回 SERVER_OVERLOADED 的累计请求数（全部连接；不含停机拒绝）。 */
+	public long executorRejections() {
+		return executorRejections.sum();
+	}
+
+	/** 停机期间（在途闸门已关、执行器已关闭）回 SERVER_OVERLOADED 的累计请求数（全部连接）。 */
+	public long shutdownRejections() {
+		return shutdownRejections.sum();
 	}
 
 	/** 排队中的任务数。 */

@@ -56,6 +56,28 @@ class BenchHttpServerTest {
 		}
 	}
 
+	/** GET /counters（故障注入时间线的服务端计数通道）：缺省 HTTP 端点返回空对象；rpc bench server 接上的是 ServerCounters。 */
+	@Test
+	void countersPathAnswersOnTheIoThread() throws Exception {
+		HttpResponse<String> empty = client.send(HttpRequest.newBuilder(uri(BenchHttpServer.COUNTERS_PATH)).GET().build(),
+				HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, empty.statusCode());
+		assertEquals("{}", empty.body().trim());
+		try (BenchServer rpc = BenchServer.start(0, "127.0.0.1", null, "protobuf");
+				BenchHttpServer http = BenchHttpServer.start(0, rpc.environment(), rpc.statsSupplier(), rpc.countersSupplier())) {
+			HttpResponse<String> counters = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + http.port()
+					+ BenchHttpServer.COUNTERS_PATH)).GET().build(), HttpResponse.BodyHandlers.ofString());
+			Map<?, ?> json = (Map<?, ?>) Json.parse(counters.body());
+			assertEquals("0", json.get(ServerCounters.EXECUTOR_REJECTIONS));
+			assertEquals("0", json.get(ServerCounters.SHUTDOWN_REJECTIONS));
+			assertTrue(json.get(ServerCounters.QUEUE_WAIT) instanceof String);
+			HttpResponse<String> stats = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + http.port()
+					+ BenchHttpServer.STATS_PATH)).GET().build(), HttpResponse.BodyHandlers.ofString());
+			assertTrue(((Map<?, ?>) Json.parse(stats.body())).containsKey(BackpressureStats.AUTO_READ_PAUSES_KEY),
+					"the rpc server's /stats carries the same keys as BenchService.stats()");
+		}
+	}
+
 	@Test
 	void pingEnvironmentAndErrorPaths() throws Exception {
 		HttpResponse<String> ping = client.send(HttpRequest.newBuilder(uri(BenchHttpServer.PING_PATH)).GET().build(),

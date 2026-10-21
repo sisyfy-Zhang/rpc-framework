@@ -1,6 +1,7 @@
 package com.feynman.rpc.bench;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.LockSupport;
 
@@ -27,6 +28,11 @@ final class OpenLoopScheduler {
 	static final int CALIBRATION_PARKS = 10;
 
 	private final double intervalNanos;
+	/** 阶梯（{@code load.steps}）：第 k 级的起点 / 终点（相对本轮开始，纳秒）与间隔；没有阶梯时只有一级、终点无穷远。 */
+	private final long[] stepStarts;
+	private final long[] stepEnds;
+	private final double[] stepIntervals;
+	private final int[] stepRates;
 	private long spinNanos = INITIAL_SPIN_NANOS;
 	private long calibratedOversleepNanos;
 	private long parks;
@@ -35,7 +41,29 @@ final class OpenLoopScheduler {
 
 	/** 构造时先做一次校准（见 {@link #calibrate()}），所以要在本轮计划开始之前构造。 */
 	OpenLoopScheduler(int rate) {
-		this.intervalNanos = 1e9 / rate;
+		this(List.of(new Profile.Step(rate, null)));
+	}
+
+	/**
+	 * 阶梯速率：按顺序每一级以自己的 rate 等间隔发出，级内第 i 个的计划时刻 = 级起点 + round(i × 1e9 / rate)；到下一级起点即切换
+	 * （下一级从它的起点重新计数，不继承上一级的相位）。最后一级的 duration 为 null 时持续到本轮结束。校准按第一级的间隔做。
+	 */
+	OpenLoopScheduler(List<Profile.Step> steps) {
+		int n = steps.size();
+		this.stepStarts = new long[n];
+		this.stepEnds = new long[n];
+		this.stepIntervals = new double[n];
+		this.stepRates = new int[n];
+		long offset = 0;
+		for (int k = 0; k < n; k++) {
+			Profile.Step step = steps.get(k);
+			stepStarts[k] = offset;
+			stepEnds[k] = step.duration() == null ? Long.MAX_VALUE : offset + step.duration().toNanos();
+			stepIntervals[k] = 1e9 / step.rate();
+			stepRates[k] = step.rate();
+			offset = stepEnds[k];
+		}
+		this.intervalNanos = stepIntervals[0];
 		calibrate();
 	}
 
@@ -62,14 +90,21 @@ final class OpenLoopScheduler {
 
 	/** 在调用线程上运行，直到计划时刻到达 {@code endNanos}（不含）。 */
 	void run(long startNanos, long endNanos, Dispatcher dispatcher) {
-		for (long i = 0;; i++) {
-			long scheduled = startNanos + Math.round(i * intervalNanos);
-			if (scheduled - endNanos >= 0) {
-				return;
+		for (int k = 0; k < stepStarts.length; k++) {
+			long stepStart = startNanos + stepStarts[k];
+			long stepEnd = stepEnds[k] == Long.MAX_VALUE ? endNanos : startNanos + stepEnds[k];
+			for (long i = 0;; i++) {
+				long scheduled = stepStart + Math.round(i * stepIntervals[k]);
+				if (scheduled - endNanos >= 0) {
+					return;
+				}
+				if (scheduled - stepEnd >= 0) {
+					break;
+				}
+				long now = awaitUntil(scheduled);
+				dispatched++;
+				dispatcher.dispatch(scheduled, now);
 			}
-			long now = awaitUntil(scheduled);
-			dispatched++;
-			dispatcher.dispatch(scheduled, now);
 		}
 	}
 
@@ -100,6 +135,17 @@ final class OpenLoopScheduler {
 	Map<String, Object> describe() {
 		Map<String, Object> info = new LinkedHashMap<>();
 		info.put("interval_ns", Math.round(intervalNanos));
+		if (stepStarts.length > 1) {
+			List<Object> steps = new java.util.ArrayList<>();
+			for (int k = 0; k < stepStarts.length; k++) {
+				Map<String, Object> step = new LinkedHashMap<>();
+				step.put("rate", stepRates[k]);
+				step.put("start_ms", stepStarts[k] / 1_000_000);
+				step.put("interval_ns", Math.round(stepIntervals[k]));
+				steps.add(step);
+			}
+			info.put("steps", steps);
+		}
 		info.put("dispatched", dispatched);
 		info.put("parks", parks);
 		info.put("calibrated_max_oversleep_ns", calibratedOversleepNanos);

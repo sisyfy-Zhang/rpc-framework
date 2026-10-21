@@ -1,0 +1,35 @@
+# 口径卡（故障注入：优雅停机）：与 fault-kill-node-failfast-v1 的 --variant sigterm（服务端 deregisterGrace = 框架缺省 0）对照，
+# 只差 target.server_deregister_grace: 2s（服务端摘注册之后照常处理请求 2s、再开始拒绝新请求，等注册中心把下线推送传到消费端）。
+# 故障直接写成 sigterm（这张卡只回答优雅停机的问题）。与 fault-sigterm-grace2s-failover-v1 只差 target.cluster / target.retries。
+# 跑法：bench/bin/fault-run.sh --card fault-sigterm-grace2s-failfast-v1（fault-run.sh 按卡片给服务端传 --deregister-grace 2s）。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: fault-sigterm-grace2s-failfast-v1
+question: 3 个提供者、开环 5000 req/s，一个节点优雅停机（SIGTERM）且服务端 deregisterGrace = 2s 时，failfast 下是否零错误
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 3
+  load_balance: roundrobin
+  cluster: failfast
+  retries: 0
+  server_deregister_grace: 2s
+load:
+  model: open
+  rate: 5000
+  faults:
+    - { at: 20s, kind: sigterm, target: 2 }
+  duration: 60s
+  warmup: 10s
+  steady_window: [10s, 60s]
+  rounds: 1
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）；toxic-timeout 变体时第 2 个提供者经 toxiproxy 原生进程（同 WSL）
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p99, p999, max, errors_by_status]

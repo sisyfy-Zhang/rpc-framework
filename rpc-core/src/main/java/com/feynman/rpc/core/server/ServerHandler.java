@@ -69,6 +69,12 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 	private final LongAdder outboundOverloadRejections;
 	/** 本连接是否已经为出站硬上限记过 warn。只在事件循环上读写。 */
 	private boolean outboundOverloadWarned;
+	/** 本连接是否已经为执行器过载拒绝记过 warn。只在事件循环上读写。 */
+	private boolean executorRejectionWarned;
+	/** 所属服务端因业务执行器过载（队列满 / 并发达到上限）拒绝的请求数（全部连接共用；不含停机拒绝）。 */
+	private final LongAdder executorRejections;
+	/** 所属服务端因正在停机（在途闸门已关、执行器已关闭）拒绝的请求数（全部连接共用）。 */
+	private final LongAdder shutdownRejections;
 
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode) {
 		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, new LongAdder());
@@ -85,6 +91,19 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 	 */
 	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode,
 			LongAdder replyWriteFailures, long outboundHardLimit, LongAdder outboundOverloadRejections) {
+		this(dispatcher, bizExecutor, gate, fallbackSerializerCode, replyWriteFailures, outboundHardLimit, outboundOverloadRejections,
+				new LongAdder(), new LongAdder());
+	}
+
+	/**
+	 * @param executorRejections 所属服务端因业务执行器过载拒绝的请求计数（{@code RpcServer.executorRejections()}）
+	 * @param shutdownRejections 所属服务端因正在停机拒绝的请求计数（{@code RpcServer.shutdownRejections()}）
+	 */
+	ServerHandler(ServiceDispatcher dispatcher, BusinessExecutor bizExecutor, InFlightGate gate, byte fallbackSerializerCode,
+			LongAdder replyWriteFailures, long outboundHardLimit, LongAdder outboundOverloadRejections, LongAdder executorRejections,
+			LongAdder shutdownRejections) {
+		this.executorRejections = executorRejections;
+		this.shutdownRejections = shutdownRejections;
 		this.dispatcher = dispatcher;
 		this.bizExecutor = bizExecutor;
 		this.gate = gate;
@@ -136,6 +155,7 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 			}
 		}
 		if (!gate.tryEnter()) {
+			shutdownRejections.increment();
 			rejectNow(ctx, request, "server shutting down: request rejected while draining in-flight requests");
 			return;
 		}
@@ -144,8 +164,9 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 			bizExecutor.execute(new DispatchTask(ctx, request));
 		} catch (BusinessExecutor.Rejected e) {
 			gate.exit();
+			(e.shuttingDown() ? shutdownRejections : executorRejections).increment();
 			if (!e.shuttingDown()) {
-				log.warn("Rejected request {} from {}: {}", request.requestId(), ctx.channel().remoteAddress(), e.getMessage());
+				logExecutorRejection(ctx, request, e);
 			}
 			rejectNow(ctx, request, e.getMessage());
 		}
@@ -166,6 +187,25 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 					ctx.channel().remoteAddress(), pendingBytes, outboundHardLimit);
 		}
 		rejectNow(ctx, request, OUTBOUND_OVERLOAD_REASON);
+	}
+
+	/**
+	 * 执行器过载拒绝的日志：与回包写失败同一模式——每条连接第一次记一行 warn，之后只记 debug（计数照常进 {@code executorRejections}）。
+	 * 过载时每秒可能有上万次拒绝，逐条 warn 会在 IO 线程上同步写日志、把过载放大（突增实验里 20s 写出 7 万行、17MB）。
+	 */
+	private void logExecutorRejection(ChannelHandlerContext ctx, RpcMessage request, BusinessExecutor.Rejected e) {
+		if (!executorRejectionWarned) {
+			executorRejectionWarned = true;
+			log.warn("Rejected request {} from {}: {}; further executor rejections on this connection are counted in "
+					+ "RpcServer.executorRejections() and logged at DEBUG", request.requestId(), ctx.channel().remoteAddress(), e.getMessage());
+		} else if (log.isDebugEnabled()) {
+			log.debug("Rejected request {} from {}: {}", request.requestId(), ctx.channel().remoteAddress(), e.getMessage());
+		}
+	}
+
+	/** 本连接是否已经为执行器过载拒绝记过 warn（测试用）。 */
+	boolean executorRejectionWarned() {
+		return executorRejectionWarned;
 	}
 
 	/** 出站硬上限拒绝时回包里的原因（与执行器拒绝的 "server overloaded" 同一风格）。 */

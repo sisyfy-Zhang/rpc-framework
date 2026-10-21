@@ -46,6 +46,14 @@ public interface CallTarget extends AutoCloseable {
 	}
 
 	/**
+	 * 每个提供者此刻的轻量累计计数（地址 → {@code BenchService.counters()} 的内容），故障注入时间线每秒取一次。取某个提供者失败
+	 * （已被杀、连接挂住）时该地址的值为 null。缺省实现（对比对象、HTTP 卡）返回空表。调用方保证不在压测线程上调用。
+	 */
+	default Map<String, Map<String, String>> providerCounters() {
+		return Map.of();
+	}
+
+	/**
 	 * 进 JSON 的 {@code run.target}：怎么连的、客户端的关键配置。约定的键：{@code transport}、{@code mode}、{@code address}、
 	 * {@code providers}（实际提供者地址列表）、{@code serializer}、{@code connection_model}（连接与多路复用方式，一句话）、
 	 * {@code io_threads}、{@code retries}、{@code call_style}。

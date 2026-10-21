@@ -87,6 +87,8 @@ Micrometer 名（点分）在 Prometheus 里转成下划线，Timer 带 `_second
 | `rpc.server.connections` | `rpc_server_connections` | Gauge | 绑定时给的 tag | 已接受、尚未关闭的入站连接数，`RpcServer.activeConnections()` |
 | `rpc.server.autoread.pauses` | `rpc_server_autoread_pauses_total` | FunctionCounter | 绑定时给的 tag | 出站背压因连接不可写（待写字节超过高水位）而暂停读的累计次数，`RpcServer.autoReadPauses()`；稳态下持续增长说明有客户端读回包跟不上（[docs/probes/outbound-backpressure.md](probes/outbound-backpressure.md)） |
 | `rpc.server.outbound.overload.rejections` | `rpc_server_outbound_overload_rejections_total` | FunctionCounter | 绑定时给的 tag | 连接待写字节超过出站硬上限而直接回 SERVER_OVERLOADED 的累计请求数，`RpcServer.outboundOverloadRejections()` |
+| `rpc.server.executor.rejections` | `rpc_server_executor_rejections_total` | FunctionCounter | 绑定时给的 tag | 业务执行器过载（固定池队列满 / 虚拟线程或 direct 的并发达到上限）而直接回 SERVER_OVERLOADED 的累计请求数（业务没执行），`RpcServer.executorRejections()`；不含停机拒绝 |
+| `rpc.server.shutdown.rejections` | `rpc_server_shutdown_rejections_total` | FunctionCounter | 绑定时给的 tag | 优雅停机期间（DRAINING 阶段在途闸门已关、或业务执行器已关闭）回 SERVER_OVERLOADED（"server shutting down"）的累计请求数，`RpcServer.shutdownRejections()` |
 | `rpc.client.send.buffer.rejections` | `rpc_client_send_buffer_rejections_total` | FunctionCounter | 绑定时给的 tag | 连接待写字节超过出站硬上限、没有写出就以传输失败结束的累计请求数，`RpcClient.sendBufferRejections()` |
 | `rpc.client.unwritable.switches` | `rpc_client_unwritable_switches_total` | FunctionCounter | 绑定时给的 tag | 取连接时跳过不可写连接、改用同一节点另一条连接的累计次数，`RpcClient.unwritableConnectionSwitches()` |
 

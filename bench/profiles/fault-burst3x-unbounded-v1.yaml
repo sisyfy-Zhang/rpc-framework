@@ -1,0 +1,32 @@
+# 口径卡（故障注入：突增）：单提供者，服务端固定池 2 × 可用核数（绑 0-4 号核时 10 个线程），业务方法每次 parkNanos 1ms（模拟 IO 等待，
+# target.server_work）：容量约 9k req/s，基线 5000 约 55% 利用率，15000 为 1.6 × 容量。
+# 开环阶梯 5000 → 15000 → 5000 req/s（各 20s）。（2026-10-21 冒烟：2ms 时容量约 4.6k，低于基线 5000，阶梯失去意义，改为 1ms。）排队上限 100000（近似无界的对照，非缺省配置）。
+# 与 fault-burst3x-bounded-v1 只差 target.server_queue_capacity。
+# 跑法：bench/bin/fault-run.sh --card fault-burst3x-unbounded-v1（卡上没有故障，阶梯本身就是扰动；fault-run.sh 按卡片给服务端传 --work / --executor-queue）。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: fault-burst3x-unbounded-v1
+question: 单提供者、业务 1ms，开环 5000 → 15000 → 5000 req/s 突增时，近似无界排队的成功率、p99、拒绝数与回落后的恢复
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  server_work: 1ms
+  server_queue_capacity: 100000
+load:
+  model: open
+  steps: [{ rate: 5000, duration: 20s }, { rate: 15000, duration: 20s }, { rate: 5000, duration: 20s }]
+  duration: 60s
+  warmup: 10s
+  steady_window: [10s, 60s]
+  rounds: 1
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p99, p999, max, errors_by_status]

@@ -26,7 +26,34 @@ import java.util.Map;
  *                    只用于同一构建内的 A/B 对照；其它 transport 给了就是用法错误
  */
 public record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
-		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation) {
+		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation, String loadBalance, String cluster, Integer retries) {
+
+	/** 不含 {@code loadBalance / cluster / retries} 的形式，等价于它们为 null（卡片没写时取框架缺省、重试 0）。 */
+	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
+			Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation) {
+		this(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation, null, null, null);
+	}
+
+	/**
+	 * 同一组选项，换上 {@code run --loadbalance rr|p2c|<SPI 名>}、{@code --cluster <SPI 名>}、{@code --retries N}（null = 没给）。
+	 * 只用于 rpc 卡；卡片里写了同名字段时以卡片为准，命令行给了不同的值是用法错误（见 {@link ClusterChoice}）。
+	 */
+	HarnessOptions withCluster(String loadBalance, String cluster, String retries) {
+		Integer n = null;
+		if (retries != null) {
+			n = integer("--retries", retries);
+			if (n < 0 || n > 10) {
+				throw new IllegalArgumentException("--retries must be 0..10, got " + n);
+			}
+		}
+		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation,
+				loadBalance == null ? null : loadBalance.trim(), cluster == null ? null : cluster.trim(), n);
+	}
+
+	/** 给了任何只对 rpc 卡有效的集群选项。 */
+	boolean clusterOptionsGiven() {
+		return loadBalance != null || cluster != null || retries != null;
+	}
 
 	static final String WORKERS_PER_REQUEST = "per-request";
 	static final String WORKERS_POOL = "pool";
@@ -38,7 +65,7 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 	static final int OPEN_HTTP_IO_THREADS = 1;
 
 	/** 不带任何选项时的行为。 */
-	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null);
+	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null, null, null, null);
 
 	/** 不含 {@code flushConsolidation} 的旧形式（对比模块与既有测试用），等价于它为 null。 */
 	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
@@ -56,7 +83,8 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 				default -> throw new IllegalArgumentException("--flush-consolidation must be on or off, got \"" + onOff + "\"");
 			};
 		}
-		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flush);
+		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flush, loadBalance, cluster,
+				retries);
 	}
 
 	public HarnessOptions {

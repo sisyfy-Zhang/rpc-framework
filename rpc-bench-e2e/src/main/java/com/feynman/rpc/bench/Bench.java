@@ -102,10 +102,30 @@ public final class Bench {
 			return pluginServer(transport, rawArgs, out);
 		}
 		options.allowOnly("transport", "port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port", "io-threads",
-				"executor", "flush-consolidation", "outbound-backpressure", "write-buffer-water-mark");
+				"executor", "flush-consolidation", "outbound-backpressure", "write-buffer-water-mark", "executor-queue", "work", "advertise-port",
+				"deregister-grace");
 		int port = options.intValue("port");
 		int ioThreads = options.has("io-threads") ? options.intValue("io-threads") : 0;
-		ExecutorConfig executor = executor(options.value("executor", BenchServer.EXECUTOR_FIXED));
+		ExecutorConfig executor = executor(options.value("executor", BenchServer.EXECUTOR_FIXED),
+				options.has("executor-queue") ? options.intValue("executor-queue") : null);
+		long workNanos = 0;
+		if (options.has("work")) {
+			try {
+				workNanos = Durations.parse(options.value("work", null)).toNanos();
+			} catch (IllegalArgumentException e) {
+				throw new UsageException("--work: " + e.getMessage());
+			}
+		}
+		Integer advertisePort = options.has("advertise-port") ? options.intValue("advertise-port") : null;
+		java.time.Duration deregisterGrace = null;
+		if (options.has("deregister-grace")) {
+			String text = options.value("deregister-grace", null).trim();
+			try {
+				deregisterGrace = text.equals("0") ? java.time.Duration.ZERO : Durations.parse(text);
+			} catch (IllegalArgumentException e) {
+				throw new UsageException("--deregister-grace: " + e.getMessage());
+			}
+		}
 		boolean flushConsolidation = onOff("flush-consolidation", options.value("flush-consolidation", "on"));
 		boolean outboundBackpressure = onOff("outbound-backpressure", options.value("outbound-backpressure", "on"));
 		int[] waterMark = waterMark(options.value("write-buffer-water-mark", null));
@@ -124,7 +144,7 @@ public final class Bench {
 		BenchServer server;
 		try {
 			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation,
-					outboundBackpressure, waterMark);
+					outboundBackpressure, waterMark, advertisePort, workNanos, deregisterGrace);
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -157,7 +177,12 @@ public final class Bench {
 				+ " executor=" + server.environment().get("server_executor_kind") + " flush_consolidation="
 				+ server.environment().get("server_flush_consolidation") + " outbound_backpressure="
 				+ server.environment().get("server_outbound_backpressure") + " write_buffer_water_mark="
-				+ server.environment().get("server_write_buffer_water_mark"));
+				+ server.environment().get("server_write_buffer_water_mark")
+				+ (server.environment().containsKey("server_executor_queue_capacity")
+						? " executor_queue=" + server.environment().get("server_executor_queue_capacity") : "")
+				+ " work_ms=" + server.environment().get("server_work_ms")
+				+ " deregister_grace_ms=" + server.environment().get("server_deregister_grace_ms")
+				+ (advertisePort == null ? "" : " advertised_port=" + advertisePort));
 		out.flush();
 		stopped.await();
 		return OK;
@@ -169,6 +194,23 @@ public final class Bench {
 	 * 结果要标"非缺省"）。
 	 */
 	static ExecutorConfig executor(String kind) {
+		return executor(kind, null);
+	}
+
+	/**
+	 * @param queueCapacity {@code server --executor-queue <n>}：固定池的排队上限（只配 fixed）；null = 框架缺省
+	 *                      {@code ExecutorConfig.DEFAULT_QUEUE_CAPACITY}，线程数仍是框架缺省（2 × 可用核数）
+	 */
+	static ExecutorConfig executor(String kind, Integer queueCapacity) {
+		if (queueCapacity != null) {
+			if (!BenchServer.EXECUTOR_FIXED.equals(kind.trim())) {
+				throw new UsageException("--executor-queue only applies to --executor fixed");
+			}
+			if (queueCapacity < 0) {
+				throw new UsageException("--executor-queue must be >= 0, got " + queueCapacity);
+			}
+			return ExecutorConfig.fixed(((ExecutorConfig.Fixed) ExecutorConfig.defaults()).threads(), queueCapacity);
+		}
 		return switch (kind.trim()) {
 			case BenchServer.EXECUTOR_FIXED -> ExecutorConfig.defaults();
 			case BenchServer.EXECUTOR_VIRTUAL -> ExecutorConfig.virtualThreads();
@@ -247,13 +289,15 @@ public final class Bench {
 
 	private static int run(Options options, String[] rawArgs, PrintStream out) throws Exception {
 		options.allowOnly("profile", "out", "registry", "direct", "label", "metrics-port", "open-workers", "http-client", "io-threads", "io-busy-poll",
-				"pin-dispatcher", "pre-warmup", "flush-consolidation");
+				"pin-dispatcher", "pre-warmup", "flush-consolidation", "loadbalance", "cluster", "retries", "fault-schedule", "no-faults",
+				"fault-variant", "topology");
 		HarnessOptions harnessOptions;
 		try {
 			harnessOptions = HarnessOptions.parse(options.value("open-workers", null), options.value("http-client", null),
 					options.value("io-threads", null),
 					options.value("io-busy-poll", null), options.value("pin-dispatcher", null), options.value("pre-warmup", null))
-					.withFlushConsolidation(options.value("flush-consolidation", null));
+					.withFlushConsolidation(options.value("flush-consolidation", null))
+					.withCluster(options.value("loadbalance", null), options.value("cluster", null), options.value("retries", null));
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -268,6 +312,25 @@ public final class Bench {
 		Profile profile = ProfileLoader.load(profileFile);
 		if (harnessOptions.flushConsolidation() != null && !profile.target().rpc()) {
 			throw new UsageException("--flush-consolidation is RpcClientConfig.flushConsolidation and applies to transport: rpc cards only");
+		}
+		if (harnessOptions.clusterOptionsGiven()) {
+			if (!profile.target().rpc()) {
+				throw new UsageException("--loadbalance / --cluster / --retries apply to transport: rpc cards only");
+			}
+			try {
+				validateClusterNames(harnessOptions);
+				ClusterChoice.resolve(profile, harnessOptions);
+			} catch (IllegalArgumentException e) {
+				throw new UsageException(e.getMessage());
+			}
+		}
+		FaultPlan plan;
+		try {
+			plan = FaultPlan.of(profile, options.has("fault-schedule") ? Path.of(options.value("fault-schedule", null)) : null,
+					options.flag("no-faults"), options.value("fault-variant", null),
+					options.has("topology") ? Path.of(options.value("topology", null)) : null);
+		} catch (IllegalArgumentException e) {
+			throw new UsageException(e.getMessage());
 		}
 		CallTarget.Endpoint endpoint;
 		if (profile.target().http()) {
@@ -306,7 +369,7 @@ public final class Bench {
 				out.println("metrics http://0.0.0.0:" + metricsEndpoint.port() + PrometheusEndpoint.PATH
 						+ " (metrics filter on: say so in --label)");
 			}
-			outcome = BenchRunner.run(profile, endpoint, outDir, options.value("label", null), commandLine, out, metrics, harnessOptions);
+			outcome = BenchRunner.run(profile, endpoint, outDir, options.value("label", null), commandLine, out, metrics, harnessOptions, plan);
 		}
 		out.println("json: " + outcome.json().toAbsolutePath().normalize());
 		out.println("markdown: " + outcome.markdown().toAbsolutePath().normalize());
@@ -314,6 +377,21 @@ public final class Bench {
 		out.println("verdict: " + (outcome.exitCode() == OK ? "PASSED" : "FAILED") + " (all_rounds_valid="
 				+ validity.get("all_rounds_valid") + ", asserts_passed=" + validity.get("asserts_passed") + ")");
 		return outcome.exitCode();
+	}
+
+	/** {@code --loadbalance} / {@code --cluster} 的名字必须是 classpath 上的 SPI 扩展（{@code rr} 是 roundrobin 的简写）。 */
+	private static void validateClusterNames(HarnessOptions options) {
+		String lb = ClusterChoice.loadBalanceName(options.loadBalance());
+		Set<String> lbs = com.feynman.rpc.core.extension.ExtensionLoader.getExtensionLoader(com.feynman.rpc.core.loadbalance.LoadBalance.class)
+				.getSupportedExtensions();
+		if (lb != null && !lbs.contains(lb)) {
+			throw new IllegalArgumentException("--loadbalance must be rr or one of " + new java.util.TreeSet<>(lbs) + ", got \"" + lb + "\"");
+		}
+		Set<String> clusters = com.feynman.rpc.core.extension.ExtensionLoader.getExtensionLoader(com.feynman.rpc.core.cluster.Cluster.class)
+				.getSupportedExtensions();
+		if (options.cluster() != null && !clusters.contains(options.cluster())) {
+			throw new IllegalArgumentException("--cluster must be one of " + new java.util.TreeSet<>(clusters) + ", got \"" + options.cluster() + "\"");
+		}
 	}
 
 	/**
@@ -335,7 +413,7 @@ public final class Bench {
 			// HTTP 路径上没有任何指标 Filter：这里的 metrics_enabled 说的是被压的这条路径，与 RPC 端点的 --metrics-port 无关
 			environment.put("metrics_enabled", "false");
 			environment.put("endpoint", "http");
-			return BenchHttpServer.start(port, environment);
+			return BenchHttpServer.start(port, environment, server.statsSupplier(), server.countersSupplier());
 		} catch (InterruptedException | RuntimeException e) {
 			server.close();
 			if (endpoint != null) {
@@ -480,12 +558,18 @@ public final class Bench {
 				  server --port <p> [--host <advertised-host>] (--registry zk://host:port | --no-registry) [--serializer protobuf]
 				         [--metrics-port <p>] [--http-port <p>] [--io-threads <n>] [--executor fixed|virtual|direct]
 				         [--flush-consolidation on|off] [--outbound-backpressure on|off] [--write-buffer-water-mark <low>:<high>]
+				         [--executor-queue <n>] [--work <duration>] [--advertise-port <p>] [--deregister-grace <duration>|0]
+				                                       (fault-injection experiments)
 				  server --transport <name> --port <p> ...   (comparison server from a CallTargetProvider on the classpath)
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)
 				         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>]
 				         [--io-busy-poll on|off] [--pin-dispatcher <cpu>|off] [--pre-warmup <duration>|0]
 				         [--flush-consolidation on|off]   (rpc cards only: RpcClientConfig.flushConsolidation)
+				         [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N]   (rpc cards; the card's
+				                                       target.load_balance / cluster / retries win, a different value is an error)
+				         [--fault-schedule <file> | --no-faults] [--fault-variant sigterm|sigstop|toxic-timeout] [--topology <file>]
+				                                       (cards with load.faults; driven by bench/bin/fault-run.sh)
 				  report --in <dir|result.json> [--out <file.md>]
 				  compare --in <dir|result.json> [--out <file.md>]
 				  crossval --harness <result.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] --out <dir>
@@ -502,7 +586,7 @@ public final class Bench {
 
 	/** {@code --key value} 与 {@code --flag}；同一个键出现两次视为错误。 */
 	static final class Options {
-		private static final Set<String> FLAGS = Set.of("no-registry");
+		private static final Set<String> FLAGS = Set.of("no-registry", "no-faults");
 		private final Map<String, String> values = new HashMap<>();
 
 		static Options parse(String[] args, int from) {

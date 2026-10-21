@@ -25,4 +25,13 @@ public interface BenchService {
 	 * （{@link ServerProbes#stats()}）。压测端在每轮统计窗口起止各调用一次，差值写进 {@code rounds[].gc.server} / {@code rounds[].io.server}。
 	 */
 	Map<String, String> stats();
+
+	/**
+	 * 服务端此刻的轻量累计计数（不读 /proc，可以每秒调用）：执行器过载 / 停机拒绝、出站硬上限拒绝、在途与排队数、排队等待的累计直方图
+	 * （键见 {@link ServerCounters}）。故障注入实验的时间线每秒对每个提供者取一次，差值进 {@code rounds[].timeline}。
+	 * 不是 rpc bench server 的实现（对比对象）返回空表。
+	 */
+	default Map<String, String> counters() {
+		return Map.of();
+	}
 }

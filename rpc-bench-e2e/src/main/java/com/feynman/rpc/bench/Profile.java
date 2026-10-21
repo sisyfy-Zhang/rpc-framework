@@ -43,7 +43,19 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	 *                    {@code compare.sh} 据此给 bench server 传 {@code --executor}，压测端核对服务端环境里的实际执行器，不符则判定不通过
 	 */
 	public record Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
-			int providers, String httpUrl, int httpConnections, Integer connections, String serverExecutor) {
+			int providers, String httpUrl, int httpConnections, Integer connections, String serverExecutor, RpcOptions rpcOptions) {
+
+		/** 不含 {@code rpcOptions} 的形式：rpc 卡记全部缺省（{@link RpcOptions#DEFAULTS}），其余为 null。 */
+		public Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
+				int providers, String httpUrl, int httpConnections, Integer connections, String serverExecutor) {
+			this(transport, service, method, payloadKind, payloadSize, serializer, providers, httpUrl, httpConnections, connections,
+					serverExecutor, TRANSPORT_RPC.equals(transport) ? RpcOptions.DEFAULTS : null);
+		}
+
+		/** rpc 卡的可选字段；非 rpc 卡与旧构造方式为 {@link RpcOptions#DEFAULTS}。 */
+		RpcOptions rpcOptionsOrDefaults() {
+			return rpcOptions == null ? RpcOptions.DEFAULTS : rpcOptions;
+		}
 
 		/** 不含 {@code serverExecutor} 的旧形式：rpc 卡记缺省 {@code fixed}，其余为 null。 */
 		public Target(String transport, String service, String method, String payloadKind, int payloadSize, String serializer,
@@ -67,6 +79,78 @@ public record Profile(String id, String question, Target target, Load load, Isol
 		}
 	}
 
+	/**
+	 * rpc 卡的可选字段（故障注入实验用；全部不写 = 框架缺省 / 原口径）：
+	 *
+	 * @param loadBalance         {@code target.load_balance}：客户端负载均衡 SPI 名（{@code roundrobin} | {@code p2c}），null = 框架缺省
+	 * @param cluster             {@code target.cluster}：容错策略 SPI 名（{@code failfast} | {@code failover} | {@code failback}），null = 框架缺省
+	 * @param retries             {@code target.retries}：{@code ReferenceOptions.retries}，null = 0（原口径：不重试）
+	 * @param serverQueueCapacity {@code target.server_queue_capacity}：被压服务端固定池的排队上限（只配 {@code server_executor: fixed}），
+	 *                            null = 框架缺省 {@code ExecutorConfig.DEFAULT_QUEUE_CAPACITY}；即 bench server 的 {@code --executor-queue}
+	 * @param serverWork          {@code target.server_work}：业务方法里用 {@code LockSupport.parkNanos} 等待的时长（模拟 IO 等待），
+	 *                            null = 不等（原样回显）；即 bench server 的 {@code --work}
+	 * @param serverDeregisterGrace {@code target.server_deregister_grace}：被压服务端的 {@code RpcServerConfig.deregisterGrace}（优雅停机时
+	 *                            摘注册之后、开始拒绝新请求之前的等待），null = 框架缺省 0；即 bench server 的 {@code --deregister-grace}
+	 */
+	public record RpcOptions(String loadBalance, String cluster, Integer retries, Integer serverQueueCapacity, Duration serverWork,
+			Duration serverDeregisterGrace) {
+
+		/** 不含 {@code serverDeregisterGrace} 的形式（= 框架缺省 0）。 */
+		public RpcOptions(String loadBalance, String cluster, Integer retries, Integer serverQueueCapacity, Duration serverWork) {
+			this(loadBalance, cluster, retries, serverQueueCapacity, serverWork, null);
+		}
+
+		static final RpcOptions DEFAULTS = new RpcOptions(null, null, null, null, null, null);
+
+		/** 卡片是否写了任何一项。 */
+		boolean declared() {
+			return !equals(DEFAULTS);
+		}
+	}
+
+	/** 开环阶梯的一级：以 {@code rate} 发 {@code duration}（{@code load.steps}）。 */
+	public record Step(int rate, Duration duration) {
+	}
+
+	/**
+	 * 故障时间表的一项（{@code load.faults}）：harness 不执行故障，只在本轮开始时把时间表写给驱动脚本（{@code bench/bin/fault-run.sh}），
+	 * 由脚本在对应时刻执行；harness 记录时间线并读回脚本的执行记录。
+	 *
+	 * @param at      相对本轮开始（本轮 t = 0，预热段之后）的时刻
+	 * @param kind    {@link #FAULT_KINDS} 之一
+	 * @param target  提供者编号（1 起，对应 fault-topology.sh 的启动顺序）
+	 * @param latency {@code toxic-latency}：toxiproxy latency toxic 的延迟
+	 * @param jitter  {@code toxic-latency}：抖动（缺省 0）
+	 * @param timeout {@code toxic-timeout}：toxiproxy timeout toxic 的 timeout（缺省 0 = 连接挂住、数据丢弃、不关连接）
+	 * @param stream  toxic 方向：{@code downstream}（提供者 → 客户端）| {@code upstream} | {@code both}；非 toxic 的 kind 为 null
+	 */
+	public record Fault(Duration at, String kind, int target, Duration latency, Duration jitter, Duration timeout, String stream) {
+
+		/** 同一时刻、同一目标换一种 kind（{@code run --fault-variant}）；参数按新 kind 的缺省取。 */
+		Fault withKind(String newKind) {
+			if (TOXIC_TIMEOUT.equals(newKind)) {
+				return new Fault(at, newKind, target, null, null, Duration.ZERO, "both");
+			}
+			if (TOXIC_LATENCY.equals(newKind) || REMOVE_TOXIC.equals(newKind)) {
+				throw new IllegalArgumentException("--fault-variant " + newKind + " needs parameters; only kill-9 / sigterm / sigstop / toxic-timeout "
+						+ "can replace a fault");
+			}
+			return new Fault(at, newKind, target, null, null, null, null);
+		}
+	}
+
+	static final String TOXIC_LATENCY = "toxic-latency";
+	static final String TOXIC_TIMEOUT = "toxic-timeout";
+	static final String REMOVE_TOXIC = "remove-toxic";
+	static final String KILL_9 = "kill-9";
+	static final String SIGTERM = "sigterm";
+	static final String SIGSTOP = "sigstop";
+	static final String SIGCONT = "sigcont";
+	static final java.util.Set<String> FAULT_KINDS = java.util.Set.of(TOXIC_LATENCY, TOXIC_TIMEOUT, REMOVE_TOXIC, KILL_9, SIGTERM, SIGSTOP,
+			SIGCONT);
+	/** {@code run --fault-variant} 可替换成的 kind（替换卡片里全部 {@code kill-9}）。 */
+	static final java.util.Set<String> FAULT_VARIANTS = java.util.Set.of(KILL_9, SIGTERM, SIGSTOP, TOXIC_TIMEOUT);
+
 	static final String TRANSPORT_RPC = "rpc";
 	/** {@code target.server_executor} 的取值与缺省。 */
 	static final java.util.Set<String> SERVER_EXECUTORS = java.util.Set.of("fixed", "virtual", "direct");
@@ -79,13 +163,39 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	 * @param rate open 必填（req/s）；closed 时同上
 	 */
 	public record Load(String model, Integer concurrency, Integer rate, Duration duration, Duration warmup, Duration windowStart,
-			Duration windowEnd, int rounds, Duration timeout) {
+			Duration windowEnd, int rounds, Duration timeout, List<Step> steps, List<Fault> faults) {
+
+		/** 不含阶梯与故障的形式（原口径）。 */
+		public Load(String model, Integer concurrency, Integer rate, Duration duration, Duration warmup, Duration windowStart,
+				Duration windowEnd, int rounds, Duration timeout) {
+			this(model, concurrency, rate, duration, warmup, windowStart, windowEnd, rounds, timeout, List.of(), List.of());
+		}
+
+		public Load {
+			steps = steps == null ? List.of() : List.copyOf(steps);
+			faults = faults == null ? List.of() : List.copyOf(faults);
+		}
+
+		/** 卡片声明了阶梯或故障：本轮记每秒时间线（{@code rounds[].timeline}）；否则行为与原口径完全相同。 */
+		boolean timeline() {
+			return !steps.isEmpty() || !faults.isEmpty();
+		}
+
+		/** 开环的第一级速率（预热段用它，而不是峰值）：没有阶梯时就是 {@code rate}。 */
+		int initialRate() {
+			return steps.isEmpty() ? rate : steps.get(0).rate();
+		}
+
+		/** 同一负载换一组故障（{@code --no-faults} / {@code --fault-variant}）。 */
+		Load withFaults(List<Fault> newFaults) {
+			return new Load(model, concurrency, rate, duration, warmup, windowStart, windowEnd, rounds, timeout, steps, newFaults);
+		}
 
 		public boolean closed() {
 			return MODEL_CLOSED.equals(model);
 		}
 
-		/** 开环在途上限 = rate × timeout × 2（至少 1）。超过即 backlog_dropped，本轮无效。 */
+		/** 开环在途上限 = rate × timeout × 2（至少 1；有阶梯时 rate 是峰值那一级）。超过即 backlog_dropped，本轮无效。 */
 		long inflightCap() {
 			double cap = (double) rate * (timeout.toNanos() / 1e9) * 2;
 			return Math.max(1, (long) Math.ceil(cap));
@@ -109,6 +219,33 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	public record Assertion(String key, String metric, boolean upperBound, double threshold, String thresholdText) {
 	}
 
+	/** 一项故障的 JSON（{@code profile.parsed.load.faults[]} 与故障时间表文件共用）。 */
+	static Map<String, Object> faultJson(Fault fault) {
+		Map<String, Object> f = new LinkedHashMap<>();
+		f.put("at", Durations.format(fault.at()));
+		f.put("at_ms", Durations.millis(fault.at()));
+		f.put("kind", fault.kind());
+		f.put("target", fault.target());
+		if (fault.latency() != null) {
+			f.put("latency_ms", Durations.millis(fault.latency()));
+		}
+		if (fault.jitter() != null) {
+			f.put("jitter_ms", Durations.millis(fault.jitter()));
+		}
+		if (fault.timeout() != null) {
+			f.put("timeout_ms", Durations.millis(fault.timeout()));
+		}
+		if (fault.stream() != null) {
+			f.put("stream", fault.stream());
+		}
+		return f;
+	}
+
+	/** 同一张卡换一组故障（{@code --no-faults} 清空、{@code --fault-variant} 替换 kind）；卡片 id 与原文不变。 */
+	Profile withFaults(List<Fault> faults) {
+		return new Profile(id, question, target, load.withFaults(faults), isolation, measure, assertions, rawYaml);
+	}
+
 	/** 解析后的结构，进 JSON 的 {@code profile.parsed}。 */
 	Map<String, Object> toJson() {
 		Map<String, Object> t = new LinkedHashMap<>();
@@ -126,6 +263,16 @@ public record Profile(String id, String question, Target target, Load load, Isol
 		}
 		if (target.rpc()) {
 			t.put("server_executor", target.serverExecutor());
+			RpcOptions o = target.rpcOptionsOrDefaults();
+			if (o.declared()) {
+				t.put("load_balance", o.loadBalance());
+				t.put("cluster", o.cluster());
+				t.put("retries", o.retries());
+				t.put("server_queue_capacity", o.serverQueueCapacity());
+				t.put("server_work", o.serverWork() == null ? null : Durations.format(o.serverWork()));
+				t.put("server_work_ms", o.serverWork() == null ? null : Durations.millis(o.serverWork()));
+				t.put("server_deregister_grace", o.serverDeregisterGrace() == null ? null : Durations.format(o.serverDeregisterGrace()));
+			}
 		}
 		if (target.http()) {
 			Map<String, Object> http = new LinkedHashMap<>();
@@ -148,6 +295,24 @@ public record Profile(String id, String question, Target target, Load load, Isol
 		l.put("timeout", Durations.format(load.timeout()));
 		l.put("timeout_ms", Durations.millis(load.timeout()));
 		l.put("inflight_cap", load.closed() ? null : load.inflightCap());
+		if (!load.steps().isEmpty()) {
+			List<Object> steps = new ArrayList<>();
+			for (Step step : load.steps()) {
+				Map<String, Object> s = new LinkedHashMap<>();
+				s.put("rate", step.rate());
+				s.put("duration", Durations.format(step.duration()));
+				s.put("duration_ms", Durations.millis(step.duration()));
+				steps.add(s);
+			}
+			l.put("steps", steps);
+		}
+		if (!load.faults().isEmpty()) {
+			List<Object> faults = new ArrayList<>();
+			for (Fault fault : load.faults()) {
+				faults.add(faultJson(fault));
+			}
+			l.put("faults", faults);
+		}
 
 		Map<String, Object> i = new LinkedHashMap<>();
 		i.put("client_process", isolation.clientProcess());

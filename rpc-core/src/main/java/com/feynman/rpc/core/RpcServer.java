@@ -437,6 +437,30 @@ public final class RpcServer implements AutoCloseable {
 	}
 
 	/**
+	 * 业务执行器过载（固定池队列满 / 虚拟线程或 direct 的并发达到上限）而直接回 SERVER_OVERLOADED 的累计请求数（业务没执行）。
+	 * 不含停机期间的拒绝（见 {@link #shutdownRejections()}）。未启动时为 0。
+	 */
+	public long executorRejections() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.executorRejections();
+	}
+
+	/**
+	 * 优雅停机期间（DRAINING 阶段在途闸门已关、或业务执行器已关闭）回 SERVER_OVERLOADED（"server shutting down"）的累计请求数。
+	 * 未启动时为 0。
+	 */
+	public long shutdownRejections() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.shutdownRejections();
+	}
+
+	/** 业务执行器里排队、尚未开始执行的任务数（固定池；虚拟线程与 direct 恒为 0）。只读观测。未启动时为 0。 */
+	public int queuedBusinessTasks() {
+		NettyServer server = transport;
+		return server == null ? 0 : server.queuedBusinessTasks();
+	}
+
+	/**
 	 * 优雅下线，按顺序：
 	 * <ol>
 	 *   <li><b>取消注册重试</b>：停掉后台注册线程并等它退出，"正在进行的那次注册"要么没成功、要么已记进

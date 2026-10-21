@@ -44,4 +44,16 @@ class OpenLoopSchedulerTest {
 		assertEquals(333_333_333, scheduledTimes[1]);
 		assertEquals(666_666_667, scheduledTimes[2]);
 	}
+
+	/** 阶梯：每一级按自己的速率从级起点重新计数；到下一级起点即切换，最后一级到本轮结束为止。 */
+	@Test
+	void stepsSwitchRateAtEachStepStart() {
+		OpenLoopScheduler scheduler = new OpenLoopScheduler(java.util.List.of(new Profile.Step(2, java.time.Duration.ofSeconds(1)),
+				new Profile.Step(4, java.time.Duration.ofSeconds(1)), new Profile.Step(1, java.time.Duration.ofSeconds(1))));
+		long start = System.nanoTime() - 10_000_000_000L; // 全部落后：立即全部发出，只看计划时刻
+		java.util.List<Long> times = new java.util.ArrayList<>();
+		scheduler.run(start, start + 3_000_000_000L, (scheduled, now) -> times.add(scheduled - start));
+		assertEquals(java.util.List.of(0L, 500_000_000L, 1_000_000_000L, 1_250_000_000L, 1_500_000_000L, 1_750_000_000L, 2_000_000_000L), times);
+		assertTrue(scheduler.describe().containsKey("steps"));
+	}
 }

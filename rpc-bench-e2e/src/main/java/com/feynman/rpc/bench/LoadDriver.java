@@ -48,13 +48,105 @@ final class LoadDriver {
 	 * @param options 开环的执行者与调度线程绑核（{@link HarnessOptions}）
 	 */
 	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu, HarnessOptions options) {
+		return runRound(round, profile, target, cpu, options, FaultPlan.NONE);
+	}
+
+	/**
+	 * @param plan 故障计划（{@link FaultPlan}）：卡片有阶梯或故障时，本轮另起一个时间线采样线程（{@code bench-timeline-sampler}），
+	 *             本轮开始时写故障时间表、之后每秒采一次客户端与各提供者的计数；本轮结束后读回驱动脚本的执行记录
+	 */
+	static RoundRecorder runRound(int round, Profile profile, CallTarget target, CpuSampler cpu, HarnessOptions options, FaultPlan plan) {
+		clearExecuted(plan);
 		if (profile.load().closed()) {
-			RoundRecorder recorder = new RoundRecorder(round, profile);
+			RoundRecorder recorder = new RoundRecorder(round, profile, plan);
 			Thread sampler = startSampler(cpu, target, profile, recorder);
+			Thread timeline = startTimeline(target, recorder, plan);
 			closedLoop(profile, target, recorder);
-			return finish(recorder, sampler);
+			finish(recorder, sampler);
+			return finishTimeline(recorder, timeline, plan);
 		}
-		return openLoop(round, profile, target, cpu, options, true);
+		return openLoop(round, profile, target, cpu, options, true, plan);
+	}
+
+	private static void clearExecuted(FaultPlan plan) {
+		try {
+			plan.clearExecuted();
+		} catch (java.io.IOException e) {
+			throw new IllegalStateException("cannot clear the previous fault execution log " + plan.executedFile() + ": " + e, e);
+		}
+	}
+
+	/**
+	 * 时间线采样线程：先写故障时间表（本轮 t = 0 换算成墙钟毫秒，供驱动脚本对时），再在第 k 秒（k = 0, 1, ...）各取一次
+	 * 客户端计数与各提供者的 {@code counters()}，直到被中断。不在发压线程上做任何事。
+	 */
+	private static Thread startTimeline(CallTarget target, RoundRecorder recorder, FaultPlan plan) {
+		FaultTimeline timeline = recorder.timeline();
+		if (timeline == null) {
+			return null;
+		}
+		long epochAtStart = System.currentTimeMillis() - (System.nanoTime() - recorder.startNanos) / 1_000_000;
+		recorder.roundStartEpochMs(epochAtStart);
+		timeline.topology(plan.topology());
+		return Thread.ofVirtual().name("bench-timeline-sampler").start(() -> {
+			try {
+				plan.writeSchedule(epochAtStart);
+			} catch (java.io.IOException e) {
+				System.err.println("warning: could not write the fault schedule " + plan.schedule() + ": " + e);
+			}
+			try {
+				for (int k = 0; k < timeline.sampleSlots(); k++) {
+					sleepUntil(recorder.startNanos + k * 1_000_000_000L);
+					double offsetMs = (System.nanoTime() - recorder.startNanos) / 1e6;
+					Map<String, String> client;
+					try {
+						client = target.clientStats();
+					} catch (RuntimeException e) {
+						client = Map.of();
+					}
+					Map<String, Map<String, String>> providers;
+					try {
+						providers = target.providerCounters();
+					} catch (RuntimeException e) {
+						providers = Map.of();
+					}
+					timeline.sample(k, RoundRecorder.round3(offsetMs), client, providers);
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+	}
+
+	/** 本轮结束：停采样线程（再给它一个样本的时间），读回驱动脚本的执行记录。 */
+	private static RoundRecorder finishTimeline(RoundRecorder recorder, Thread sampler, FaultPlan plan) {
+		FaultTimeline timeline = recorder.timeline();
+		if (timeline == null) {
+			return recorder;
+		}
+		if (sampler != null) {
+			try {
+				// 最后一个整秒的样本：本轮结束后最多再等 1.5 秒
+				sampler.join(1_500);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			sampler.interrupt();
+		}
+		if (plan.inject()) {
+			timeline.executed(plan.readExecuted(recorder.roundStartEpochMs()));
+		} else if (FaultPlan.MODE_CONTROL.equals(plan.mode())) {
+			List<Map<String, Object>> control = new java.util.ArrayList<>();
+			for (int i = 0; i < plan.faults().size(); i++) {
+				Map<String, Object> e = new LinkedHashMap<>();
+				e.put("index", i);
+				e.put("executed_at_ms", null);
+				e.put("status", "control (--no-faults: not injected; recovery is measured at the planned time)");
+				control.add(e);
+			}
+			timeline.executed(control);
+		}
+		return recorder;
 	}
 
 	/**
@@ -63,8 +155,9 @@ final class LoadDriver {
 	 */
 	static Map<String, Object> preWarmup(Profile profile, CallTarget target, HarnessOptions options, Duration length) {
 		Profile.Load l = profile.load();
-		Profile.Load load = new Profile.Load(l.model(), l.concurrency(), l.rate(), length, Duration.ZERO, Duration.ZERO, length, 1,
-				l.timeout());
+		// 有阶梯时预热段按第一级的速率（而不是峰值）跑；不带阶梯与故障：预热段不写时间线、不碰故障时间表
+		Profile.Load load = new Profile.Load(l.model(), l.concurrency(), l.closed() ? l.rate() : Integer.valueOf(l.initialRate()), length, Duration.ZERO,
+				Duration.ZERO, length, 1, l.timeout());
 		Profile segment = new Profile(profile.id(), profile.question(), profile.target(), load, profile.isolation(), profile.measure(),
 				List.of(), profile.rawYaml());
 		RoundRecorder recorder;
@@ -73,7 +166,7 @@ final class LoadDriver {
 			closedLoop(segment, target, recorder);
 			recorder.finish();
 		} else {
-			recorder = openLoop(0, segment, target, null, options, false);
+			recorder = openLoop(0, segment, target, null, options, false, FaultPlan.NONE);
 		}
 		Map<String, Object> round = recorder.toJson();
 		Map<String, Object> summary = new LinkedHashMap<>();
@@ -145,6 +238,7 @@ final class LoadDriver {
 			io.put("server", ioSide(serverBefore, serverAfter));
 			recorder.io(io);
 			recorder.backpressure(BackpressureStats.delta(serverBefore, serverAfter, clientStatsBefore, clientStatsAfter));
+			recorder.serverExecutor(ServerCounters.windowDelta(serverBefore, serverAfter));
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		} catch (RuntimeException e) {
@@ -245,10 +339,10 @@ final class LoadDriver {
 	 * @param sample 是否做统计窗口的 CPU / GC 采样（预热段不做）
 	 */
 	private static RoundRecorder openLoop(int round, Profile profile, CallTarget target, CpuSampler cpu, HarnessOptions options,
-			boolean sample) {
+			boolean sample, FaultPlan plan) {
 		Profile.Load load = profile.load();
 		// 开环调度器在本轮计时开始之前构造：构造时的 park 校准不占用本轮的时间线
-		OpenLoopScheduler scheduler = new OpenLoopScheduler(load.rate());
+		OpenLoopScheduler scheduler = load.steps().isEmpty() ? new OpenLoopScheduler(load.rate()) : new OpenLoopScheduler(load.steps());
 		long cap = load.inflightCap();
 		AtomicLong inFlight = new AtomicLong();
 		AtomicLong maxInFlight = new AtomicLong();
@@ -313,9 +407,10 @@ final class LoadDriver {
 				dispatcherTid = tid;
 			}
 		}
-		RoundRecorder recorder = new RoundRecorder(round, profile);
+		RoundRecorder recorder = new RoundRecorder(round, profile, plan);
 		recorderRef.set(recorder);
 		Thread sampler = sample ? startSampler(cpu, target, profile, recorder) : null;
+		Thread timeline = sample ? startTimeline(target, recorder, plan) : null;
 		go.countDown();
 		try {
 			pacer.join();
@@ -335,6 +430,7 @@ final class LoadDriver {
 			pin.put("stray_threads_at_end", strays == null ? EnvironmentProbe.NA : strays);
 		}
 		finish(recorder, sampler);
+		finishTimeline(recorder, timeline, plan);
 		if (pacerFailure.get() != null) {
 			throw new IllegalStateException("open-loop scheduler failed", pacerFailure.get());
 		}

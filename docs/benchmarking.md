@@ -21,6 +21,7 @@
 - [交叉验证](#交叉验证)：harness 与 wrk / wrk2 打同一个 HTTP 目标——开环测量校验、闭环发压容量标定
 - [对比对象（gRPC / Dubbo）](#对比对象grpc--dubbo)：CallTarget SPI · 对等性 · 开箱即用与连接数对齐 · compare.sh
 - [并发扫描与连接数扫描](#并发扫描与连接数扫描)：sweep.sh
+- [故障注入](#故障注入)：慢节点 / 杀节点 / 突增 · 阶梯速率 · 故障时间表与驱动脚本 · 时间线与恢复时间 · fault-topology.sh / fault-run.sh
 - [已知局限](#已知局限)
 
 ## 构建
@@ -57,8 +58,12 @@ mvn -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package
 | `sweep-c4-closed128-rpc-v1`、`sweep-c8-closed128-rpc-v1` | 连接数扫描：与 `sweep-closed128-rpc-v1`（每节点 2 条）只差 `target.connections` | 闭环 128 并发，每节点 4 / 8 条 |
 | `sweep-c1-closed64-rpc-v1` | 单连接上限：与 `compare-closed64-rpc-v1` 只差 `target.connections: 1`，直接读"每连接吞吐"，与 gRPC 单 channel（`compare-closed64-grpc-v1`）对位 | 闭环 64 并发，每节点 1 条 |
 | `compare-closed64-rpc-direct-v1`、`compare-open10k-rpc-direct-v1`、`sweep-c1-closed64-rpc-direct-v1` | 执行器对照，**非缺省配置**：与对应的缺省卡只差 `target.server_executor: direct`（服务端 `ExecutorConfig.direct()`，业务方法在 IO 线程上执行），与 gRPC `--executor direct` 同类的上界对照点 | 同对应的缺省卡 |
+| `fault-slow-node-rr-v1`、`fault-slow-node-p2c-v1` | 故障注入·慢节点：3 个提供者（经 ZooKeeper），第 2 个在 20s 时经 toxiproxy 加 latency 20ms（jitter 5ms）、40s 移除；两张卡只差 `target.load_balance`；对照 = 同卡 `--no-faults` | 开环 5000 req/s，60s，1 轮 |
+| `fault-kill-node-failover-v1`、`fault-kill-node-failfast-v1` | 故障注入·杀节点：3 个提供者，20s 时 kill -9 第 2 个；两张卡只差 `target.cluster` / `target.retries`（failover 重试 2 / failfast 重试 0）；变体 `--fault-variant sigterm`（优雅停机对照）/ `toxic-timeout`（静默死亡）/ `sigstop`（进程冻结） | 开环 5000 req/s，60s，1 轮 |
+| `fault-sigterm-grace2s-failover-v1`、`fault-sigterm-grace2s-failfast-v1` | 故障注入·优雅停机：20s 时 SIGTERM 第 2 个提供者，服务端 `target.server_deregister_grace: 2s`；与杀节点卡的 `--fault-variant sigterm`（grace 0）对照 | 开环 5000 req/s，60s，1 轮 |
+| `fault-burst3x-bounded-v1`、`fault-burst3x-unbounded-v1` | 故障注入·突增：单提供者，业务方法 parkNanos 1ms（`target.server_work`；10 个业务线程时容量约 9k req/s，基线约 55% 利用率，15000 为 1.6 × 容量），固定池排队上限缺省 1000 vs 100000（`target.server_queue_capacity`，近似无界，非缺省） | 开环阶梯 5000 → 15000 → 5000 req/s，各 20s，1 轮 |
 
-loopback / compare / sweep 卡都是每轮 60s、预热 20s、统计窗口 [20s, 55s]、3 轮；两张 crossval 卡每轮 60s、预热 20s、统计窗口 [20s, 60s]
+loopback / compare / sweep 卡都是每轮 60s、预热 20s、统计窗口 [20s, 55s]、3 轮（fault 卡是 60s、预热 10s、窗口 [10s, 60s]、1 轮，见[故障注入](#故障注入)）；两张 crossval 卡每轮 60s、预热 20s、统计窗口 [20s, 60s]
 （40s，与工具的测量时长一致）、3 轮。**改口径就复制成新 id（`-v2`），不要原地改**：报告以卡片 id 为准，同一个 id 必须始终代表同一个口径。
 
 ### 字段说明
@@ -102,6 +107,12 @@ assert:                              # 可选
 | `target.connections` | 可选，1 ~ 64；不写 = 各框架缺省。rpc = `RpcClientConfig.connectionsPerNode`（缺省 2）；grpc = `ManagedChannel` 数（每个一条 HTTP/2 连接，每次调用轮询取一个，缺省 1）；dubbo = 独立的客户端实例数（各自的 FrameworkModel 与引用，各一条 triple 连接，每次调用轮询取一个；缺省 1。不用 reference 的 `connections` 参数：Dubbo 3.3.6 的 triple 忽略它，实测仍是 1 条连接）。实际生效的连接数与含义写进 `run.target.connections_per_node` / `connections_meaning`，Markdown 口径表一行"连接数（target.connections）"。http 卡不接受（它的连接池是 `target.http.connections`） |
 | `target.server_executor` | 只用于 rpc 卡：被压服务端的业务执行器，`fixed`（缺省 = 框架缺省 `ExecutorConfig.defaults()`）\| `virtual` \| `direct`。`compare.sh` / `sweep.sh` 据此给 bench server 传 `--executor`；压测端核对服务端环境里的 `server_executor_kind`，**不符则判定不通过**（数字不属于这张卡声明的配置），核对结果进 `validity.server_executor`；不是 `fixed` 时声明段写明"非缺省配置"。对比对象的服务端执行器由各自的服务端参数决定（`COMPARE_SERVER_ARGS_<T>`），卡上不接受这个字段 |
 | `target.http.url` / `target.http.connections` | 只用于 `transport: http`，见下节 |
+| `target.load_balance` / `target.cluster` / `target.retries` | 可选，只用于 rpc 卡（故障注入实验）：客户端负载均衡 SPI 名（`roundrobin` \| `p2c`）、容错策略 SPI 名（`failfast` \| `failover` \| `failback`）、`ReferenceOptions.retries`（0 ~ 10）。不写 = 框架缺省、重试 0（原口径）。命令行 `run --loadbalance / --cluster / --retries` 只在卡片没写时生效，给了不同的值是用法错误；实际值与来源进 `run.target.load_balance / cluster / retries / cluster_options_source` |
+| `target.server_queue_capacity` | 可选，只用于 rpc 卡且 `server_executor: fixed`：被压服务端固定池的排队上限（0 ~ 10000000，缺省 = 框架缺省 1000），即 `server --executor-queue`；压测端核对服务端环境的 `server_executor_queue_capacity`，不符判定不通过（`validity.server_options`） |
+| `target.server_deregister_grace` | 可选，只用于 rpc 卡：被压服务端的 `RpcServerConfig.deregisterGrace`（0 ~ 30s，缺省 = 框架缺省 0），即 `server --deregister-grace`；压测端核对服务端环境的 `server_deregister_grace_ms`（`validity.server_options`） |
+| `target.server_work` | 可选，只用于 rpc 卡：业务方法每次返回前 `LockSupport.parkNanos` 的时长（≤ 1s，模拟 IO 等待：占着业务线程、不占 CPU），即 `server --work`；不写 = 原样立即回显。压测端核对服务端环境的 `server_work_ms`（同上） |
+| `load.steps` | 可选，只用于开环：`[{rate, duration}, ...]`，按顺序切换速率（每级从级起点重新按自己的间隔计数），各级时长之和必须等于 `load.duration`；与 `load.rate` 互斥（`rate` 取峰值那一级，用于在途上限 `rate × timeout × 2`）。预热段（`--pre-warmup`）按第一级的速率跑。写了它（或 `load.faults`）本轮就记[时间线](#时间线与恢复时间) |
+| `load.faults` | 可选，只用于 rpc 卡，`load.rounds` 必须为 1：故障时间表 `[{at, kind, target, ...}]`（按时间顺序）。`at` 相对**本轮开始**（预热段之后的 t = 0）、落在本轮之内；`kind` ∈ `toxic-latency`（参数 `latency` 必填、`jitter` 缺省 0、`stream` 缺省 `downstream`）\| `toxic-timeout`（`timeout` 缺省 0 = 连接挂住不回包、不关连接；`stream` 缺省 `both`）\| `remove-toxic`（删掉该代理上的全部 toxic）\| `kill-9` \| `sigterm` \| `sigstop` \| `sigcont`；`target` 是提供者编号（1 起，`fault-topology.sh` 的启动顺序），不得超过 `target.providers`。harness 不执行故障，见[故障注入](#故障注入) |
 | `load.concurrency` / `load.rate` | 另一种模型的字段可以出现，只记录、不使用 |
 | `load.timeout` | 引用的超时；重试固定为 0（重试会把一次失败藏进更长的延迟） |
 | `measure.histogram.max` | 必须大于 `load.timeout`；超出上限的值按上限记录并计入 `histogram_clamped` |
@@ -163,6 +174,7 @@ YAML 只用 SnakeYAML 的 `SafeConstructor` 加载成 Map（`!!java...` 这类�
 - `profile` 须匹配 `[a-z0-9][a-z0-9._-]*` 且等于文件名去扩展名。
 - 枚举：`transport`（内置 `rpc` / `http` + classpath 上 `CallTargetProvider` 声明的名字；不认识时报错并列出全部可用的 transport，最常见的原因是没把对比模块加进 `BENCH_EXTRA_CP`）、`service`（对比对象只接受提供者声明的，缺省只有 `BenchService#echo`）、`payload.kind`、`model`、`client_process` / `server_process`、`serializer`（rpc：classpath 上实际可用的 SPI 名；对比对象：提供者声明的编码名）、`report` 的每一项（不得重复）。
 - 范围：`size` 1 ~ 4MiB，`concurrency` 1 ~ 100000，`rate` 1 ~ 10000000，`rounds` 1 ~ 100，`providers` ≥ 1，`connections` 1 ~ 64，`significant_digits` 1 ~ 5，时长 > 0（`warmup` 可为 0）。
+- 故障注入字段（`load.steps` / `load.faults` / `target.load_balance` 等）：见上表；未知子字段、kind 与参数不相配（`kill-9` 带 `latency`）、`at` 超出本轮、`target` 超出提供者数、阶梯时长之和 ≠ `duration` 都逐条报告。
 - 交叉约束：`warmup < duration`；`steady_window` 恰好两个时长，`start < end`，`start ≥ warmup`，`end ≤ duration`；`histogram.max > timeout`；开环 `rate × timeout × 2` 不超过 500 万；`payload.kind` 与 `service` 匹配，`order` 不写 `size`。
 - transport：`http` 必须有 `target.http.url`（`http://`、有 host、有 path），`payload.kind` 只能是 `bytes`，不得写 `serializer` / `providers` / `connections`；
   `rpc` 与对比对象不得写 `target.http`。
@@ -173,11 +185,14 @@ YAML 只用 SnakeYAML 的 `SafeConstructor` 加载成 Map（`!!java...` 这类�
 server   --port <p> [--host <公布地址>] (--registry zk://host:port | --no-registry) [--serializer protobuf] [--metrics-port <p>] [--http-port <p>]
          [--io-threads <n>] [--executor fixed|virtual|direct] [--flush-consolidation on|off]
          [--outbound-backpressure on|off] [--write-buffer-water-mark <low>:<high>]
+         [--executor-queue <n>] [--work <时长>] [--advertise-port <p>] [--deregister-grace <时长>|0]   （故障注入实验，见“故障注入”）
 server   --transport <grpc|dubbo|...> --port <p> ...      （对比对象的服务端，见“对比对象”）
 run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>] [--metrics-port <p>]
          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>] [--io-busy-poll on|off]
          [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0] [--flush-consolidation on|off]
-         （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文）
+         [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N]
+         [--fault-schedule <file> | --no-faults] [--fault-variant sigterm|sigstop|toxic-timeout] [--topology <file>]
+         （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文；后两行见“故障注入”）
 report   --in <目录 | 结果.json> [--out <file.md>]
 compare  --in <目录 | 结果.json> [--out <file.md>]
 crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] [--tool-version <text>]
@@ -348,7 +363,10 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
 
 ### 统计口径
 
-- 延迟分位数只统计**完成时刻落在 `steady_window` 内**的**成功**调用；失败按类型分桶（`timeout`、`status:<状态码>`、`payload_mismatch`、其它异常类名），窗口内与全程各一份，不进延迟分布与吞吐。
+- 延迟分位数只统计**完成时刻落在 `steady_window` 内**的**成功**调用；失败按类型分桶（`timeout`、`status:<状态码>`、`transport`、`no_provider`、`payload_mismatch`、其它异常类名），窗口内与全程各一份，不进延迟分布与吞吐。
+  `transport` = 本框架客户端自己产生的传输失败（连不上、没有可用连接、连接在回包前断开、写失败、出站硬上限未发出、客户端已关闭；它们是基类 `RpcException`、
+  状态码是缺省的 SERVER_ERROR，以前落进 `status:SERVER_ERROR`，与服务端回的错误混在一起），`no_provider` = 提供者列表为空；按消息前缀识别
+  （`ErrorClassifier.TRANSPORT_PREFIXES`，有一条连死端口的测试守着 core 的消息）。
 - 吞吐 = 窗口内成功调用数 / 窗口长度。
 - 每秒成功数与错误数的时间序列覆盖全程（含预热），用来看降频、GC 停顿与抖动。
 - 同一个 `RpcClient` 跨轮复用（连接预热属于第一轮 warmup 的一部分），直方图与计数每轮清零。
@@ -399,6 +417,10 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
 
 ## 判定与正式轮
 
+- **故障注入 / 阶梯卡例外**（卡片有 `load.faults` 或 `load.steps`）：发出滞后 p99 > 1ms 只记标志（`rounds[].dispatcher_delayed` 与
+  `dispatcher_delayed_informational`、`validity.dispatcher_delayed`），**不判无效**；声明段写明，Markdown 轮次表的延迟格加 † 并在表下注明
+  "发出滞后 p99 X ms，延迟数字仅供参考"。理由：同机多提供者拓扑下（3 个服务端 JVM + ZooKeeper）压测端 CPU 约为单提供者直连的 1.5 ~ 2 倍，
+  发出滞后 p99 常在 2 ~ 8ms（单提供者直连同负载约 0.07ms），而这类卡看的是错误数、恢复时间与节点份额，它们不受几毫秒的滞后影响。
 - **有效轮**：预热期内有成功调用（`warmup_completed`）、没有 `backlog_dropped`、窗口内至少一次成功；开环另要求**轮内发出滞后 p99 ≤ 1ms**
   （按报告写出的毫秒值比较）。超过即 `valid = false`、原因 `dispatcher_delayed`（`rounds[].dispatcher_delayed = true`），声明段写明是哪几轮：
   调度线程自己被推迟时，从计划时刻算的延迟里混进了压测端的滞后，这一轮的尾延迟说的是压测端而不是被测服务。这样的轮不参与正式轮选取，
@@ -421,10 +443,12 @@ JSON 顶层（`schema_version: 1`）：
 | `server_environment` | 服务端同一套字段（值压平成字符串，列表以空格连接），服务端启动时采集、预热前经 `BenchService.environment()`（HTTP 卡经 `GET /environment`）取回；取不到时为 `"unknown"`。HTTP 端点的这份环境里 `metrics_enabled` 恒为 `false`（HTTP 路径上没有指标 Filter），另有 `endpoint: http`。rpc 服务端与对比对象的服务端另有 `transport`、`server_io_threads`（worker 事件循环的实际线程数）、`server_executor`（业务方法在哪执行）、`server_executor_kind`（机器可读：rpc 为 `fixed` / `virtual` / `direct`，gRPC 为 `grpc-default` / `fixed` / `direct`）；rpc 服务端另有 `server_flush_consolidation`（`on` / `off`）、`server_outbound_backpressure`（`on` / `off`）、`server_write_buffer_water_mark`（`low:high`，字节）、`server_outbound_hard_limit`（字节，0 = 关闭）；gRPC 另有 `grpc_version` / `grpc_netty_version`，Dubbo 另有 `dubbo_version` |
 | `run.target`（http 卡） | `transport` / `mode` = http、`address`（URL）、`connections`、`connection_model`、`io_transport` / `io_threads` / `io_busy_poll`、`timeout_check`、`pre_warmup_calls_per_connection`、`call_style` |
 | `run.harness_options` | [harness 实现选项](#harness-实现选项)的实际取值：`open_workers` / `open_pool_size`、`io_threads`（rpc 卡与对比对象取 `run.target.io_threads`）/ `io_busy_poll`（只对 http 卡）/ `io_source`、`pin_dispatcher`、`pre_warmup` / `pre_warmup_ms` / `pre_warmup_source`、`flush_consolidation`（rpc 卡：`default (on)` / `on` / `off`） |
+| `run.faults`（有 `load.faults` 的卡） | `mode`（`inject` = 执行卡片的故障 \| `control` = `--no-faults` 对照）、`variant`（`--fault-variant`）、`schedule_file`、`faults`（交给驱动脚本的故障，已按变体替换）、`topology`（`--topology` 读到的"编号 → 公布地址"） |
+| `run.target` 的集群字段（rpc 卡） | `load_balance` / `cluster`（实际 SPI 名）、`retries`（实际重试次数）、`cluster_options_source`（各自来自 card / command line / default）；多提供者或有时间线时另有 `server_stats_provider`：窗口的服务端 GC / io / 背压 / 执行器统计只取这一个提供者（按地址排序的第一个；以前经负载均衡取，起止两次可能落在不同节点） |
 | `run.pre_warmup` | 预热段的摘要（`duration_ms`、`issued`、`successes`、`errors`、`latency_ms`、`service_time_ms`、`dispatch_lag_ms`、`backlog_dropped`、`scheduler`）；关闭时为 `"off"` |
-| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况：节拍、`max_inflight`、`workers` / `pool_size`、`dispatcher_thread`、`pin`——绑核读回的结果与轮末的 `stray_threads_at_end`）、`warmup_completed`、`dispatcher_delayed`（开环）、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上）、`io`（统计窗口内两端的读写系统调用与上下文切换及其每请求值，同上）、`backpressure`（统计窗口内 rpc 服务端的暂停读次数与出站硬上限拒绝数，同上） |
+| `rounds[]` | 每轮：开始 / 结束、`issued`、`requests_total`、`window`（请求 / 成功 / 错误）、`throughput_rps`、`latency_ms`（count / mean / min / p50 / p90 / p95 / p99 / p999 / max）、开环另有 `service_time_ms` 与 `dispatch_lag_ms`、`errors_by_type` / `errors_total_by_type`、`backlog_dropped`、`histogram_clamped`、`scheduler`（开环调度器实况：节拍、`max_inflight`、`workers` / `pool_size`、`dispatcher_thread`、`pin`——绑核读回的结果与轮末的 `stray_threads_at_end`）、`warmup_completed`、`dispatcher_delayed`（开环）、`valid` / `invalid_reasons`、`timeseries`、`cpu`（统计窗口内两组核的平均忙碌率，见[统计口径](#统计口径)）、`gc`（统计窗口内两端的 GC 次数与停顿，同上）、`io`（统计窗口内两端的读写系统调用与上下文切换及其每请求值，同上）、`backpressure`（统计窗口内 rpc 服务端的暂停读次数与出站硬上限拒绝数，同上）、`server_executor`（统计窗口内 rpc 服务端的业务执行器过载拒绝 `executor_rejections`、停机拒绝 `shutdown_rejections` 与排队等待 `queue_wait_ms` = {count, p50, p99, max}；见[故障注入](#故障注入)）；卡片有阶梯或故障时另有 `timeline` / `steps` / `faults`（见[时间线与恢复时间](#时间线与恢复时间)） |
 | `summary` | `official_round`、`selection_rule`、`official`（正式轮的数字）、`spread`（各指标的 min / max / range / range_pct） |
-| `validity` | `passed`、`warmup_completed`、`backlog_triggered`、`all_rounds_valid`、`dispatcher_delayed_rounds`、`client_bound`、`client_gc_pause_pct_max`（有效轮压测端 GC 停顿占窗口的最大百分比）、`server_executor`（rpc 卡：卡片声明的 `expected`、服务端报告的 `actual`、`matches`）、`statements`（闭环声明、client_bound 声明、发压端 GC 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
+| `validity` | `passed`、`warmup_completed`、`server_options`（rpc 卡：服务端排队上限与业务等待的期望 / 实际 / 是否相符）、`faults_executed`（注入模式：全部故障被驱动脚本报告为 ok 且实际时刻与计划相差 ≤ 500ms）、`backlog_triggered`、`all_rounds_valid`、`dispatcher_delayed_rounds`、`client_bound`、`client_gc_pause_pct_max`（有效轮压测端 GC 停顿占窗口的最大百分比）、`server_executor`（rpc 卡：卡片声明的 `expected`、服务端报告的 `actual`、`matches`）、`statements`（闭环声明、client_bound 声明、发压端 GC 声明等）、`topology`、`asserts[]`（阈值、实测、口径、是否通过） |
 
 Markdown 由 JSON 读回后生成，分节：标题（卡片 id）与判定 → 问题 → 环境表（含"可用核数 / 主机核数"、压测端 / 服务端的 JVM 参数与 CPU 亲和、
 "指标"一行列出两端的 `metrics_enabled`）→ 口径表（末尾两行"harness 选项""预热段"）→ 轮次表（正式轮加粗，末尾是客户端核 / 服务端核的 CPU 忙碌率、两端 GC 停顿、两端每请求的 write 系统调用数与服务端暂停读次数）→ 断言表 → 声明（"数字来自固定本机，不可外推" + 拓扑一句 + 模型声明）。
@@ -640,7 +664,117 @@ SWEEP_SERVER_ARGS="--outbound-backpressure off" bash bench/bin/sweep.sh --cards 
 **限制吞吐的是连接数（= 服务端实际在干活的 IO 线程数），不是并发**；把每节点连接数加到 8 之后 8 个 worker 都只用到三分之一左右，瓶颈转到压测端（`client_bound`）。
 所以并发扫描与连接数扫描要一起看，`RpcServerConfig.ioThreads` 配多少都只有"连接数"个线程会被用上。
 
+## 故障注入
+
+阶段 2 的验收项：慢节点、杀节点、突增用**真实制造**的故障（toxiproxy toxic、`kill -9`、连接静默挂起、`SIGSTOP`）测，每组有对照。
+分工：**harness 不碰进程与 toxiproxy**，只写"什么时候该发生什么"（故障时间表）、读回"实际什么时候发生了什么"（执行记录），并按秒记录调用方看到的一切；
+驱动脚本 `bench/bin/fault-run.sh` 起拓扑、按时间表执行故障、拆拓扑。
+
+### 拓扑：fault-topology.sh
+
+```bash
+bench/bin/fault-topology.sh up --providers 3 --out <dir> --behind-toxiproxy all     # 或 2 / 1,3 / none
+bench/bin/fault-topology.sh down --out <dir>
+bench/bin/fault-topology.sh wait-zk-clean                                          # 等 ZooKeeper 里的旧临时节点随会话超时消失
+```
+
+- N 个 `bench server`（端口 19401 起，`--host 127.0.0.1 --registry zk://127.0.0.1:2181`，`BENCH_SERVER_CPUS` 缺省 0-4，N 个共用这组核；
+  JVM 参数缺省另加 `-Djava.net.preferIPv4Stack=true`，见下），写 `<dir>/topology.txt`（每行：编号、公布地址、pid、监听端口、代理名、HTTP 控制端口）
+  与 `<dir>/server-<编号>.log`，全部注册完成（经代理的还要确认代理已能连到它）才返回。
+- 每个服务端另开 `--http-port <监听端口 + 100>`（HTTP 控制端点）：harness 读拓扑文件（`run --topology`），每秒的服务端计数经 `GET /counters`、
+  窗口统计经 `GET /stats` 取——在 IO 线程上回答、**不经业务执行器**。经 RPC 取的 `counters()` / `stats()` 与压测请求排同一个执行器，
+  执行器排满时会排在压测请求后面、甚至被拒（突增卡的冒烟里每秒样本因此大量丢失），正好是最需要数据的时候。
+- `--behind-toxiproxy`：该提供者监听真实端口，在 toxiproxy 上建代理 `rpc-fault-p<编号>`（监听 20000 + 编号，上游 = 真实端口），
+  并以 `server --advertise-port <代理端口>` 注册——注册中心里写的是代理端口，消费端经代理访问它。`--advertise-port` 由 harness 里的
+  注册中心 SPI 扩展 `portmap`（`PortMappingRegistryFactory`，包装 zookeeper，注册 / 摘除时换端口）实现，core 不改；RpcServer 的注册、摘除与优雅停机顺序照常。
+- toxiproxy 缺省用 `docker/compose.yaml` 的实例（管理 API `127.0.0.1:8474`，容器经 `host.docker.internal` 回连 WSL 里的提供者）。
+  这条路径（WSL → Docker Desktop 端口转发 → 容器 → host.docker.internal → Windows → WSL）本身有开销：同步 1KB 回显的往返在本机实测
+  p50 约 +2.2ms、p99 约 +4.4ms（直连 0.09 / 0.23ms）。所以慢节点卡让**三个提供者都经代理**（`--behind-toxiproxy all`），代理路径的开销对三个节点对称，
+  只有第 2 个加 toxic。`TOXIPROXY_API` / `TOXIPROXY_UPSTREAM_HOST` / `TOXIPROXY_LISTEN_HOST` 可指向同一版本 toxiproxy 的其它实例
+  （例如把镜像里的二进制原生跑在 WSL 里、上游写 127.0.0.1：同样的回显往返只多约 0.26ms）。
+- **IPv4 监听**：容器经 `host.docker.internal` 回连 WSL 时只连得上 IPv4 通配监听（`0.0.0.0`），JVM 缺省的 IPv6 双栈通配监听（`::`）被拒绝
+  （`connect: connection refused`，代理接受客户端连接后立刻关掉）——2026-10-21 冒烟实测，慢节点卡因此全部失败。所以拓扑里的提供者都带
+  `-Djava.net.preferIPv4Stack=true` 起（记进 `server_environment.jvm_args`），并且新监听要过几秒才被 WSL 的端口转发发现，`up` 会等代理真正连得上。
+
+### 运行：fault-run.sh
+
+```bash
+bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1                         # kill -9
+bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1 --variant sigterm       # 优雅停机对照
+bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1 --variant toxic-timeout # 静默死亡（第 2 个提供者自动经代理）
+bash bench/bin/fault-run.sh --card fault-slow-node-p2c-v1 --behind-toxiproxy all [--no-faults]
+bash bench/bin/fault-run.sh --card fault-burst3x-bounded-v1                            # 只有阶梯、没有故障的卡：脚本只管拓扑
+```
+
+1. 从卡片读提供者数与服务端配置（`server_executor` / `server_queue_capacity` / `server_work` → `--executor` / `--executor-queue` / `--work`），
+   等 ZooKeeper 干净后起拓扑（缺省让 toxic 故障的目标经代理）。
+2. 以 `--registry zk://127.0.0.1:2181 --fault-schedule <dir>/schedule-*.txt --topology <dir>/topology.txt` 起 harness（`BENCH_CLIENT_CPUS` 缺省 5-9），
+   缺省另加 `FAULT_HARNESS_OPTS="--open-workers per-request"`：故障期间挂住到超时的调用不会占满固定的 64 个工作者（那会让发压在故障期间退化成闭环）。
+3. harness 在**本轮开始时**（预热段之后）写出时间表：
+   ```text
+   # rpc-bench-e2e fault schedule v1
+   mode inject
+   round_start_epoch_ms 1792566650657
+   fault 0 20000 kill-9 2
+   ```
+   脚本按 `round_start_epoch_ms + at_ms` 执行每一项（kill / toxiproxy HTTP API），每项追加一行到 `<schedule>.executed`：`<序号> <墙钟毫秒> ok|failed <说明>`。
+4. harness 本轮结束后读回执行记录，换算成相对本轮开始的 `executed_at_ms`；**注入模式下任何一项不是 ok、或实际时刻与计划相差超过 500ms，判定不通过**
+   （`validity.faults_executed = false`，退出码 2）：卡片声明的实验没有按计划发生。卡片有故障时必须给 `--fault-schedule`（注入）或 `--no-faults`（对照）之一。
+5. 拆拓扑：SIGCONT（被冻结的先恢复）→ SIGTERM → 10s 不退再 KILL，删代理。
+
+**原生 toxiproxy**（正式实验用；脚本缺省仍指向 compose）：同一版本的二进制从 compose 镜像里取出来、原生跑在 WSL 里，上游写 127.0.0.1：
+
+```bash
+id=$(docker create ghcr.io/shopify/toxiproxy:2.13.0); mkdir -p ~/tools/toxiproxy-2.13.0
+docker cp $id:/toxiproxy ~/tools/toxiproxy-2.13.0/; docker rm $id
+setsid nohup ~/tools/toxiproxy-2.13.0/toxiproxy -host 127.0.0.1 -port 8475 > toxiproxy.log 2>&1 < /dev/null &
+export TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOXIPROXY_LISTEN_HOST=127.0.0.1 TOXIPROXY_PORT_BASE=21000
+```
+
+（代理端口段改到 21000 起：compose 的 toxiproxy 占着 20000-20010 的端口转发。）原生进程不绑核，与容器一样；卡片的 `isolation.registry` 写明"toxiproxy 原生进程（同 WSL）"。
+
+**口径约定**（阶段一审定）：故障的 `at` 相对**本轮开始**（预热段之后的 t = 0），不是统计窗口起点；节点份额按压测端**尝试数**计（含重试，按发出计）；
+恢复时间的分辨率是 1 秒（时间线的粒度）；故障卡不写断言，判定只看轮次有效、故障按计划执行、服务端配置与卡片相符。
+
+`--fault-variant <kind>`：把卡片里的 `kill-9` 全部换成 `sigterm` / `sigstop` / `toxic-timeout`（同一时刻、同一目标），记进 `run.faults.variant` 与声明段；
+同一组实验的变体共用一张卡。`--no-faults`：同一张卡的对照运行，时间表写 `mode control`（没有 fault 行），时间线照记，恢复指标按计划时刻算。
+
+### 时间线与恢复时间
+
+卡片有 `load.steps` 或 `load.faults` 时，每轮另有一个只睡眠的采样线程，在本轮开始后第 k 秒（k = 0, 1, …）取一次压测端客户端的累计计数
+（`RpcClient.nodeCallStats()` 按节点的尝试 / 失败 / 超时、`retryAttempts()` / `retryNodeSwitches()`）与**每个提供者**的 `BenchService.counters()`
+（经只连该提供者的元数据客户端，400ms 超时，取不到记"不可达"）：执行器过载 / 停机拒绝、此刻排队数、排队等待的累计直方图。
+
+- `rounds[].timeline.rows[]`：每秒一行——`success` / `errors` / `errors_by_type` / `p50_ms` / `p99_ms`（按**完成时刻**归秒，延迟从计划时刻算，2 位有效数字）；
+  `node_attempts` / `node_share`（该秒压测端向各节点发出的**尝试数**及占比，含重试）、`node_failures` / `node_timeouts`、`retries` / `retry_node_switches`；
+  `server_executor_rejections` / `server_shutdown_rejections` / `server_rejections_by_provider`、`server_queued`（该秒末瞬时值之和）、`server_queue_wait_p99_ms`、
+  `providers_unreachable`。服务端与客户端列是相邻两个样本之差。
+- `rounds[].steps[]`：每一级的请求 / 成功 / 失败 / 成功率、吞吐、延迟分位数（卡片精度）、失败分类，`server`（该级起止两个样本之差：拒绝数、排队等待分位数、重试数），
+  第 2 级起另有 `recovery`。按完成时刻归级；最后一级也收本轮结束后才完成的在途尾巴。
+- `rounds[].faults[]`：卡片（或变体）的每一项，加 `executed_at_ms` / `status` / `detail`（执行记录）、`target_address`（拓扑），与 `recovery`：
+  - `errors_recovery_s`：故障时刻（有执行记录用实际时刻）到"**连续 3 秒错误为 0**"的第一秒起点；故障之后一个错误都没有为 0；到本轮结束都没满足为 null（`recovered: false`）。
+    另给 `errors_until_recovery`、`first_error_second` / `last_error_second`；
+  - `p99_recovery_s`：条件再加"该秒 p99 ≤ 2 × 基线"（基线 = 第一个事件之前、去掉开头 2 秒的各秒 p99 中位数）；
+  - `share_recovery_s`（只对 `remove-toxic` / `sigcont`，且有拓扑时）：目标节点每秒份额 ≥ 0.8 × 故障前平均份额、连续 3 秒的第一秒起点。
+  - 分辨率都是 1 秒（时间线的粒度）。
+
+Markdown 在轮次表之后多一行"服务端业务执行器（正式轮统计窗口内）"，有阶梯 / 故障时再加阶梯表、故障表与每秒时间线表。
+
+**排队等待**（`rounds[].server_executor.queue_wait_ms`、时间线的 `server_queue_wait_p99_ms`）：bench server 自带的服务端 Filter `QueueWaitFilter`
+（order -4500，在 DeadlineServerFilter 之外）在业务线程开始执行 Filter 链时记 `nanoTime − 到达时刻`（服务端 Invocation 的起点就是 IO 线程解码该帧的时刻，
+DeadlineServerFilter 用同一起点判过期）；只记 echo / echoOrder。累计直方图（2 位有效数字、1µs ~ 60s）压缩后经统计端点交出，压测端对两个时刻做差，服务端不维护区间状态。
+core 没有为此改动。
+
 ## 已知局限
+
+- **多提供者拓扑下开环调度线程的发出滞后更大**：同一台 WSL2 上 3 个 bench server（共用 0-4 号核）+ ZooKeeper 时，压测端核的 CPU 约是单提供者直连的 1.5 倍以上，
+  发出滞后 p99 在冒烟里是 2 ~ 8ms（单提供者直连同负载 0.07ms）。故障注入 / 阶梯卡上这条规则因此只记标志、不判无效（见[判定与正式轮](#判定与正式轮)），
+  这些卡的延迟数字（含 p99）仅供参考。
+- **compose 里的 toxiproxy 不适合 5000 req/s 的慢节点实验**：路径是 WSL → Docker Desktop 端口转发 → 容器 → host.docker.internal → Windows → WSL。
+  同步 1KB 回显的单线程往返只多 +2.2ms（p50）/ +4.4ms（p99），但三个提供者都经它、5000 req/s 时，**不加任何 toxic 的对照**就已是 p50 11.5ms / p99 56ms，
+  两侧核都到 85% 左右，20ms 的 latency toxic 被淹没。同版本二进制原生跑在 WSL 里（上游 127.0.0.1）时同一对照 p50 0.91ms。正式实验用原生进程（见[故障注入](#故障注入)）。
+- **容器经 host.docker.internal 回连 WSL 只连得上 IPv4 通配监听**：JVM 缺省的 IPv6 双栈通配监听（`::`）被拒绝（`connect: connection refused`，代理接受客户端连接后
+  立刻关掉）；`fault-topology.sh` 因此给提供者加 `-Djava.net.preferIPv4Stack=true`。
 
 - **开环调度线程忙等、独占一个核**：自旋窗口按 park 超睡量自适应放大，超过请求间隔后调度线程就一直忙等——Windows（定时器粒度毫秒级）上总是如此，Linux 上在高 rate 时也如此（WSL2 上校准出的超睡约 150µs，5000 req/s 时就已一直忙等）。精度不受影响，代价是占掉压测端的一个核；开环卡的报告声明段会写明这一点，绑核时给压测端留足核。Windows 只用来跑流水线冒烟，正式数字在 WSL2 / Linux 上产生。
 - **忙等的线程更容易撞上宿主对 vCPU 的抢占**（见[噪声地板](#噪声地板)）：开环调度线程总在忙等；http 卡改用 netty 客户端并忙轮询时

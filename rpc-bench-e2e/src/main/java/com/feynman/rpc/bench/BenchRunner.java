@@ -66,6 +66,15 @@ final class BenchRunner {
 	 */
 	static Outcome run(Profile profile, CallTarget.Endpoint endpoint, Path outDir, String label, List<String> commandLine,
 			PrintStream out, MeterRegistry metrics, HarnessOptions options) throws IOException {
+		return run(profile, endpoint, outDir, label, commandLine, out, metrics, options, FaultPlan.NONE);
+	}
+
+	/**
+	 * @param plan 故障计划（{@code --fault-schedule} / {@code --no-faults} / {@code --fault-variant} / {@code --topology}）；
+	 *             卡片没有故障时为 {@link FaultPlan#NONE}
+	 */
+	static Outcome run(Profile profile, CallTarget.Endpoint endpoint, Path outDir, String label, List<String> commandLine,
+			PrintStream out, MeterRegistry metrics, HarnessOptions options, FaultPlan plan) throws IOException {
 		Instant started = Instant.now();
 		Map<String, Object> environment = EnvironmentProbe.collect();
 		environment.put("metrics_enabled", metrics != null);
@@ -76,7 +85,7 @@ final class BenchRunner {
 		Object serverEnvironment;
 		CpuSampler cpu = null;
 		Object preWarmup = null;
-		try (CallTarget target = CallTargets.create(profile, endpoint, metrics, options)) {
+		try (CallTarget target = CallTargets.create(profile, endpoint, metrics, options, plan.controlPorts())) {
 			targetDescription = target.describe();
 			serverEnvironment = serverEnvironment(target, environment, out);
 			Object serverCpus = serverEnvironment instanceof Map<?, ?> m ? m.get("cpus_allowed") : null;
@@ -102,7 +111,7 @@ final class BenchRunner {
 			for (int round = 1; round <= profile.load().rounds(); round++) {
 				out.printf(Locale.ROOT, "round %d/%d: %s for %s ...%n", round, profile.load().rounds(), profile.load().model(),
 						Durations.format(profile.load().duration()));
-				RoundRecorder recorder = LoadDriver.runRound(round, profile, target, cpu, options);
+				RoundRecorder recorder = LoadDriver.runRound(round, profile, target, cpu, options, plan);
 				Map<String, Object> json = recorder.toJson();
 				rounds.add(json);
 				out.printf(Locale.ROOT, "round %d: window requests=%d throughput=%.1f req/s p50=%s p99=%s errors=%d valid=%s cpu=%s%n", round,
@@ -132,13 +141,16 @@ final class BenchRunner {
 		}
 		run.put("harness_options", harnessOptions);
 		run.put("pre_warmup", preWarmup == null ? "off" : preWarmup);
+		if (plan.active()) {
+			run.put("faults", plan.toJson());
+		}
 		result.put("run", run);
 		result.put("environment", environment);
 		result.put("server_environment", serverEnvironment);
 		result.put("rounds", rounds);
 		Map<String, Object> summary = summary(profile, rounds);
 		result.put("summary", summary);
-		Map<String, Object> validity = validity(profile, rounds, summary, targetDescription, serverEnvironment);
+		Map<String, Object> validity = validity(profile, rounds, summary, targetDescription, serverEnvironment, plan);
 		result.put("validity", validity);
 
 		Files.createDirectories(outDir);
@@ -249,6 +261,15 @@ final class BenchRunner {
 	 */
 	static Map<String, Object> validity(Profile profile, List<Map<String, Object>> rounds, Map<String, Object> summary,
 			Map<String, Object> target, Object serverEnvironment) {
+		return validity(profile, rounds, summary, target, serverEnvironment, FaultPlan.NONE);
+	}
+
+	/**
+	 * @param plan 故障计划：注入模式下任何一项故障没有被驱动脚本报告为 {@code ok}，判定不通过（卡片声明的实验没有发生）；
+	 *             对照模式（{@code --no-faults}）声明段写明"未注入"
+	 */
+	static Map<String, Object> validity(Profile profile, List<Map<String, Object>> rounds, Map<String, Object> summary,
+			Map<String, Object> target, Object serverEnvironment, FaultPlan plan) {
 		Map<String, Object> validity = new LinkedHashMap<>();
 		boolean warmup = rounds.stream().allMatch(r -> Boolean.TRUE.equals(r.get("warmup_completed")));
 		boolean backlog = rounds.stream().anyMatch(r -> number(r.get("backlog_dropped")) > 0);
@@ -269,7 +290,13 @@ final class BenchRunner {
 		}
 		List<Object> delayed = rounds.stream().filter(r -> Boolean.TRUE.equals(r.get("dispatcher_delayed"))).map(r -> r.get("round")).toList();
 		validity.put("dispatcher_delayed_rounds", delayed);
-		if (!delayed.isEmpty()) {
+		validity.put("dispatcher_delayed", !delayed.isEmpty());
+		if (!delayed.isEmpty() && profile.load().timeline()) {
+			statements.add("第 " + delayed.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("、"))
+					+ " 轮发出滞后 p99 超过 " + RoundRecorder.round3(RoundRecorder.DISPATCH_LAG_P99_MAX_NANOS / 1e6)
+					+ "ms（dispatcher_delayed）。故障注入 / 阶梯卡上这条规则只记标志、不判无效：这类卡看的是错误数、恢复时间与节点份额，"
+					+ "它们不受几毫秒的发出滞后影响；本轮的延迟数字（含 p99）混进了压测端的滞后，仅供参考。");
+		} else if (!delayed.isEmpty()) {
 			statements.add("第 " + delayed.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("、"))
 					+ " 轮发出滞后 p99 超过 " + RoundRecorder.round3(RoundRecorder.DISPATCH_LAG_P99_MAX_NANOS / 1e6)
 					+ "ms（dispatcher_delayed）：调度线程本身被推迟，从计划时刻算的延迟混进了压测端的滞后。这些轮判为无效、"
@@ -302,6 +329,14 @@ final class BenchRunner {
 			if (!Profile.DEFAULT_SERVER_EXECUTOR.equals(profile.target().serverExecutor())) {
 				statements.add("非缺省配置：服务端业务执行器为 " + profile.target().serverExecutor() + "（框架缺省是 fixed）。");
 			}
+			Boolean serverOptionsMatch = serverOptionsCheck(profile, serverEnvironment, validity, statements);
+			if (Boolean.FALSE.equals(serverOptionsMatch)) {
+				executorMatches = false;
+			}
+		}
+		Boolean faultsExecuted = faultsCheck(plan, rounds, validity, statements);
+		if (Boolean.FALSE.equals(faultsExecuted)) {
+			executorMatches = false;
 		}
 		statements.add("错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。");
 		validity.put("statements", statements);
@@ -353,6 +388,109 @@ final class BenchRunner {
 		validity.put("passed", allValid && assertsPassed && !Boolean.FALSE.equals(executorMatches));
 		return validity;
 	}
+
+	/**
+	 * 卡片的 {@code target.server_queue_capacity} / {@code server_work} 与服务端环境核对（与 server_executor 同一规则：服务端明确报告了
+	 * 不同的值就判定不通过；旧服务端没有这些键时只记 unknown）。卡片没写时期望框架缺省（排队上限 1000、不等待）。
+	 *
+	 * @return 不符为 false，相符为 true，无法核对为 null
+	 */
+	private static Boolean serverOptionsCheck(Profile profile, Object serverEnvironment, Map<String, Object> validity, List<Object> statements) {
+		Profile.RpcOptions o = profile.target().rpcOptionsOrDefaults();
+		Map<?, ?> env = serverEnvironment instanceof Map<?, ?> m ? m : Map.of();
+		Map<String, Object> check = new LinkedHashMap<>();
+		Boolean result = null;
+		if ("fixed".equals(profile.target().serverExecutor())) {
+			String expectedQueue = String.valueOf(o.serverQueueCapacity() != null ? o.serverQueueCapacity()
+					: com.feynman.rpc.core.config.ExecutorConfig.DEFAULT_QUEUE_CAPACITY);
+			Object actualQueue = env.get("server_executor_queue_capacity");
+			check.put("queue_capacity_expected", expectedQueue);
+			check.put("queue_capacity_actual", actualQueue == null ? EnvironmentProbe.UNKNOWN : actualQueue);
+			if (actualQueue != null) {
+				result = expectedQueue.equals(String.valueOf(actualQueue));
+			}
+		}
+		long expectedGrace = o.serverDeregisterGrace() == null ? 0 : o.serverDeregisterGrace().toMillis();
+		Object actualGrace = env.get("server_deregister_grace_ms");
+		check.put("deregister_grace_ms_expected", expectedGrace);
+		check.put("deregister_grace_ms_actual", actualGrace == null ? EnvironmentProbe.UNKNOWN : actualGrace);
+		if (actualGrace != null) {
+			boolean graceMatches = String.valueOf(expectedGrace).equals(String.valueOf(actualGrace));
+			result = result == null ? graceMatches : result && graceMatches;
+		}
+		double expectedWork = o.serverWork() == null ? 0 : Durations.millis(o.serverWork());
+		Object actualWork = env.get("server_work_ms");
+		check.put("work_ms_expected", expectedWork);
+		check.put("work_ms_actual", actualWork == null ? EnvironmentProbe.UNKNOWN : actualWork);
+		if (actualWork != null) {
+			boolean workMatches;
+			try {
+				workMatches = Math.abs(Double.parseDouble(String.valueOf(actualWork)) - expectedWork) < 0.0005;
+			} catch (NumberFormatException e) {
+				workMatches = false;
+			}
+			result = result == null ? workMatches : result && workMatches;
+		}
+		check.put("matches", result);
+		validity.put("server_options", check);
+		if (Boolean.FALSE.equals(result)) {
+			statements.add("服务端配置与卡片不符（排队上限 / 业务等待 / 摘注册宽限）：" + check + "。数字不属于这张卡声明的配置，判定不通过。");
+		}
+		if (o.serverDeregisterGrace() != null && !o.serverDeregisterGrace().isZero()) {
+			statements.add("非缺省配置：服务端 deregisterGrace = " + Durations.format(o.serverDeregisterGrace()) + "（框架缺省 0）。");
+		}
+		if (o.serverQueueCapacity() != null || o.serverWork() != null) {
+			statements.add("非缺省配置：服务端" + (o.serverQueueCapacity() != null ? "固定池排队上限 " + o.serverQueueCapacity() : "")
+					+ (o.serverQueueCapacity() != null && o.serverWork() != null ? "，" : "")
+					+ (o.serverWork() != null ? "业务方法每次 parkNanos " + Durations.format(o.serverWork()) + "（模拟 IO 等待）" : "") + "。");
+		}
+		return result;
+	}
+
+	/**
+	 * 故障是否真的按计划发生：注入模式下每一项都要被驱动脚本报告为 ok，否则判定不通过；对照模式只加声明。
+	 *
+	 * @return 注入模式下全部 ok 为 true、否则 false；没有故障或对照模式为 null
+	 */
+	private static Boolean faultsCheck(FaultPlan plan, List<Map<String, Object>> rounds, Map<String, Object> validity, List<Object> statements) {
+		if (!plan.active()) {
+			return null;
+		}
+		if (!plan.inject()) {
+			statements.add("对照运行（--no-faults）：卡片声明的故障没有注入，时间线与恢复指标按计划时刻计算，用作同一张卡的对照组。");
+			validity.put("faults_executed", null);
+			return null;
+		}
+		List<String> problems = new ArrayList<>();
+		for (Map<String, Object> r : rounds) {
+			if (r.get("faults") instanceof List<?> faults) {
+				for (Object f : faults) {
+					Map<?, ?> fault = (Map<?, ?>) f;
+					if (!"ok".equals(fault.get("status"))) {
+						problems.add("faults[" + fault.get("index") + "] " + fault.get("kind") + " -> " + fault.get("status"));
+					} else if (!(fault.get("executed_at_ms") instanceof Number executed) || !(fault.get("at_ms") instanceof Number planned)) {
+						problems.add("faults[" + fault.get("index") + "] " + fault.get("kind") + " -> executed at an unusable time "
+								+ fault.get("executed_at_ms_out_of_round"));
+					} else if (Math.abs(executed.doubleValue() - planned.doubleValue()) > FAULT_TIMING_TOLERANCE_MS) {
+						problems.add("faults[" + fault.get("index") + "] " + fault.get("kind") + " -> executed at " + executed + "ms, planned "
+								+ planned + "ms (more than " + FAULT_TIMING_TOLERANCE_MS + "ms apart)");
+					}
+				}
+			}
+		}
+		boolean ok = problems.isEmpty();
+		validity.put("faults_executed", ok);
+		if (!ok) {
+			statements.add("故障没有全部按计划执行（" + String.join("；", problems) + "）：卡片声明的实验没有发生，判定不通过。");
+		}
+		if (plan.variant() != null) {
+			statements.add("故障变体（--fault-variant " + plan.variant() + "）：卡片里的 kill-9 换成了 " + plan.variant() + "。");
+		}
+		return ok;
+	}
+
+	/** 故障的实际执行时刻与计划时刻相差超过它（毫秒）即判定不通过：时间线上的"故障时刻"不再可信。 */
+	static final double FAULT_TIMING_TOLERANCE_MS = 500;
 
 	/** 有效轮里压测端 GC 停顿占比最高的那一轮；没有有效轮或都没有 GC 数据时 null。 */
 	private static Map<String, Object> worstClientGcRound(List<Map<String, Object>> rounds) {

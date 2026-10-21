@@ -30,7 +30,15 @@ final class RpcCallTarget implements CallTarget {
 	/** environment() 的超时：与压测超时无关（压测卡可能把 timeout 设到 1ms），只是一次性的元数据调用。 */
 	static final Duration ENVIRONMENT_TIMEOUT = Duration.ofSeconds(30);
 
+	/** {@code counters()} 的超时：时间线每秒对每个提供者调一次，挂住的提供者不能拖住采样。 */
+	static final Duration COUNTERS_TIMEOUT = Duration.ofMillis(400);
+
 	private final RpcClient client;
+	/**
+	 * 每个提供者一个只连它的元数据客户端（direct 注册中心，1 个 IO 线程、1 条连接），按地址排序；只在多提供者或卡片声明了阶梯 / 故障时创建。
+	 * 统计调用必须落在确定的提供者上：经主客户端的负载均衡时，窗口起止两次 stats() 可能打到不同的节点，差值没有意义。
+	 */
+	private final Map<String, ProviderProbe> probes;
 	private final BenchService service;
 	private final boolean bytes;
 	private final byte[] payload;
@@ -39,8 +47,10 @@ final class RpcCallTarget implements CallTarget {
 	/** environment() / stats() 用的代理：超时与压测超时无关（见 {@link #ENVIRONMENT_TIMEOUT}），首次用到时创建。 */
 	private volatile BenchService metadata;
 
-	private RpcCallTarget(RpcClient client, BenchService service, Profile profile, Map<String, Object> description) {
+	private RpcCallTarget(RpcClient client, BenchService service, Profile profile, Map<String, Object> description,
+			Map<String, ProviderProbe> probes) {
 		this.client = client;
+		this.probes = probes;
 		this.service = service;
 		this.bytes = "bytes".equals(profile.target().payloadKind());
 		this.payload = bytes ? Payloads.bytes(profile.target().payloadSize()) : null;
@@ -62,6 +72,21 @@ final class RpcCallTarget implements CallTarget {
 
 	/** @param flushConsolidation {@code --flush-consolidation}：{@code RpcClientConfig.flushConsolidation}；null = 框架缺省（开） */
 	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation) {
+		return connect(profile, endpoint, metrics, ioThreads, flushConsolidation, ClusterChoice.DEFAULTS);
+	}
+
+	/** @param choice 负载均衡 / 容错策略 / 重试次数（卡片或命令行，见 {@link ClusterChoice}）；{@link ClusterChoice#DEFAULTS} = 原口径 */
+	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation,
+			ClusterChoice choice) {
+		return connect(profile, endpoint, metrics, ioThreads, flushConsolidation, choice, Map.of());
+	}
+
+	/**
+	 * @param controlPorts 提供者公布地址 → HTTP 控制端口（{@code server --http-port}）：有的提供者，每秒的 {@code counters()} 与窗口的
+	 *                     {@code stats()} 改经 HTTP 取（IO 线程回答，不排在压测请求后面）；没有的照旧经 RPC
+	 */
+	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation,
+			ClusterChoice choice, Map<String, Integer> controlPorts) {
 		RegistryConfig registry = Endpoint.REGISTRY.equals(endpoint.mode())
 				? RegistryConfig.zookeeper(endpoint.address())
 				: DirectRegistryFactory.config(endpoint.address());
@@ -77,17 +102,30 @@ final class RpcCallTarget implements CallTarget {
 		if (flushConsolidation != null) {
 			builder.flushConsolidation(flushConsolidation);
 		}
+		if (choice.loadBalance() != null) {
+			builder.loadBalance(choice.loadBalance());
+		}
+		if (choice.cluster() != null) {
+			builder.cluster(choice.cluster());
+		}
 		if (metrics != null) {
 			builder.clientFilter(new MicrometerClientFilter(metrics));
 		}
 		RpcClient client = builder.build();
+		Map<String, ProviderProbe> probes = new java.util.TreeMap<>();
 		try {
 			if (metrics != null) {
 				RpcClientMetrics.bind(client, metrics);
 			}
 			BenchService service = client.reference(BenchService.class,
-					ReferenceOptions.defaults().timeout(timeout).retries(0).awaitProviders(DISCOVERY_TIMEOUT));
+					ReferenceOptions.defaults().timeout(timeout).retries(choice.retries()).awaitProviders(DISCOVERY_TIMEOUT));
 			List<ServiceInstance> providers = awaitProviderCount(client, profile.target().providers());
+			if (providers.size() > 1 || profile.load().timeline()) {
+				for (ServiceInstance instance : providers) {
+					probes.put(instance.address(), ProviderProbe.connect(instance, profile.target().serializer(),
+							controlPorts.get(instance.address())));
+				}
+			}
 			Map<String, Object> description = new LinkedHashMap<>();
 			description.put("transport", "rpc");
 			description.put("mode", endpoint.mode());
@@ -96,6 +134,7 @@ final class RpcCallTarget implements CallTarget {
 			description.put("serializer", client.config().serializer());
 			description.put("load_balance", client.config().loadBalance());
 			description.put("cluster", client.config().cluster());
+			description.put("cluster_options_source", new LinkedHashMap<>(new java.util.TreeMap<>(choice.sources())));
 			description.put("connections_per_node", client.config().connectionsPerNode());
 			description.put("connection_model", client.config().connectionsPerNode() + " TCP connection(s) per provider, requests multiplexed by request id");
 			description.put("connections_meaning", "target.connections = RpcClientConfig.connectionsPerNode (default "
@@ -105,11 +144,20 @@ final class RpcCallTarget implements CallTarget {
 			description.put("flush_consolidation", client.config().flushConsolidation() ? "on" : "off");
 			description.put("server_executor_expected", profile.target().serverExecutor());
 			description.put("io_threads", client.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText() : client.config().ioThreads());
-			description.put("retries", 0);
+			description.put("retries", choice.retries());
 			description.put("call_style", "sync proxy method");
 			description.put("metrics_filter", metrics != null);
-			return new RpcCallTarget(client, service, profile, description);
+			if (!probes.isEmpty()) {
+				description.put("server_stats_provider", probes.keySet().iterator().next());
+				description.put("server_stats_note", "window gc / io / backpressure / server_executor come from this provider only "
+						+ "(the first address in sorted order); per-provider counters are in rounds[].timeline");
+				Map<String, Object> channels = new LinkedHashMap<>();
+				probes.forEach((address, probe) -> channels.put(address, probe.channel()));
+				description.put("server_stats_channel", channels);
+			}
+			return new RpcCallTarget(client, service, profile, description, probes);
 		} catch (RuntimeException e) {
+			probes.values().forEach(ProviderProbe::close);
 			client.close();
 			throw e;
 		}
@@ -174,14 +222,53 @@ final class RpcCallTarget implements CallTarget {
 
 	@Override
 	public Map<String, String> serverStats() {
+		if (!probes.isEmpty()) {
+			return probes.values().iterator().next().stats();
+		}
 		return metadata().stats();
 	}
+
+	/** 客户端计数的键：重试与换节点（{@code RpcClient.retryAttempts / retryNodeSwitches}）、按节点的尝试 / 失败 / 超时。 */
+	static final String CLIENT_RETRY_ATTEMPTS_KEY = "client.retry_attempts";
+	static final String CLIENT_RETRY_NODE_SWITCHES_KEY = "client.retry_node_switches";
+	static final String NODE_KEY_PREFIX = "node.";
 
 	@Override
 	public Map<String, String> clientStats() {
 		Map<String, String> out = new java.util.LinkedHashMap<>();
 		out.put(BackpressureStats.CLIENT_SEND_BUFFER_REJECTIONS_KEY, String.valueOf(client.sendBufferRejections()));
 		out.put(BackpressureStats.CLIENT_UNWRITABLE_SWITCHES_KEY, String.valueOf(client.unwritableConnectionSwitches()));
+		out.put(CLIENT_RETRY_ATTEMPTS_KEY, String.valueOf(client.retryAttempts()));
+		out.put(CLIENT_RETRY_NODE_SWITCHES_KEY, String.valueOf(client.retryNodeSwitches()));
+		client.nodeCallStats().forEach((address, s) -> {
+			out.put(NODE_KEY_PREFIX + address + ".attempts", String.valueOf(s.attempts()));
+			out.put(NODE_KEY_PREFIX + address + ".failures", String.valueOf(s.failures()));
+			out.put(NODE_KEY_PREFIX + address + ".timeouts", String.valueOf(s.timeouts()));
+		});
+		return out;
+	}
+
+	/** 并行问每个提供者（各一个虚拟线程，{@link #COUNTERS_TIMEOUT}），失败的记 null。没有元数据客户端时用主客户端问"某一个"提供者。 */
+	@Override
+	public Map<String, Map<String, String>> providerCounters() {
+		Map<String, Map<String, String>> out = new java.util.TreeMap<>();
+		if (probes.isEmpty()) {
+			return out;
+		}
+		Map<String, java.util.concurrent.Future<Map<String, String>>> futures = new LinkedHashMap<>();
+		try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+			probes.forEach((address, probe) -> futures.put(address, executor.submit(probe::counters)));
+			futures.forEach((address, future) -> {
+				try {
+					out.put(address, future.get());
+				} catch (java.util.concurrent.ExecutionException e) {
+					out.put(address, null);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					out.put(address, null);
+				}
+			});
+		}
 		return out;
 	}
 
@@ -201,6 +288,87 @@ final class RpcCallTarget implements CallTarget {
 
 	@Override
 	public void close() {
+		probes.values().forEach(ProviderProbe::close);
 		client.close();
+	}
+
+	/** 只连一个提供者的元数据客户端：{@code stats()}（30s 超时）与 {@code counters()}（{@link #COUNTERS_TIMEOUT}）。 */
+	/**
+	 * 只连一个提供者的统计通道。有 HTTP 控制端口时经 {@code GET /stats} / {@code GET /counters}（JDK HttpClient，IO 线程回答，不经业务执行器——
+	 * 执行器排满、甚至拒绝压测请求时也取得到）；没有时经一个只连它的元数据 RpcClient 调 {@code stats()}（30s 超时）/
+	 * {@code counters()}（{@link #COUNTERS_TIMEOUT}），这两个调用与压测请求排同一个业务执行器。
+	 */
+	private static final class ProviderProbe {
+		private final RpcClient client;
+		private final BenchService statsProxy;
+		private final BenchService countersProxy;
+		private final java.net.http.HttpClient http;
+		private final String base;
+
+		private ProviderProbe(RpcClient client, BenchService statsProxy, BenchService countersProxy, java.net.http.HttpClient http, String base) {
+			this.client = client;
+			this.statsProxy = statsProxy;
+			this.countersProxy = countersProxy;
+			this.http = http;
+			this.base = base;
+		}
+
+		static ProviderProbe connect(ServiceInstance instance, String serializer, Integer controlPort) {
+			if (controlPort != null) {
+				java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder().connectTimeout(COUNTERS_TIMEOUT)
+						.version(java.net.http.HttpClient.Version.HTTP_1_1).build();
+				return new ProviderProbe(null, null, null, http, "http://" + instance.host() + ":" + controlPort);
+			}
+			String address = instance.address();
+			RpcClient client = RpcClient.builder().registry(DirectRegistryFactory.config(address)).serializer(serializer).ioThreads(1)
+					.connectionsPerNode(1).defaultTimeout(ENVIRONMENT_TIMEOUT).build();
+			try {
+				return new ProviderProbe(client,
+						client.reference(BenchService.class, ReferenceOptions.defaults().timeout(ENVIRONMENT_TIMEOUT).retries(0)),
+						client.reference(BenchService.class, ReferenceOptions.defaults().timeout(COUNTERS_TIMEOUT).retries(0)), null, null);
+			} catch (RuntimeException e) {
+				client.close();
+				throw e;
+			}
+		}
+
+		String channel() {
+			return http != null ? base + " (HTTP control endpoint, IO thread)" : "rpc (BenchService.stats / counters through the business executor)";
+		}
+
+		Map<String, String> stats() {
+			return http != null ? get(BenchHttpServer.STATS_PATH, ENVIRONMENT_TIMEOUT) : statsProxy.stats();
+		}
+
+		Map<String, String> counters() {
+			return http != null ? get(BenchHttpServer.COUNTERS_PATH, COUNTERS_TIMEOUT) : countersProxy.counters();
+		}
+
+		private Map<String, String> get(String path, Duration timeout) {
+			try {
+				var response = http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + path)).timeout(timeout).GET().build(),
+						java.net.http.HttpResponse.BodyHandlers.ofString());
+				if (response.statusCode() != 200) {
+					throw new IllegalStateException("GET " + base + path + " -> HTTP " + response.statusCode());
+				}
+				Map<String, String> out = new LinkedHashMap<>();
+				((Map<?, ?>) Json.parse(response.body())).forEach((k, v) -> out.put(String.valueOf(k), String.valueOf(v)));
+				return out;
+			} catch (java.io.IOException e) {
+				throw new IllegalStateException("GET " + base + path + ": " + e, e);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("interrupted: GET " + base + path, e);
+			}
+		}
+
+		void close() {
+			if (client != null) {
+				client.close();
+			}
+			if (http != null) {
+				http.close();
+			}
+		}
 	}
 }

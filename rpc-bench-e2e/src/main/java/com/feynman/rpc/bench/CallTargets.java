@@ -74,12 +74,21 @@ final class CallTargets {
 	 *                对比对象由提供者使用；{@code --http-client} / {@code --io-busy-poll} 只对 http 卡有效
 	 */
 	static CallTarget create(Profile profile, CallTarget.Endpoint endpoint, MeterRegistry metrics, HarnessOptions options) {
+		return create(profile, endpoint, metrics, options, Map.of());
+	}
+
+	/**
+	 * @param controlPorts 提供者公布地址 → HTTP 控制端口（{@code --topology} 的第 6 列）：rpc 卡的每提供者统计改经 HTTP 取，不经业务执行器
+	 */
+	static CallTarget create(Profile profile, CallTarget.Endpoint endpoint, MeterRegistry metrics, HarnessOptions options,
+			Map<String, Integer> controlPorts) {
 		String transport = profile.target().transport();
 		if (!profile.target().http() && options.httpOnlyOptionsGiven()) {
 			throw new IllegalArgumentException("--http-client / --io-busy-poll apply to transport = http only");
 		}
 		return switch (transport) {
-			case Profile.TRANSPORT_RPC -> RpcCallTarget.connect(profile, endpoint, metrics, options.ioThreads(), options.flushConsolidation());
+			case Profile.TRANSPORT_RPC -> RpcCallTarget.connect(profile, endpoint, metrics, options.ioThreads(), options.flushConsolidation(),
+					ClusterChoice.resolve(profile, options), controlPorts);
 			case Profile.TRANSPORT_HTTP -> {
 				if (metrics != null) {
 					throw new IllegalArgumentException("--metrics-port does not apply to transport = http");

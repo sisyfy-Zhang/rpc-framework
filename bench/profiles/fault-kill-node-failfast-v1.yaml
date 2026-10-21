@@ -1,0 +1,35 @@
+# 口径卡（故障注入：杀节点）：3 个提供者经 ZooKeeper 发现（会话超时 30s，ZK 注册中心缺省），开环 5000 req/s、60s，20s 时 kill -9 第 2 个提供者。
+# 容错 failfast、重试 0（失败原样返回）。
+# 与 fault-kill-node-failover-v1 只差 target.cluster / target.retries。另两种变体用同一张卡的参数（--fault-variant）：
+#   sigterm（优雅停机对照）、toxic-timeout（静默死亡：第 2 个提供者经 toxiproxy，timeout toxic 让连接挂住不回包、不关连接）。
+# 跑法：bench/bin/fault-run.sh --card fault-kill-node-failfast-v1 [--variant sigterm | --variant toxic-timeout]。故障时刻相对本轮开始（预热段之后）。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: fault-kill-node-failfast-v1
+question: 3 个提供者、开环 5000 req/s，一个节点被 kill -9 时，failfast 下错误持续多久、多快恢复
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 3
+  load_balance: roundrobin
+  cluster: failfast
+  retries: 0
+load:
+  model: open
+  rate: 5000
+  faults:
+    - { at: 20s, kind: kill-9, target: 2 }
+  duration: 60s
+  warmup: 10s
+  steady_window: [10s, 60s]
+  rounds: 1
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）；toxic-timeout 变体时第 2 个提供者经 toxiproxy 原生进程（同 WSL）
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p99, p999, max, errors_by_status]

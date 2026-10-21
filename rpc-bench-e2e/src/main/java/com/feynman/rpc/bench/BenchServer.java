@@ -24,10 +24,16 @@ final class BenchServer implements AutoCloseable {
 
 	private final RpcServer server;
 	private final Map<String, String> environment;
+	/** {@code BenchService.stats()} / {@code counters()} 的内容，HTTP 控制端点（{@code --http-port} 的 GET /stats、/counters）复用。 */
+	private final java.util.function.Supplier<Map<String, String>> stats;
+	private final java.util.function.Supplier<Map<String, String>> counters;
 
-	private BenchServer(RpcServer server, Map<String, String> environment) {
+	private BenchServer(RpcServer server, Map<String, String> environment, java.util.function.Supplier<Map<String, String>> stats,
+			java.util.function.Supplier<Map<String, String>> counters) {
 		this.server = server;
 		this.environment = environment;
+		this.stats = stats;
+		this.counters = counters;
 	}
 
 	/**
@@ -74,10 +80,41 @@ final class BenchServer implements AutoCloseable {
 	 */
 	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
 			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark) throws Exception {
+		return start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation, outboundBackpressure, waterMark, null, 0);
+	}
+
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
+			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark, Integer advertisePort,
+			long workNanos) throws Exception {
+		return start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation, outboundBackpressure, waterMark,
+				advertisePort, workNanos, null);
+	}
+
+	/**
+	 * @param advertisePort {@code server --advertise-port}：注册中心里公布的端口（toxiproxy 代理端口，见 {@link PortMappingRegistryFactory}）；
+	 *                      null = 公布实际监听端口。实际值记进 {@code server_advertised_port}
+	 * @param workNanos     {@code server --work}：每次 echo 返回前 parkNanos 的时长（模拟 IO 等待，见 {@link BenchServiceImpl}）；0 = 不等。
+	 *                      记进 {@code server_work_ms}
+	 */
+	/**
+	 * @param deregisterGrace {@code server --deregister-grace}：{@code RpcServerConfig.deregisterGrace}；null = 框架缺省（0）。
+	 *                        实际值记进 {@code server_deregister_grace_ms}
+	 */
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
+			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark, Integer advertisePort,
+			long workNanos, java.time.Duration deregisterGrace) throws Exception {
+		if (advertisePort != null && registry == null) {
+			throw new IllegalArgumentException("--advertise-port needs --registry (it changes the port written to the registry)");
+		}
+		QueueWaitFilter queueWait = new QueueWaitFilter();
 		var builder = RpcServer.builder().port(port).serializer(serializer).ioThreads(ioThreads).executor(executor)
 				.flushConsolidation(flushConsolidation).outboundBackpressure(outboundBackpressure);
 		if (waterMark != null) {
 			builder.writeBufferWaterMark(waterMark[0], waterMark[1]);
+		}
+		builder.serverFilter(queueWait);
+		if (deregisterGrace != null) {
+			builder.deregisterGrace(deregisterGrace);
 		}
 		if (metrics != null) {
 			builder.serverFilter(new MicrometerServerFilter(metrics));
@@ -86,7 +123,7 @@ final class BenchServer implements AutoCloseable {
 			builder.host(host);
 		}
 		if (registry != null) {
-			builder.registry(registry);
+			builder.registry(advertisePort == null ? registry : PortMappingRegistryFactory.wrap(registry, advertisePort));
 		}
 		RpcServer server = builder.build();
 		try {
@@ -102,13 +139,27 @@ final class BenchServer implements AutoCloseable {
 			environment.put("server_outbound_backpressure", server.config().outboundBackpressure() ? "on" : "off");
 			environment.put("server_write_buffer_water_mark", server.config().writeBufferLow() + ":" + server.config().writeBufferHigh());
 			environment.put("server_outbound_hard_limit", String.valueOf(server.config().outboundHardLimit()));
-			server.export(BenchService.class, new BenchServiceImpl(environment, () -> backpressureStats(server)));
+			if (server.config().executor() instanceof ExecutorConfig.Fixed fixed) {
+				environment.put("server_executor_queue_capacity", String.valueOf(fixed.queueCapacity()));
+			}
+			environment.put("server_work_ms", String.valueOf(RoundRecorder.round3(workNanos / 1e6)));
+			environment.put("server_deregister_grace_ms", String.valueOf(server.config().deregisterGrace().toMillis()));
+			environment.put("server_advertised_port", advertisePort == null ? "same as listen port" : String.valueOf(advertisePort));
+			environment.put("server_queue_wait_filter", "on (bench QueueWaitFilter, order " + QueueWaitFilter.ORDER + ")");
+			java.util.function.Supplier<Map<String, String>> extra = () -> {
+				Map<String, String> out = backpressureStats(server);
+				out.putAll(ServerCounters.of(server, queueWait));
+				return out;
+			};
+			java.util.function.Supplier<Map<String, String>> counters = () -> ServerCounters.of(server, queueWait);
+			BenchServiceImpl impl = new BenchServiceImpl(environment, extra, counters, workNanos);
+			server.export(BenchService.class, impl);
 			if (metrics != null) {
 				RpcServerMetrics.bind(server, metrics);
 			}
 			server.start();
 			server.registered().get(30, TimeUnit.SECONDS);
-			return new BenchServer(server, java.util.Collections.unmodifiableMap(environment));
+			return new BenchServer(server, java.util.Collections.unmodifiableMap(environment), impl::stats, counters);
 		} catch (Exception e) {
 			server.close();
 			throw e;
@@ -149,6 +200,16 @@ final class BenchServer implements AutoCloseable {
 
 	RpcServer rpcServer() {
 		return server;
+	}
+
+	/** {@code BenchService.stats()} 的同一份内容（HTTP 控制端点 GET /stats）。 */
+	java.util.function.Supplier<Map<String, String>> statsSupplier() {
+		return stats;
+	}
+
+	/** {@code BenchService.counters()} 的同一份内容（HTTP 控制端点 GET /counters）。 */
+	java.util.function.Supplier<Map<String, String>> countersSupplier() {
+		return counters;
 	}
 
 	/** 启动时采集的服务端环境（{@code BenchService.environment()} 返回的同一份），HTTP 对照端点复用它。 */
