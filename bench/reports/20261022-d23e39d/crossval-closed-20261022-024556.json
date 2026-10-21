@@ -1,0 +1,239 @@
+{
+  "schema": "crossval/3",
+  "mode": "closed",
+  "kind": "capacity",
+  "created_at": "2026-10-22T02:45:56.953949071+11:00",
+  "question": "同一个 HTTP 目标、闭环同一并发，harness 与 wrk 各自能压到多少、瓶颈在哪一侧——发压容量标定",
+  "target": {
+    "url": "http://127.0.0.1:19180/echo",
+    "payload_bytes": 1024,
+    "model": "closed",
+    "rate": null,
+    "concurrency": 64,
+    "harness_connections": 64,
+    "window": ["20s", "60s"]
+  },
+  "harness": {
+    "file": "crossval-http-closed-capacity-v1-20261022-024133.json",
+    "profile": "crossval-http-closed-capacity-v1",
+    "label": "archive",
+    "official_round": 1,
+    "selection_rule": "闭环：窗口吞吐的中位数那一轮",
+    "throughput_rps": 131222.725,
+    "latency_ms": {
+      "p50": 0.418,
+      "p99": 1.531,
+      "p999": 4.411,
+      "max": 158.728
+    },
+    "service_time_ms": {
+      "p50": null,
+      "p99": null,
+      "p999": null,
+      "max": null
+    },
+    "dispatch_lag_ms": {
+      "p50": null,
+      "p99": null,
+      "p999": null,
+      "max": null
+    },
+    "window_requests": 5248909,
+    "window_errors": 0,
+    "all_rounds_valid": true,
+    "rounds_total": 3,
+    "valid_rounds": 3,
+    "valid_rounds_window_errors": 0,
+    "backlog_triggered": false,
+    "client_bound": true,
+    "passed": true,
+    "cpu": {
+      "source": "/proc/stat, steady window",
+      "window_ms": 40000,
+      "client_cpus": "5-9",
+      "client_busy_pct": 97.4,
+      "server_cpus": "0-4",
+      "server_busy_pct": 74.5
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 3,
+        "min": 129990.55,
+        "max": 132084.475,
+        "range": 2093.925,
+        "range_pct": 1.611
+      },
+      "p50_ms": {
+        "rounds": 3,
+        "min": 0.418,
+        "max": 0.423,
+        "range": 0.005,
+        "range_pct": 1.196
+      },
+      "p95_ms": {
+        "rounds": 3,
+        "min": 0.97,
+        "max": 0.991,
+        "range": 0.021,
+        "range_pct": 2.165
+      },
+      "p99_ms": {
+        "rounds": 3,
+        "min": 1.414,
+        "max": 1.531,
+        "range": 0.117,
+        "range_pct": 8.274
+      },
+      "p999_ms": {
+        "rounds": 3,
+        "min": 3.914,
+        "max": 4.411,
+        "range": 0.497,
+        "range_pct": 12.698
+      },
+      "max_ms": {
+        "rounds": 3,
+        "min": 39.78,
+        "max": 158.728,
+        "range": 118.948,
+        "range_pct": 299.015
+      }
+    },
+    "cpus_allowed": "5-9",
+    "server_cpus_allowed": "0-4",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "git_sha": "d23e39d7cffb21f53731e51154e1269dfddf7614",
+    "git_dirty": false,
+    "hostname": "localhost",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "started_at": "2026-10-21T15:41:33.635327629Z",
+    "harness_options": {
+      "open_workers": "n/a (closed loop)",
+      "open_pool_size": null,
+      "http_client": "netty",
+      "io_threads": 5,
+      "io_busy_poll": false,
+      "io_source": "default",
+      "workers_source": "default",
+      "pin_dispatcher": 5,
+      "pre_warmup": "20s",
+      "pre_warmup_ms": 20000.0,
+      "pre_warmup_source": "load.warmup",
+      "flush_consolidation": "n/a (http)"
+    },
+    "dispatcher_pin": null
+  },
+  "tool": {
+    "name": "wrk",
+    "version": "wrk 4.2.0-dirty [epoll] Copyright (C) 2012 Will Glozer",
+    "command": "taskset -c 5-9 wrk -t 4 -c 64 --latency -s bench/bin/post-1k.lua -d 40s http://127.0.0.1:19180/echo",
+    "output_file": "wrk-measure-1.txt",
+    "requests_per_sec": 229879.91,
+    "requests": 9199184,
+    "duration_s": 40.02,
+    "latency_ms": {
+      "p50": 0.167,
+      "p75": 0.846,
+      "p90": 3.48,
+      "p99": 9.35,
+      "p999": null,
+      "max": 79.97
+    },
+    "socket_errors": {},
+    "non_2xx_3xx": 0,
+    "cpu": {
+      "sample": "服务端核(0 1 2 3 4) 平均 98% · 压测端核(5 6 7 8 9) 平均 70%（20s 采样）· cpu0=97% cpu1=98% cpu2=97% cpu3=98% cpu4=99% cpu5=16% cpu6=81% cpu7=83% cpu8=85% cpu9=83%",
+      "server_busy_pct": 98,
+      "client_busy_pct": 70
+    },
+    "raw_output": "Running 40s test @ http://127.0.0.1:19180/echo\n  4 threads and 64 connections\n  Thread Stats   Avg      Stdev     Max   +/- Stdev\n    Latency     1.05ms    2.25ms  79.97ms   89.20%\n    Req/Sec    57.79k     6.52k   74.12k    82.31%\n  Latency Distribution\n     50%  167.00us\n     75%  846.00us\n     90%    3.48ms\n     99%    9.35ms\n  9199184 requests in 40.02s, 9.47GB read\nRequests/sec: 229879.91\nTransfer/sec:    242.25MB\n",
+    "runs": 1,
+    "selected_run": 1,
+    "selection_rule": "单次测量",
+    "measurements": [
+      {
+        "run": 1,
+        "selected": true,
+        "output_file": "wrk-measure-1.txt",
+        "requests_per_sec": 229879.91,
+        "requests": 9199184,
+        "p50_ms": 0.167,
+        "p99_ms": 9.35,
+        "max_ms": 79.97,
+        "uncorrected_p50_ms": null,
+        "uncorrected_p99_ms": null,
+        "uncorrected_p999_ms": null,
+        "socket_errors": 0,
+        "non_2xx_3xx": 0,
+        "raw_output": "Running 40s test @ http://127.0.0.1:19180/echo\n  4 threads and 64 connections\n  Thread Stats   Avg      Stdev     Max   +/- Stdev\n    Latency     1.05ms    2.25ms  79.97ms   89.20%\n    Req/Sec    57.79k     6.52k   74.12k    82.31%\n  Latency Distribution\n     50%  167.00us\n     75%  846.00us\n     90%    3.48ms\n     99%    9.35ms\n  9199184 requests in 40.02s, 9.47GB read\nRequests/sec: 229879.91\nTransfer/sec:    242.25MB\n"
+      }
+    ]
+  },
+  "bottleneck": {
+    "tool_run": "server",
+    "harness_run": "client"
+  },
+  "conclusion": "harness 闭环发压上限约 131,000 req/s（本机、1024 字节、64 连接）；wrk 测得的服务端上限约 230,000 req/s。",
+  "checks": [
+    {
+      "key": "cpu_bottleneck",
+      "group": "唯一判定项",
+      "criterion": "两次运行的 CPU 采样都成功，且都能判别瓶颈侧（某一侧平均 ≥ 90%）",
+      "measured": "harness 运行：压测端饱和；wrk 运行：服务端饱和",
+      "rel_dev_pct": null,
+      "passed": true
+    }
+  ],
+  "side_by_side": [
+    {
+      "metric": "吞吐 (req/s)",
+      "group": "info",
+      "judged": false,
+      "harness": 131222.725,
+      "tool": 229879.91,
+      "diff": -98657.185,
+      "rel_dev_pct": 42.917
+    },
+    {
+      "metric": "p50 (ms)",
+      "group": "info",
+      "judged": false,
+      "harness": 0.418,
+      "tool": 0.167,
+      "diff": 0.251,
+      "rel_dev_pct": 150.299
+    },
+    {
+      "metric": "p99 (ms)",
+      "group": "info",
+      "judged": false,
+      "harness": 1.531,
+      "tool": 9.35,
+      "diff": -7.819,
+      "rel_dev_pct": 83.626
+    },
+    {
+      "metric": "p99.9 (ms)",
+      "group": "info",
+      "judged": false,
+      "harness": 4.411,
+      "tool": null,
+      "diff": null,
+      "rel_dev_pct": null
+    },
+    {
+      "metric": "max (ms)",
+      "group": "info",
+      "judged": false,
+      "harness": 158.728,
+      "tool": 79.97,
+      "diff": 78.758,
+      "rel_dev_pct": 98.484
+    }
+  ],
+  "verdict": "PASS",
+  "possible_causes": [],
+  "notes": ["闭环吞吐对比不是测量校验而是容量标定：闭环下吞吐 = 并发 / 往返时延，JVM 同步调用的 harness 每次调用要在发压虚拟线程与 Netty IO 线程之间交接两次（写出、唤醒），这份固有开销决定了它的闭环上限；wrk 在单个 epoll 线程里收发，常常先压满服务端。延迟各列只作信息项（wrk 闭环不做 CO 修正）。", "CPU：harness 一侧取正式轮统计窗口内的 /proc/stat 采样（rounds[].cpu）；wrk 一侧取测量运行中段的采样。", "请求体：harness 发 1024 字节固定种子随机内容，wrk 发 1024 字节固定内容（bench/bin/post-1k.lua）；回显开销与内容无关。"]
+}
