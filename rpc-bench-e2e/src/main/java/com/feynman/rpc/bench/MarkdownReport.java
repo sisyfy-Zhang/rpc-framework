@@ -210,6 +210,13 @@ final class MarkdownReport {
 			row(md, "负载均衡 / 容错 / 重试", str(runTarget.get("load_balance")) + " / " + str(runTarget.get("cluster")) + " / " + str(runTarget.get("retries"))
 					+ "（来源 " + str(runTarget.get("cluster_options_source")) + "）");
 		}
+		if (runTarget.get("outlier_detection") instanceof Map<?, ?> od) {
+			row(md, "离群摘除", "on".equals(od.get("enabled"))
+					? "开：窗口 " + str(od.get("window_seconds")) + "s 内尝试 ≥ " + str(od.get("min_requests")) + " 且坏结果占比 ≥ " + str(od.get("failure_ratio"))
+							+ "，或连续坏结果 ≥ " + str(od.get("consecutive_failures")) + "；摘除 " + str(od.get("base_ejection")) + " × 次数（上限 "
+							+ str(od.get("max_ejection")) + "），最多摘 " + str(od.get("max_ejection_percent")) + "%（来源 " + str(od.get("source")) + "）"
+					: "关（来源 " + str(od.get("source")) + "）");
+		}
 		row(md, "时长", str(load.get("duration")) + " / 轮，预热 " + str(load.get("warmup")) + "，统计窗口 "
 				+ joinedBrackets(load.get("steady_window")) + "，共 " + str(load.get("rounds")) + " 轮");
 		row(md, "超时", str(load.get("timeout")));

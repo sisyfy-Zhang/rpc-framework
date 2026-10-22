@@ -3,6 +3,7 @@ package com.feynman.rpc.core;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +24,7 @@ import com.feynman.rpc.core.client.NettyClient;
 import com.feynman.rpc.core.client.ServiceDirectory;
 import com.feynman.rpc.core.cluster.Cluster;
 import com.feynman.rpc.core.cluster.ClusterInvocation;
+import com.feynman.rpc.core.cluster.OutlierDetector;
 import com.feynman.rpc.core.codec.AttachmentsCodec;
 import com.feynman.rpc.core.codec.EnvelopeCodec;
 import com.feynman.rpc.core.config.ReferenceOptions;
@@ -69,7 +71,8 @@ import io.netty.buffer.ByteBufUtil;
  * {@link #close()} 关闭连接、注销订阅、关闭注册中心会话与 IO 线程组，关完不留线程。
  *
  * <p>调用路径：代理 → 客户端 Filter 链（内置 DeadlineClientFilter + 用户 Filter，按 order 稳定排序）→ Cluster
- * （含 LoadBalance 与重试，对 Filter 不可见）→ 发送。Filter 链在 {@link #reference} 时组装一次。
+ * （含 LoadBalance 与重试，对 Filter 不可见）→ 发送。Filter 链在 {@link #reference} 时组装一次。Cluster 取到的候选已经
+ * 去掉了处于离群摘除期的提供者（{@link OutlierDetector}，每个服务一个，缺省开启），每次尝试的结果回喂给它。
  *
  * <p>失败的两个通道：传输失败（连不上、写失败）让 future 异常完成，Cluster 据此重试；服务端已经给出答复的错误
  * （业务异常、DEADLINE_EXCEEDED、序列化失败等）以及本次调用的 deadline 已到，都放进 {@link Result}，不重试——
@@ -106,6 +109,13 @@ public final class RpcClient implements AutoCloseable {
 	private final LongAdder retryNodeSwitches = new LongAdder();
 	/** 每个提供者地址的累计尝试 / 失败 / 超时，见 {@link #nodeCallStats()}。 */
 	private final Map<String, NodeCounters> nodeCounters = new ConcurrentHashMap<>();
+	/**
+	 * 每个已订阅服务的离群摘除（离群摘除关闭时为空）。与 {@link #directories} 同时建立：先建目录与检测器、再订阅，
+	 * 订阅的首次推送就能在变更回调里找到检测器。
+	 */
+	private final Map<ServiceKey, OutlierDetector> outlierDetectors = new ConcurrentHashMap<>();
+	/** 全部服务的离群摘除累计计数，见 {@link #outlierEjections()}。 */
+	private final OutlierDetector.Stats outlierStats = new OutlierDetector.Stats();
 	/** 保护 state 与连接池重建（refreshConnections）。持有它时绝不调用 Registry（见 close()）。 */
 	private final Object lifecycleLock = new Object();
 	private volatile State state = State.OPEN;
@@ -182,7 +192,8 @@ public final class RpcClient implements AutoCloseable {
 		}
 		Duration timeout = options.timeout() != null ? options.timeout() : config.defaultTimeout();
 		int retries = options.retries();
-		Invoker chain = FilterChain.build(filters, invocation -> invokeCluster(directory, invocation, retries));
+		OutlierDetector outlierDetector = outlierDetectors.get(key);
+		Invoker chain = FilterChain.build(filters, invocation -> invokeCluster(directory, outlierDetector, invocation, retries));
 		Object proxy = Proxy.newProxyInstance(itf.getClassLoader(), new Class<?>[] { itf },
 				new ReferenceProxy(key, chain, timeout, options.inheritDeadline(), gate, config.syncWaitGrace(), this::inClientEventLoop));
 		return itf.cast(proxy);
@@ -266,6 +277,36 @@ public final class RpcClient implements AutoCloseable {
 	}
 
 	/**
+	 * 离群摘除的累计摘除次数（全部服务之和；同一地址在两个服务里各被摘一次计 2）。离群摘除关闭时恒为 0。只读观测。
+	 * 规则见 {@link com.feynman.rpc.core.config.OutlierDetectionConfig}。
+	 */
+	public long outlierEjections() {
+		return outlierStats.ejections();
+	}
+
+	/** 离群摘除到期、地址回到候选集的累计次数（到期后第一次选点或观测时计；注册中心推送移除不算）。只读观测。 */
+	public long outlierRestores() {
+		return outlierStats.restores();
+	}
+
+	/** 某服务的候选全部处于摘除期、退回全部候选的选点次数（每次选点计一次）。正常配置（最大摘除比例 &lt; 100%）下只在推送收窄列表时可能出现。 */
+	public long outlierAllEjectedFallbacks() {
+		return outlierStats.allEjectedFallbacks();
+	}
+
+	/**
+	 * 当前处于离群摘除期的提供者地址 → 到期时刻（按地址排序；同一地址在多个服务里被摘时取最晚的到期时刻）。已到期的先放回、不在其中。
+	 * 离群摘除只影响选点，{@link #providers(ServiceKey)}（注册中心视图）不变。
+	 */
+	public Map<String, Instant> ejectedNodes() {
+		Map<String, Instant> out = new java.util.TreeMap<>();
+		for (OutlierDetector detector : outlierDetectors.values()) {
+			detector.ejectedNodes().forEach((address, until) -> out.merge(address, until, (a, b) -> a.isAfter(b) ? a : b));
+		}
+		return out;
+	}
+
+	/**
 	 * 按提供者地址（{@code host:port}）的累计计数快照（地址按字典序）：每次 Cluster 向某节点发出的尝试计一次
 	 * {@link NodeCallStats#attempts()}（含重试）。只读观测，用于故障注入实验的"各节点份额"与"按节点的失败"；见 {@link NodeCallStats}。
 	 */
@@ -303,13 +344,17 @@ public final class RpcClient implements AutoCloseable {
 			if (existing != null) {
 				return existing;
 			}
-			ServiceDirectory directory = new ServiceDirectory(key, config.emptyProtection(), changed -> refreshConnections());
+			ServiceDirectory directory = new ServiceDirectory(key, config.emptyProtection(), this::onDirectoryChanged);
+			if (config.outlierDetection().enabled()) {
+				outlierDetectors.put(key, new OutlierDetector(config.outlierDetection(), key.toString(), directory::instances, outlierStats));
+			}
 			// 先放进表再订阅：订阅会立即推送一次，推送回调里重建连接时必须能看到这个目录
 			directories.put(key, directory);
 			try {
 				registry.subscribe(key, directory);
 			} catch (RuntimeException e) {
 				directories.remove(key);
+				outlierDetectors.remove(key);
 				throw e;
 			}
 			return directory;
@@ -323,6 +368,18 @@ public final class RpcClient implements AutoCloseable {
 	 * 因此 close 关完连接之后不会有迟到的推送再建出新的连接池。CLOSING（等在途）期间照常调整，
 	 * 下线的节点仍按排空流程处理。
 	 */
+	/**
+	 * 目录的连接目标变化（注册中心推送，见 ServiceDirectory）：离群摘除只保留仍在连接目标里的地址的状态——推送移除的地址
+	 * 在第二次回调（连接目标收窄到新列表）时清掉；然后调整连接池。
+	 */
+	private void onDirectoryChanged(ServiceDirectory changed) {
+		OutlierDetector detector = outlierDetectors.get(changed.key());
+		if (detector != null) {
+			detector.retain(changed.connectionTargets());
+		}
+		refreshConnections();
+	}
+
 	private void refreshConnections() {
 		synchronized (lifecycleLock) {
 			if (state == State.CLOSED) {
@@ -336,9 +393,10 @@ public final class RpcClient implements AutoCloseable {
 		}
 	}
 
-	private CompletableFuture<Result> invokeCluster(ServiceDirectory directory, Invocation invocation, int retries) {
+	private CompletableFuture<Result> invokeCluster(ServiceDirectory directory, OutlierDetector outlierDetector, Invocation invocation,
+			int retries) {
 		ClusterInvocation clusterInvocation = new ClusterInvocation(directory::instances, loadBalance, loadStats,
-				new AttemptTracker(invocation), retries, invocation.toString());
+				new AttemptTracker(invocation, outlierDetector), retries, invocation.toString(), outlierDetector);
 		return cluster.invoke(clusterInvocation);
 	}
 
@@ -349,10 +407,12 @@ public final class RpcClient implements AutoCloseable {
 	 */
 	private final class AttemptTracker implements Function<ServiceInstance, CompletableFuture<Result>> {
 		private final Invocation invocation;
+		private final OutlierDetector outlierDetector;
 		private volatile String previous;
 
-		AttemptTracker(Invocation invocation) {
+		AttemptTracker(Invocation invocation, OutlierDetector outlierDetector) {
 			this.invocation = invocation;
+			this.outlierDetector = outlierDetector;
 		}
 
 		@Override
@@ -366,15 +426,19 @@ public final class RpcClient implements AutoCloseable {
 				}
 			}
 			previous = address;
-			return attempt(instance, invocation);
+			return attempt(instance, invocation, outlierDetector);
 		}
 	}
 
 	/**
 	 * 对一个节点发起一次请求。超时用本次调用 deadline 的剩余时间（重试共享同一份预算），这是该请求唯一的定时器；
 	 * 已经没有剩余时间时不再发送，直接以 {@link RpcDeadlineExceededException} 结束。
+	 *
+	 * <p>结果按 {@link NodeCallStats} 同一分类交给离群摘除（{@code outlierDetector} 非 null 时）：failures（传输失败、SERVER_OVERLOADED）
+	 * 与 timeouts（本地超时、服务端 DEADLINE_EXCEEDED、调用方放弃等待）都是坏结果；其余有响应的结果（成功、业务异常、其它错误状态）
+	 * 是好结果；本地序列化失败与发出前 deadline 已耗尽的不计（与节点健康无关）。
 	 */
-	private CompletableFuture<Result> attempt(ServiceInstance instance, Invocation invocation) {
+	private CompletableFuture<Result> attempt(ServiceInstance instance, Invocation invocation, OutlierDetector outlierDetector) {
 		if (state == State.CLOSED) {
 			return CompletableFuture.failedFuture(new RpcException("RpcClient closed"));
 		}
@@ -424,10 +488,18 @@ public final class RpcClient implements AutoCloseable {
 							if (message.messageType() == MessageType.RESPONSE && message.status() == Status.SERVER_OVERLOADED) {
 								// 服务端拒绝（过载 / 停机）：业务没执行，与传输失败同一通道，Cluster 可排除该节点重试
 								counters.failures.increment();
+								if (outlierDetector != null) {
+									outlierDetector.onFailure(address, OutlierDetector.OVERLOADED);
+								}
 								throw new CompletionException(overloaded(message, address, invocation));
 							}
 							if (message.messageType() == MessageType.RESPONSE && message.status() == Status.DEADLINE_EXCEEDED) {
 								counters.timeouts.increment();
+								if (outlierDetector != null) {
+									outlierDetector.onFailure(address, OutlierDetector.DEADLINE_EXCEEDED);
+								}
+							} else if (outlierDetector != null) {
+								outlierDetector.onSuccess(address);
 							}
 							return decode(message, remoteMethod, invocation);
 						} finally {
@@ -437,6 +509,9 @@ public final class RpcClient implements AutoCloseable {
 					Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
 					if (cause instanceof TimeoutException) {
 						counters.timeouts.increment();
+						if (outlierDetector != null) {
+							outlierDetector.onFailure(address, OutlierDetector.TIMEOUT);
+						}
 						return Result.exception(new RpcDeadlineExceededException("no response within "
 								+ invocation.timeout().toMillis() + "ms from " + address + ": " + invocation, cause));
 					}
@@ -444,11 +519,17 @@ public final class RpcClient implements AutoCloseable {
 						// 后者只来自调用方放弃等待（见上）：deadline 已过，进结果通道、不重试
 						if (cause instanceof RpcDeadlineExceededException) {
 							counters.timeouts.increment();
+							if (outlierDetector != null) {
+								outlierDetector.onFailure(address, OutlierDetector.TIMEOUT);
+							}
 						}
 						return Result.exception(cause);
 					}
 					// 传输失败：让 future 异常完成，Cluster 据此决定是否换节点重试
 					counters.failures.increment();
+					if (outlierDetector != null) {
+						outlierDetector.onFailure(address, OutlierDetector.TRANSPORT);
+					}
 					throw error instanceof CompletionException ce ? ce : new CompletionException(cause);
 				});
 	}
@@ -608,6 +689,7 @@ public final class RpcClient implements AutoCloseable {
 			}
 		});
 		directories.clear();
+		outlierDetectors.clear();
 		try {
 			registry.close();
 		} catch (RuntimeException e) {

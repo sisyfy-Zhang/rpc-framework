@@ -32,6 +32,7 @@
 - **注册中心**：ZooKeeper（会话过期后自动重建临时节点、订阅推送合并去重、注册中心不可达时后台重试）与 Nacos；两者跑同一套契约测试（TCK）。
 - **消费端推空保护**：注册中心推送空列表时保留旧地址并告警。
 - **负载均衡**：`roundrobin`、`p2c`（两个随机候选取在途数少者）。**容错**：`failfast`、`failover`、`failback`。
+- **离群摘除**（缺省开）：按提供者统计最近 10 秒的坏结果（超时、`DEADLINE_EXCEEDED`、传输失败、`SERVER_OVERLOADED`；业务异常不算），连续 5 个或占比 ≥ 50%（至少 20 次尝试）时把它从负载均衡候选里摘掉 10s × 被摘次数（上限 60s），到期自动放回；最多摘一半提供者。
 - **Filter 链**：客户端 / 服务端同一个 `Filter` 接口，按 `order()` 稳定排序；**attachments** 经 `RpcContext` 设置，按调用消费即清。
 - **deadline**：超时是一次调用（含所有重试）的总预算，以剩余毫秒传给服务端；排队中已过期的请求不执行、回 `DEADLINE_EXCEEDED`；服务端业务里发起的下游调用自动继承剩余预算。
 - **异常**：业务异常跨进程按原类型还原（类名白名单），不认识的类降级为 `RpcRemoteException` 并保留原类名与消息；方法声明的受检异常原样抛出；远端堆栈默认截断到 8KB。
@@ -287,6 +288,11 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `flush-consolidation` | `flushConsolidation` | true | 连接 pipeline 首位加 Netty 的 `FlushConsolidationHandler`（合并 flush，不改协议字节、不加定时器）；关掉只用于对照实验 |
 | `write-buffer-low` / `write-buffer-high` | `writeBufferWaterMark(low, high)` | 32KB / 64KB | 每条连接的写缓冲水位线（Netty `WRITE_BUFFER_WATER_MARK`，缺省即 Netty 缺省；支持 `64KB` 写法，纯数字按字节）。待写字节超过 high 时连接不可写，同一节点有多条连接时优先选可写的 |
 | `outbound-hard-limit` | `outboundHardLimit` | high × 16 | 一条连接不可写且待写字节超过它时，新请求不写出、以"未发出"的传输失败结束（failover 且 `retries > 0` 时换节点）；0 = 关闭 |
+| `outlier-detection.enabled` | `outlierDetection(OutlierDetectionConfig)` | true | 离群摘除开关（`OutlierDetectionConfig.disabled()` 关闭）。坏结果 = 本地超时、`DEADLINE_EXCEEDED`、传输失败（含"未发出"）、`SERVER_OVERLOADED`；业务异常与其它服务端错误不算 |
+| `outlier-detection.min-requests` / `failure-ratio` | 同上（`OutlierDetectionConfig.builder()`） | 20 / 0.5 | 比例条件：最近 10 秒（10 个 1 秒桶）内尝试 ≥ min-requests 且坏结果占比 ≥ failure-ratio 时摘除 |
+| `outlier-detection.consecutive-failures` | 同上 | 5 | 连续条件：连续这么多个坏结果时摘除；0 = 不用这个条件 |
+| `outlier-detection.base-ejection` / `max-ejection` | 同上 | 10s / 60s | 摘除时长 = base × 该地址累计被摘次数，上限 max；到期自动回到候选集（不做半开探测、不做主动健康检查）；放回后每连续健康满一个 max，累计次数减 1（最低 1） |
+| `outlier-detection.max-ejection-percent` | 同上 | 50 | 最多摘除的提供者比例：摘掉之后健康的至少保留 `ceil(n × (100 − p) / 100)` 个、且至少 1 个；万一候选全在摘除期，退回全部候选 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
 引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。
@@ -363,7 +369,9 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 - **连接重置后，`retries > 0` 可能重发已经执行过的请求**：请求写出后连接断开，客户端无法知道服务端是否已执行，会按传输失败处理并重试。只对幂等方法设置 `retries`，或在业务侧用 `rpc.idempotency-key` attachment 自行去重（框架不内置去重）。
 - **返回 `CompletableFuture` 的方法，用户回调在 Netty IO 线程上执行**：在 `thenApply` / `whenComplete` 里做阻塞操作会卡住该连接上的所有请求；需要阻塞时用 `thenApplyAsync(fn, yourExecutor)`。
 - **还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在[路线图](#路线图)里。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](docs/observability.md)）。性能数字只来自一台笔记本的同机 loopback，见[测试与证据](#测试与证据)的"不可外推"。
-- **没有按节点的熔断 / 离群摘除**：进程存活但不回包（连接静默挂起）时，打到它的请求持续超时（超时不重试；读空闲 40s 关连接后重连仍被挂住；进程存活，注册中心也不摘），见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
+- **离群摘除只按失败、按时间放回**：进程存活但不回包、被 kill 但注册中心还没摘时，坏节点在连续 5 个坏结果（或 10 秒内过半失败）后被摘，摘除期间不再分到流量；
+  但它**不做半开探测与主动健康检查**——到期直接放回，若节点仍坏，放回后的前几个请求会再失败一次才再被摘（时长按次数倍增到 60s）；**不按延迟摘除**（慢节点交给 `p2c`）；
+  只有一个提供者的服务永远不摘（最多摘一半、至少留 1 个）；没有服务级熔断。实验见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。
 - **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。
 - **服务端 Filter 运行在业务线程上**：IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
 
@@ -408,7 +416,9 @@ direct 让业务方法在 IO 线程上执行，阻塞即卡住同一事件循环
 gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连接，开箱即用的差距大头在这两点，不在编解码（[comparison.md 第 3 节](docs/comparison.md#3-差在哪)）。
 
 - **故障注入**（慢节点 / 杀节点 / 突增，真实制造，判定预登记；探针口径）：P2C 把慢节点份额从 1/3 压到 0.038；failover 下 `kill -9` 零错误；
-  有界队列在 3 倍突增下快速拒绝、回落 1s 恢复；连接静默挂起时 1/3 流量持续超时——没有离群摘除，见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
+  有界队列在 3 倍突增下快速拒绝、回落 1s 恢复；连接静默挂起时 1/3 流量持续超时，见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
+- **离群摘除 A/B**（同一批故障卡，只差 `--outlier-detection on|off`；探针口径）：连接静默挂起 6.2 万个超时 → 5 038 个（3.0s 恢复，之后只在到期回归时各约 1 秒）；
+  failfast 下 kill -9 4.8 ~ 5.0 万个错误 → 221 / 397 个（1.0s 恢复）；慢节点与优雅停机零摘除，见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。
 - **harness 交叉验证**（阶段 1 验收项 A1-4：与 wrk2 / wrk 打同一个 HTTP 端点）：开环**连续 3 次 PASS**（第 1 次在 d23e39d 上；第 2、3 次在 d8dc78b 上，它与 d23e39d 之间只改了对比表工具 `CompareReport` 与归档，不碰发压与测量路径）
   （[第 1 次](bench/reports/20261022-d23e39d/crossval-open-20261022-024132.md) · [第 2 次](bench/reports/20261022-d23e39d/crossval-repeat/run-2/crossval-open-20261022-032433.md) · [第 3 次](bench/reports/20261022-d23e39d/crossval-repeat/run-3/crossval-open-20261022-033221.md)），
   闭环容量标定 [PASS](bench/reports/20261022-d23e39d/crossval-closed-20261022-024556.md)；判据与流程见 [docs/benchmarking.md「交叉验证」](docs/benchmarking.md#交叉验证)。
@@ -424,7 +434,7 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
 - **阶段 3 · 发布**：已完成就绪项。CI 全绿；坐标 `io.github.sisyfy-zhang`、`rpc-bom`、release profile 与 release.yml（[docs/releasing.md](docs/releasing.md)）；
   空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 已发布到 Maven Central，空白工程从 Central 解析 1.0.0 复验通过。
 - **阶段 4 · 可选（每项自带对比实验）**：
-  - **离群摘除 / 熔断**：按节点的超时 / 失败率摘除。证据：连接静默挂起时 1/3 流量持续超时到轮次结束（[故障注入](docs/probes/fault-injection.md)）。
+  - **离群摘除**：已完成（缺省开）。按节点的超时 / 传输失败 / 过载拒绝摘除，时间驱动放回；A/B 见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。服务级熔断未做。
   - 自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
 
 ## 文档

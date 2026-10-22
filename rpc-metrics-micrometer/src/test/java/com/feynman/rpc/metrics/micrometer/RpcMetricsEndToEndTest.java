@@ -156,7 +156,12 @@ class RpcMetricsEndToEndTest {
 		assertEquals(0.0, registry.find(RpcServerMetrics.EXECUTOR_REJECTIONS).functionCounter().count());
 		assertEquals(0.0, registry.find(RpcServerMetrics.SHUTDOWN_REJECTIONS).functionCounter().count());
 		assertEquals(4, serverMetrics.counters().size());
-		assertEquals(2, clientMetrics.counters().size());
+		assertEquals(4, clientMetrics.counters().size());
+		assertEquals(3, clientMetrics.gauges().size());
+		// 离群摘除（FunctionCounter + Gauge，没有故障时为 0）
+		assertEquals(0.0, registry.find(RpcClientMetrics.OUTLIER_EJECTIONS).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcClientMetrics.OUTLIER_RESTORES).functionCounter().count());
+		assertEquals(0.0, gauge(RpcClientMetrics.OUTLIER_EJECTED));
 		await().atMost(5, TimeUnit.SECONDS).until(() -> gauge(RpcServerMetrics.CONNECTIONS) == gauge(RpcClientMetrics.CONNECTIONS));
 		assertEquals("slept 500", slow.get(5, TimeUnit.SECONDS));
 		await().atMost(5, TimeUnit.SECONDS).until(() -> gauge(RpcClientMetrics.INFLIGHT) == 0.0 && gauge(RpcServerMetrics.INFLIGHT) == 0.0);
@@ -193,6 +198,36 @@ class RpcMetricsEndToEndTest {
 			return ref.get() == null;
 		});
 		assertTrue(Double.isNaN(gauge.value()), "a collected client reads NaN instead of being kept alive by the registry");
+	}
+
+	/** 离群摘除的两个 FunctionCounter 与被摘数 Gauge 跟随客户端：一个活节点 + 一个没人监听的地址，连续传输失败后后者被摘。 */
+	@Test
+	void outlierMetersFollowEjections() throws Exception {
+		server = startServer(new InventoryImpl());
+		int deadPort;
+		try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+			deadPort = socket.getLocalPort();
+		}
+		client = RpcClient.builder().registry(StaticRegistryFactory.config(server.port(), deadPort)).serializer("fastjson2")
+				.loadBalance("roundrobin").build();
+		RpcClientMetrics metrics = RpcClientMetrics.bind(client, registry);
+		Inventory inventory = client.reference(Inventory.class, ReferenceOptions.defaults().timeout(Duration.ofSeconds(5)));
+		for (int i = 0; i < 40 && client.outlierEjections() == 0; i++) {
+			try {
+				inventory.reserve("a-" + i);
+			} catch (RpcException e) {
+				// 打到死地址的尝试：传输失败
+			}
+		}
+		assertEquals(1.0, registry.find(RpcClientMetrics.OUTLIER_EJECTIONS).functionCounter().count());
+		assertEquals(0.0, registry.find(RpcClientMetrics.OUTLIER_RESTORES).functionCounter().count());
+		assertEquals(1.0, gauge(RpcClientMetrics.OUTLIER_EJECTED));
+		for (int i = 0; i < 10; i++) {
+			assertEquals("reserved b-" + i, inventory.reserve("b-" + i), "the dead address is out of rotation");
+		}
+		metrics.close();
+		assertNull(registry.find(RpcClientMetrics.OUTLIER_EJECTED).gauge());
+		assertNull(registry.find(RpcClientMetrics.OUTLIER_EJECTIONS).functionCounter());
 	}
 
 	private double gauge(String name) {

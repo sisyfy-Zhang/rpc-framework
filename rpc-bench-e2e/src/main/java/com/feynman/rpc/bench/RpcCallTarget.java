@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 
 import com.feynman.rpc.core.RpcClient;
 import com.feynman.rpc.core.ServiceKey;
+import com.feynman.rpc.core.config.OutlierDetectionConfig;
 import com.feynman.rpc.core.config.ReferenceOptions;
 import com.feynman.rpc.core.registry.RegistryConfig;
 import com.feynman.rpc.core.registry.ServiceInstance;
@@ -87,6 +88,15 @@ final class RpcCallTarget implements CallTarget {
 	 */
 	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation,
 			ClusterChoice choice, Map<String, Integer> controlPorts) {
+		return connect(profile, endpoint, metrics, ioThreads, flushConsolidation, choice, controlPorts, null);
+	}
+
+	/**
+	 * @param outlierDetection {@code --outlier-detection on|off}：{@code RpcClientConfig.outlierDetection} 开（框架缺省阈值）/ 关；null = 框架缺省（开）。
+	 *                         实际配置进 {@code run.target.outlier_detection}
+	 */
+	static RpcCallTarget connect(Profile profile, Endpoint endpoint, MeterRegistry metrics, Integer ioThreads, Boolean flushConsolidation,
+			ClusterChoice choice, Map<String, Integer> controlPorts, Boolean outlierDetection) {
 		RegistryConfig registry = Endpoint.REGISTRY.equals(endpoint.mode())
 				? RegistryConfig.zookeeper(endpoint.address())
 				: DirectRegistryFactory.config(endpoint.address());
@@ -110,6 +120,9 @@ final class RpcCallTarget implements CallTarget {
 		}
 		if (metrics != null) {
 			builder.clientFilter(new MicrometerClientFilter(metrics));
+		}
+		if (outlierDetection != null) {
+			builder.outlierDetection(outlierDetection ? OutlierDetectionConfig.defaults() : OutlierDetectionConfig.disabled());
 		}
 		RpcClient client = builder.build();
 		Map<String, ProviderProbe> probes = new java.util.TreeMap<>();
@@ -145,6 +158,7 @@ final class RpcCallTarget implements CallTarget {
 			description.put("server_executor_expected", profile.target().serverExecutor());
 			description.put("io_threads", client.config().ioThreads() == 0 ? HarnessOptions.nettyDefaultIoThreadsText() : client.config().ioThreads());
 			description.put("retries", choice.retries());
+			description.put("outlier_detection", outlierDetectionJson(client.config().outlierDetection(), outlierDetection));
 			description.put("call_style", "sync proxy method");
 			description.put("metrics_filter", metrics != null);
 			if (!probes.isEmpty()) {
@@ -161,6 +175,21 @@ final class RpcCallTarget implements CallTarget {
 			client.close();
 			throw e;
 		}
+	}
+
+	/** {@code run.target.outlier_detection}：开关、实际阈值与来源。 */
+	static Map<String, Object> outlierDetectionJson(OutlierDetectionConfig config, Boolean fromCommandLine) {
+		Map<String, Object> json = new LinkedHashMap<>();
+		json.put("enabled", config.enabled() ? "on" : "off");
+		json.put("min_requests", config.minRequests());
+		json.put("failure_ratio", config.failureRatio());
+		json.put("consecutive_failures", config.consecutiveFailures());
+		json.put("window_seconds", OutlierDetectionConfig.WINDOW_SECONDS);
+		json.put("base_ejection", Durations.format(config.baseEjection()));
+		json.put("max_ejection", Durations.format(config.maxEjection()));
+		json.put("max_ejection_percent", config.maxEjectionPercent());
+		json.put("source", fromCommandLine == null ? "default" : "command line (--outlier-detection)");
+		return json;
 	}
 
 	/** 等到提供者数恰好等于卡片声明的数量（多了少了都不压）。 */
@@ -232,6 +261,10 @@ final class RpcCallTarget implements CallTarget {
 	static final String CLIENT_RETRY_ATTEMPTS_KEY = "client.retry_attempts";
 	static final String CLIENT_RETRY_NODE_SWITCHES_KEY = "client.retry_node_switches";
 	static final String NODE_KEY_PREFIX = "node.";
+	/** 离群摘除：累计摘除 / 放回次数（{@code RpcClient.outlierEjections / outlierRestores}）与此刻处于摘除期的地址数（{@code ejectedNodes().size()}）。 */
+	static final String CLIENT_OUTLIER_EJECTIONS_KEY = "client.outlier_ejections";
+	static final String CLIENT_OUTLIER_RESTORES_KEY = "client.outlier_restores";
+	static final String CLIENT_OUTLIER_EJECTED_KEY = "client.outlier_ejected_nodes";
 
 	@Override
 	public Map<String, String> clientStats() {
@@ -240,6 +273,9 @@ final class RpcCallTarget implements CallTarget {
 		out.put(BackpressureStats.CLIENT_UNWRITABLE_SWITCHES_KEY, String.valueOf(client.unwritableConnectionSwitches()));
 		out.put(CLIENT_RETRY_ATTEMPTS_KEY, String.valueOf(client.retryAttempts()));
 		out.put(CLIENT_RETRY_NODE_SWITCHES_KEY, String.valueOf(client.retryNodeSwitches()));
+		out.put(CLIENT_OUTLIER_EJECTIONS_KEY, String.valueOf(client.outlierEjections()));
+		out.put(CLIENT_OUTLIER_RESTORES_KEY, String.valueOf(client.outlierRestores()));
+		out.put(CLIENT_OUTLIER_EJECTED_KEY, String.valueOf(client.ejectedNodes().size()));
 		client.nodeCallStats().forEach((address, s) -> {
 			out.put(NODE_KEY_PREFIX + address + ".attempts", String.valueOf(s.attempts()));
 			out.put(NODE_KEY_PREFIX + address + ".failures", String.valueOf(s.failures()));

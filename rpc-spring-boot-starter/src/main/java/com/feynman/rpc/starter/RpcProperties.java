@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.util.unit.DataSize;
 
 import com.feynman.rpc.core.config.ExecutorConfig;
+import com.feynman.rpc.core.config.OutlierDetectionConfig;
 import com.feynman.rpc.core.config.RpcClientConfig;
 import com.feynman.rpc.core.config.RpcServerConfig;
 import com.feynman.rpc.core.registry.RegistryConfig;
@@ -28,7 +29,9 @@ import com.feynman.rpc.core.registry.RegistryConfig;
  *   serializer-options: { protobuf.allowed-packages: "com.acme.api.,com.acme.dto." }
  *   client: { load-balance: p2c, cluster: failover, default-timeout: 3s, empty-protection: true,
  *             shutdown-timeout: 10s, exception-allowlist: [com.acme.common.], io-threads: 0, sync-wait-grace: 1s,
- *             flush-consolidation: true, write-buffer-low: 32KB, write-buffer-high: 64KB, outbound-hard-limit: 1MB }
+ *             flush-consolidation: true, write-buffer-low: 32KB, write-buffer-high: 64KB, outbound-hard-limit: 1MB,
+ *             outlier-detection: { enabled: true, min-requests: 20, failure-ratio: 0.5, consecutive-failures: 5,
+ *                                  base-ejection: 10s, max-ejection: 60s, max-ejection-percent: 50 } }
  *   server: { port: 9000, host: 10.0.0.5, weight: 1, shutdown-timeout: 10s, deregister-grace: 1s, io-threads: 0,
  *             remote-stack-trace: true, remote-stack-trace-max-bytes: 8192, flush-consolidation: true,
  *             write-buffer-low: 32KB, write-buffer-high: 64KB, outbound-backpressure: true, outbound-hard-limit: 1MB,
@@ -140,6 +143,32 @@ public class RpcProperties {
 			builder.outboundHardLimit(client.outboundHardLimit.toBytes());
 		}
 		builder.exceptionAllowlist(client.exceptionAllowlist.toArray(new String[0]));
+		OutlierDetection od = client.outlierDetection;
+		if (od.anySet()) {
+			OutlierDetectionConfig.Builder outlier = OutlierDetectionConfig.builder();
+			if (od.enabled != null) {
+				outlier.enabled(od.enabled);
+			}
+			if (od.minRequests != null) {
+				outlier.minRequests(od.minRequests);
+			}
+			if (od.failureRatio != null) {
+				outlier.failureRatio(od.failureRatio);
+			}
+			if (od.consecutiveFailures != null) {
+				outlier.consecutiveFailures(od.consecutiveFailures);
+			}
+			if (od.baseEjection != null) {
+				outlier.baseEjection(od.baseEjection);
+			}
+			if (od.maxEjection != null) {
+				outlier.maxEjection(od.maxEjection);
+			}
+			if (od.maxEjectionPercent != null) {
+				outlier.maxEjectionPercent(od.maxEjectionPercent);
+			}
+			builder.outlierDetection(outlier.build());
+		}
 	}
 
 	/** DataSize → int 字节数；未设置时取 core 的缺省值（水位线两项只设了一项时，另一项保持缺省）。 */
@@ -309,6 +338,13 @@ public class RpcProperties {
 		 */
 		private DataSize outboundHardLimit;
 
+		/** 离群摘除（rpc.client.outlier-detection.*，缺省开启）。 */
+		private final OutlierDetection outlierDetection = new OutlierDetection();
+
+		public OutlierDetection getOutlierDetection() {
+			return outlierDetection;
+		}
+
 		public DataSize getWriteBufferLow() {
 			return writeBufferLow;
 		}
@@ -411,6 +447,96 @@ public class RpcProperties {
 
 		public void setExceptionAllowlist(List<String> exceptionAllowlist) {
 			this.exceptionAllowlist = exceptionAllowlist;
+		}
+	}
+
+	/**
+	 * rpc.client.outlier-detection.*：按提供者的离群摘除（缺省开启）。最近 10 秒内坏结果（超时、DEADLINE_EXCEEDED、传输失败、
+	 * SERVER_OVERLOADED；业务异常不算）占比或连续坏结果过阈值时，把该提供者从负载均衡候选里摘掉一段时间，到期自动放回。
+	 * 未设置的项取 core 的缺省值（OutlierDetectionConfig）。
+	 */
+	public static class OutlierDetection {
+
+		/** 是否开启离群摘除（默认 true）。 */
+		private Boolean enabled;
+
+		/** 坏结果占比条件生效所需的最近 10 秒内最少尝试数（默认 20）。 */
+		private Integer minRequests;
+
+		/** 坏结果占比阈值，(0, 1]（默认 0.5）。 */
+		private Double failureRatio;
+
+		/** 连续坏结果阈值（默认 5，0 = 不用这个条件）。 */
+		private Integer consecutiveFailures;
+
+		/** 第一次摘除的时长（默认 10s）；第 k 次摘除为 k 倍，上限 max-ejection。 */
+		private Duration baseEjection;
+
+		/** 摘除时长上限（默认 60s）。 */
+		private Duration maxEjection;
+
+		/** 最多摘除的提供者比例（百分数，默认 50）：摘掉之后健康提供者至少保留 ceil(n × (100 − p) / 100) 个、且至少 1 个。 */
+		private Integer maxEjectionPercent;
+
+		boolean anySet() {
+			return enabled != null || minRequests != null || failureRatio != null || consecutiveFailures != null || baseEjection != null
+					|| maxEjection != null || maxEjectionPercent != null;
+		}
+
+		public Boolean getEnabled() {
+			return enabled;
+		}
+
+		public void setEnabled(Boolean enabled) {
+			this.enabled = enabled;
+		}
+
+		public Integer getMinRequests() {
+			return minRequests;
+		}
+
+		public void setMinRequests(Integer minRequests) {
+			this.minRequests = minRequests;
+		}
+
+		public Double getFailureRatio() {
+			return failureRatio;
+		}
+
+		public void setFailureRatio(Double failureRatio) {
+			this.failureRatio = failureRatio;
+		}
+
+		public Integer getConsecutiveFailures() {
+			return consecutiveFailures;
+		}
+
+		public void setConsecutiveFailures(Integer consecutiveFailures) {
+			this.consecutiveFailures = consecutiveFailures;
+		}
+
+		public Duration getBaseEjection() {
+			return baseEjection;
+		}
+
+		public void setBaseEjection(Duration baseEjection) {
+			this.baseEjection = baseEjection;
+		}
+
+		public Duration getMaxEjection() {
+			return maxEjection;
+		}
+
+		public void setMaxEjection(Duration maxEjection) {
+			this.maxEjection = maxEjection;
+		}
+
+		public Integer getMaxEjectionPercent() {
+			return maxEjectionPercent;
+		}
+
+		public void setMaxEjectionPercent(Integer maxEjectionPercent) {
+			this.maxEjectionPercent = maxEjectionPercent;
 		}
 	}
 

@@ -91,6 +91,9 @@ Micrometer 名（点分）在 Prometheus 里转成下划线，Timer 带 `_second
 | `rpc.server.shutdown.rejections` | `rpc_server_shutdown_rejections_total` | FunctionCounter | 绑定时给的 tag | 优雅停机期间（DRAINING 阶段在途闸门已关、或业务执行器已关闭）回 SERVER_OVERLOADED（"server shutting down"）的累计请求数，`RpcServer.shutdownRejections()` |
 | `rpc.client.send.buffer.rejections` | `rpc_client_send_buffer_rejections_total` | FunctionCounter | 绑定时给的 tag | 连接待写字节超过出站硬上限、没有写出就以传输失败结束的累计请求数，`RpcClient.sendBufferRejections()` |
 | `rpc.client.unwritable.switches` | `rpc_client_unwritable_switches_total` | FunctionCounter | 绑定时给的 tag | 取连接时跳过不可写连接、改用同一节点另一条连接的累计次数，`RpcClient.unwritableConnectionSwitches()` |
+| `rpc.client.outlier.ejections` | `rpc_client_outlier_ejections_total` | FunctionCounter | 绑定时给的 tag | 离群摘除把提供者摘出负载均衡候选的累计次数（全部服务之和），`RpcClient.outlierEjections()`；摘除时另有一行 WARN 日志（地址、服务、原因、时长） |
+| `rpc.client.outlier.restores` | `rpc_client_outlier_restores_total` | FunctionCounter | 绑定时给的 tag | 摘除到期、提供者回到候选集的累计次数，`RpcClient.outlierRestores()`（到期后第一次选点或读取观测时计；注册中心推送移除的不算）；回归时有一行 INFO 日志 |
+| `rpc.client.outlier.ejected` | `rpc_client_outlier_ejected` | Gauge | 绑定时给的 tag | 此刻处于摘除期的提供者地址数，`RpcClient.ejectedNodes().size()`（`ejectedNodes()` 另给出每个地址的到期时刻） |
 
 tag 约定：
 
@@ -179,7 +182,14 @@ sum(rate(rpc_server_calls_seconds_sum[30s])) / sum(rate(rpc_server_calls_seconds
 # 在途与连接
 rpc_server_inflight
 rpc_client_connections
+
+# 离群摘除：最近 5 分钟的摘除次数、此刻被摘的提供者数
+increase(rpc_client_outlier_ejections_total[5m])
+rpc_client_outlier_ejected
 ```
+
+离群摘除持续发生（`increase(rpc_client_outlier_ejections_total[5m])` 大于 0 且反复出现）说明有提供者"活着但不回包"或连接不上，而注册中心没有摘它；
+`RpcClient.outlierAllEjectedFallbacks()`（没有导出成指标）计"候选全在摘除期、退回全部候选"的选点次数，正常配置下应为 0。
 
 `histogram_quantile` 的结果是桶内线性插值，精度受桶边界限制；压测报告里的分位数以压测端的 HdrHistogram 为准，两者口径不同，不要互相替代。
 

@@ -68,6 +68,20 @@ class HarnessOptionsTest {
 	}
 
 	@Test
+	void outlierDetectionIsAnOnOffOptionForRpcCards() {
+		HarnessOptions defaults = HarnessOptions.parse(null, null, null, null);
+		assertNull(defaults.outlierDetection());
+		assertEquals(Boolean.FALSE, defaults.withOutlierDetection("off").outlierDetection());
+		assertEquals(Boolean.TRUE, defaults.withOutlierDetection("on").outlierDetection());
+		assertThrows(IllegalArgumentException.class, () -> defaults.withOutlierDetection("yes"));
+		HarnessOptions off = defaults.withOutlierDetection("off").withFlushConsolidation("on").withCluster("rr", "failover", "2");
+		assertEquals(Boolean.FALSE, off.outlierDetection(), "the other with-ers keep it");
+		assertEquals("n/a (http)", off.toJson(HTTP_OPEN).get("outlier_detection"));
+		assertEquals(defaults, new HarnessOptions(null, null, null, null, null, null, null, null, null, null, null),
+				"the 11-argument form keeps it null");
+	}
+
+	@Test
 	void flushConsolidationIsAnOnOffOptionForRpcCards() {
 		HarnessOptions defaults = HarnessOptions.parse(null, null, null, null);
 		assertEquals(null, defaults.flushConsolidation());

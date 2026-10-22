@@ -15,6 +15,9 @@ import com.feynman.rpc.core.registry.ServiceInstance;
  * Cluster 实现不再从任何全局配置里解析 LoadBalance，也不自己去读负载统计。
  *
  * <p>候选列表是 {@link Supplier}：重试（尤其是 failback 的延迟重试）时应读取那一刻的最新列表，而不是首次调用时的快照。
+ *
+ * <p>离群摘除（{@link OutlierDetector}，非 null 时）在这里生效：{@link #candidates()} 返回的已经去掉了处于摘除期的地址，
+ * 所以每种 Cluster 拿到的都是过滤后的候选，交给 LoadBalance 的也是；failover 的"排除本次调用失败过的节点"照常在这之上进行。
  */
 public final class ClusterInvocation {
 
@@ -24,20 +27,29 @@ public final class ClusterInvocation {
 	private final Function<ServiceInstance, CompletableFuture<Result>> attempt;
 	private final int retries;
 	private final String description;
+	private final OutlierDetector outlierDetector;
 
 	public ClusterInvocation(Supplier<List<ServiceInstance>> candidates, LoadBalance loadBalance, LoadStats loadStats,
 			Function<ServiceInstance, CompletableFuture<Result>> attempt, int retries, String description) {
+		this(candidates, loadBalance, loadStats, attempt, retries, description, null);
+	}
+
+	/** @param outlierDetector 该服务的离群摘除；null = 不过滤（离群摘除关闭） */
+	public ClusterInvocation(Supplier<List<ServiceInstance>> candidates, LoadBalance loadBalance, LoadStats loadStats,
+			Function<ServiceInstance, CompletableFuture<Result>> attempt, int retries, String description, OutlierDetector outlierDetector) {
 		this.candidates = candidates;
 		this.loadBalance = loadBalance;
 		this.loadStats = loadStats;
 		this.attempt = attempt;
 		this.retries = retries;
 		this.description = description;
+		this.outlierDetector = outlierDetector;
 	}
 
-	/** 当前可选的提供者列表（每次调用都重新读取）。 */
+	/** 当前可选的提供者列表（每次调用都重新读取），已去掉处于离群摘除期的地址（全部被摘时退回全部，见 {@link OutlierDetector#filter}）。 */
 	public List<ServiceInstance> candidates() {
-		return candidates.get();
+		List<ServiceInstance> all = candidates.get();
+		return outlierDetector == null ? all : outlierDetector.filter(all);
 	}
 
 	public LoadBalance loadBalance() {

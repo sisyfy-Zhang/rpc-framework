@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import com.feynman.rpc.core.client.NettyClient;
+import com.feynman.rpc.core.config.OutlierDetectionConfig;
 import com.feynman.rpc.core.config.ReferenceOptions;
 import com.feynman.rpc.core.protocol.MessageType;
 import com.feynman.rpc.core.protocol.RpcMessage;
@@ -111,8 +112,11 @@ class ClientOutboundBackpressureTest {
 			server.registered().orTimeout(10, TimeUnit.SECONDS).join();
 			ServiceInstance hole = new ServiceInstance(key, "127.0.0.1", blackHole.port(), Map.of());
 			fakeRegistration.register(hole);
+			// 离群摘除关掉：本测试要让"未发出"失败一直打到调用方；开着时积压的节点在 5 次连续"未发出"之后就被摘了，
+			// 之后不重试的调用根本选不到它（那是离群摘除的正确行为，见 OutlierDetectionEndToEndTest）
 			RpcClient client = RpcClient.builder().serializer(SimpleTestSerializer.NAME).connectionsPerNode(1).cluster("failover")
 					.loadBalance("roundrobin").writeBufferWaterMark(1024, 2048).outboundHardLimit(4096)
+					.outlierDetection(OutlierDetectionConfig.disabled())
 					.registry(InMemoryRegistryFactory.config(ns)).build();
 			try {
 				Echo failover = client.reference(Echo.class, ReferenceOptions.defaults().retries(1).timeout(Duration.ofSeconds(5)));

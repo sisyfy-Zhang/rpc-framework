@@ -42,6 +42,8 @@ import com.feynman.rpc.core.serialize.Serializer;
  * <p>{@code writeBufferLow} / {@code writeBufferHigh}（默认 32KiB / 64KiB，即 Netty 缺省）：每条连接的
  * {@code WRITE_BUFFER_WATER_MARK}；{@code outboundHardLimit}（默认 high × 16）：一条连接的待写字节超过它且不可写时，
  * 新请求不再写出、以"未发出"失败。见 {@link Builder#writeBufferWaterMark(int, int)} 与 {@link Builder#outboundHardLimit(long)}。
+ *
+ * <p>{@code outlierDetection}（默认开启，{@link OutlierDetectionConfig#defaults()}）：按提供者的离群摘除，见 {@link Builder#outlierDetection}。
  */
 public record RpcClientConfig(
 		RegistryConfig registry,
@@ -60,7 +62,8 @@ public record RpcClientConfig(
 		boolean flushConsolidation,
 		int writeBufferLow,
 		int writeBufferHigh,
-		long outboundHardLimit) {
+		long outboundHardLimit,
+		OutlierDetectionConfig outlierDetection) {
 
 	public static final int DEFAULT_CONNECTIONS_PER_NODE = 2;
 	/** 0 = 交给 Netty 决定（{@code NioEventLoopGroup(0)}：2 × 可用核数，或 {@code -Dio.netty.eventLoopThreads}）。 */
@@ -120,6 +123,21 @@ public record RpcClientConfig(
 		}
 		checkWaterMark(writeBufferLow, writeBufferHigh);
 		outboundHardLimit = resolveOutboundHardLimit(outboundHardLimit, writeBufferHigh);
+		if (outlierDetection == null) {
+			outlierDetection = OutlierDetectionConfig.defaults();
+		}
+	}
+
+	/**
+	 * 1.0.0 的规范构造器（没有 {@code outlierDetection}）：保留它让直接调用记录构造器的代码二进制兼容，离群摘除取缺省（开）。
+	 */
+	public RpcClientConfig(RegistryConfig registry, String serializer, String loadBalance, String cluster, int connectionsPerNode,
+			Duration defaultTimeout, boolean emptyProtection, List<Filter> clientFilters, Map<String, String> serializerOptions,
+			Duration shutdownTimeout, List<String> exceptionAllowlist, int ioThreads, Duration syncWaitGrace, boolean flushConsolidation,
+			int writeBufferLow, int writeBufferHigh, long outboundHardLimit) {
+		this(registry, serializer, loadBalance, cluster, connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
+				shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation, writeBufferLow, writeBufferHigh,
+				outboundHardLimit, null);
 	}
 
 	static void checkIoThreads(int ioThreads) {
@@ -185,6 +203,7 @@ public record RpcClientConfig(
 		private int writeBufferLow = DEFAULT_WRITE_BUFFER_LOW;
 		private int writeBufferHigh = DEFAULT_WRITE_BUFFER_HIGH;
 		private long outboundHardLimit = OUTBOUND_HARD_LIMIT_DEFAULT;
+		private OutlierDetectionConfig outlierDetection = OutlierDetectionConfig.defaults();
 
 		public Builder(Function<RpcClientConfig, T> finisher) {
 			this.finisher = finisher;
@@ -332,11 +351,25 @@ public record RpcClientConfig(
 			return this;
 		}
 
+		/**
+		 * 离群摘除（默认开启，{@link OutlierDetectionConfig#defaults()}）：按提供者地址统计最近 10 秒的尝试与坏结果（超时、DEADLINE_EXCEEDED、
+		 * 传输失败、SERVER_OVERLOADED；业务异常不算），坏结果占比或连续坏结果过阈值时把该地址从候选里摘掉一段时间，到期自动放回；
+		 * 最多摘掉一半的提供者。规则见 {@link OutlierDetectionConfig}；关闭用 {@link OutlierDetectionConfig#disabled()}。
+		 * 观测：{@code RpcClient.outlierEjections() / outlierRestores() / ejectedNodes()}。
+		 */
+		public Builder<T> outlierDetection(OutlierDetectionConfig outlierDetection) {
+			if (outlierDetection == null) {
+				throw new IllegalArgumentException("outlierDetection must not be null (use OutlierDetectionConfig.disabled() to turn it off)");
+			}
+			this.outlierDetection = outlierDetection;
+			return this;
+		}
+
 		public T build() {
 			return finisher.apply(new RpcClientConfig(registry, serializer, loadBalance, cluster,
 					connectionsPerNode, defaultTimeout, emptyProtection, clientFilters, serializerOptions,
 					shutdownTimeout, exceptionAllowlist, ioThreads, syncWaitGrace, flushConsolidation,
-					writeBufferLow, writeBufferHigh, outboundHardLimit));
+					writeBufferLow, writeBufferHigh, outboundHardLimit, outlierDetection));
 		}
 	}
 }

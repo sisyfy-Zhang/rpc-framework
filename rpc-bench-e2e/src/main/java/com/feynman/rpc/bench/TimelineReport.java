@@ -74,8 +74,8 @@ final class TimelineReport {
 	}
 
 	private static void faults(StringBuilder md, List<?> faults) {
-		md.append("| # | 计划 (s) | 实际 (s) | 故障 | 目标 | 状态 | 错误恢复 (s) | p99 恢复 (s) | 份额恢复 (s) | 恢复前错误数 | 有错误的秒 |\n");
-		md.append("|---|---|---|---|---|---|---|---|---|---|---|\n");
+		md.append("| # | 计划 (s) | 实际 (s) | 故障 | 目标 | 状态 | 错误恢复 (s) | p99 恢复 (s) | 份额恢复 (s) | 恢复前错误数 | 有错误的秒 | 摘除次数 |\n");
+		md.append("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
 		for (Object o : faults) {
 			Map<?, ?> f = (Map<?, ?>) o;
 			Map<?, ?> r = map(f.get("recovery"));
@@ -88,22 +88,27 @@ final class TimelineReport {
 					.append(recoveryCell(r, "errors_recovery_s")).append(" | ").append(recoveryCell(r, "p99_recovery_s")).append(" | ")
 					.append(r.containsKey("share_recovery_s") ? recoveryCell(r, "share_recovery_s") : "—").append(" | ")
 					.append(str(r.get("errors_until_recovery"))).append(" | ")
-					.append(firstError == null ? "—" : firstError + "–" + lastError).append(" |\n");
+					.append(firstError == null ? "—" : firstError + "–" + lastError).append(" | ")
+					.append(str(f.get("outlier_ejections"))).append(f.get("outlier_restores") instanceof Number restores
+							? "（回归 " + restores + "）" : "").append(" |\n");
 		}
 		md.append("\n恢复：故障时刻（有执行记录用实际时刻）到\"连续 ").append(FaultTimeline.RECOVERY_CLEAN_SECONDS)
 				.append(" 秒错误为 0\"的第一秒起点；p99 恢复另要求每秒 p99 ≤ ").append((int) FaultTimeline.P99_RECOVERY_FACTOR)
 				.append(" × 基线（第一个事件之前各秒 p99 的中位数）；份额恢复只对 remove-toxic / sigcont：目标节点每秒份额 ≥ ")
-				.append(FaultTimeline.SHARE_RECOVERY_FRACTION).append(" × 故障前的平均份额。秒粒度；\"未恢复\" = 到本轮结束都没满足。\n\n");
+				.append(FaultTimeline.SHARE_RECOVERY_FRACTION).append(" × 故障前的平均份额。秒粒度；\"未恢复\" = 到本轮结束都没满足。")
+				.append("摘除次数 = 故障那一秒起到本轮结束压测端客户端的离群摘除次数（括号里是到期回归次数）。\n\n");
 	}
 
 	private static void timeline(StringBuilder md, List<?> rows) {
-		md.append("| t (s) | 成功 | 失败 | 失败分类 | p50 (ms) | p99 (ms) | 节点份额（尝试数） | 重试 | 服务端拒绝 过载/停机 | 排队数 | 排队等待 p99 (ms) | 不可达提供者 |\n");
-		md.append("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+		md.append("| t (s) | 成功 | 失败 | 失败分类 | p50 (ms) | p99 (ms) | 节点份额（尝试数） | 重试 | 被摘节点（累计摘除） | 服务端拒绝 过载/停机 | 排队数 "
+				+ "| 排队等待 p99 (ms) | 不可达提供者 |\n");
+		md.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
 		for (Object o : rows) {
 			Map<?, ?> row = (Map<?, ?>) o;
 			md.append("| ").append(str(row.get("t"))).append(" | ").append(str(row.get("success"))).append(" | ").append(str(row.get("errors")))
 					.append(" | ").append(types(row.get("errors_by_type"))).append(" | ").append(num(row.get("p50_ms"), 3)).append(" | ")
 					.append(num(row.get("p99_ms"), 3)).append(" | ").append(shares(row)).append(" | ").append(str(row.get("retries"))).append(" | ")
+					.append(str(row.get("ejected_nodes"))).append(row.get("ejections") == null ? "" : "（" + row.get("ejections") + "）").append(" | ")
 					.append(str(row.get("server_executor_rejections"))).append(" / ").append(str(row.get("server_shutdown_rejections")))
 					.append(" | ").append(str(row.get("server_queued"))).append(" | ").append(num(row.get("server_queue_wait_p99_ms"), 3))
 					.append(" | ").append(row.get("providers_unreachable") instanceof List<?> l && !l.isEmpty() ? String.join(" ", l.stream()
@@ -111,7 +116,7 @@ final class TimelineReport {
 					.append(" |\n");
 		}
 		md.append("\n成功 / 失败 / 延迟按完成时刻归秒（延迟从计划发出时刻算，2 位有效数字）；节点份额 = 该秒压测端向各节点发出的尝试数占比（含重试）；"
-				+ "服务端列是每秒对各提供者 counters() 采样之差（全部提供者之和），排队数是该秒末的瞬时值。\n\n");
+				+ "被摘节点 = 该秒末处于离群摘除期的提供者数，括号里是累计摘除次数；服务端列是每秒对各提供者 counters() 采样之差（全部提供者之和），排队数是该秒末的瞬时值。\n\n");
 	}
 
 	private static String shares(Map<?, ?> row) {

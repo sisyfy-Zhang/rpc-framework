@@ -16,6 +16,7 @@ import com.feynman.rpc.core.RpcClient;
 import com.feynman.rpc.core.RpcServer;
 import com.feynman.rpc.core.ServiceKey;
 import com.feynman.rpc.core.config.ExecutorConfig;
+import com.feynman.rpc.core.config.OutlierDetectionConfig;
 import com.feynman.rpc.core.config.ReferenceOptions;
 import com.feynman.rpc.core.config.RpcClientConfig;
 import com.feynman.rpc.core.config.RpcServerConfig;
@@ -131,6 +132,19 @@ class RpcAutoConfigurationTest {
 	}
 
 	@Test
+	void outlierDetectionIsOnByDefaultAndCanBeTurnedOff() {
+		RpcProperties defaults = new RpcProperties();
+		defaults.getRegistry().setType("memory");
+		defaults.getRegistry().setAddress(namespace);
+		assertEquals(OutlierDetectionConfig.defaults(), defaults.toClientConfig().outlierDetection(), "nothing set: core defaults");
+		context = contextWith(Map.of("rpc.client.outlier-detection.enabled", "false"));
+		context.refresh();
+		OutlierDetectionConfig outlier = context.getBean(RpcClient.class).config().outlierDetection();
+		assertFalse(outlier.enabled());
+		assertEquals(OutlierDetectionConfig.DEFAULT_CONSECUTIVE_FAILURES, outlier.consecutiveFailures(), "other fields keep the core defaults");
+	}
+
+	@Test
 	void propertiesBindToImmutableConfigsAndNeverTouchSystemProperties() {
 		context = contextWith(Map.ofEntries(
 				Map.entry("rpc.serializer", "fastjson2"),
@@ -150,6 +164,12 @@ class RpcAutoConfigurationTest {
 				Map.entry("rpc.client.write-buffer-low", "16KB"),
 				Map.entry("rpc.client.write-buffer-high", "128KB"),
 				Map.entry("rpc.client.outbound-hard-limit", "4MB"),
+				Map.entry("rpc.client.outlier-detection.min-requests", "40"),
+				Map.entry("rpc.client.outlier-detection.failure-ratio", "0.75"),
+				Map.entry("rpc.client.outlier-detection.consecutive-failures", "0"),
+				Map.entry("rpc.client.outlier-detection.base-ejection", "5s"),
+				Map.entry("rpc.client.outlier-detection.max-ejection", "1m"),
+				Map.entry("rpc.client.outlier-detection.max-ejection-percent", "34"),
 				Map.entry("rpc.server.weight", "7"),
 				Map.entry("rpc.server.flush-consolidation", "false"),
 				Map.entry("rpc.server.write-buffer-low", "65536"),
@@ -181,6 +201,9 @@ class RpcAutoConfigurationTest {
 		assertEquals(16 * 1024, client.writeBufferLow());
 		assertEquals(128 * 1024, client.writeBufferHigh());
 		assertEquals(4L * 1024 * 1024, client.outboundHardLimit());
+		assertEquals(OutlierDetectionConfig.builder().minRequests(40).failureRatio(0.75).consecutiveFailures(0)
+				.baseEjection(Duration.ofSeconds(5)).maxEjection(Duration.ofMinutes(1)).maxEjectionPercent(34).build(), client.outlierDetection(),
+				"unset outlier-detection.enabled keeps the core default (on)");
 		Map<String, String> expectedOptions = Map.of("fastjson2.some-option", "on",
 				"protobuf.allowed-packages", "com.acme.api.,com.acme.dto.");
 		assertEquals(expectedOptions, client.serializerOptions());

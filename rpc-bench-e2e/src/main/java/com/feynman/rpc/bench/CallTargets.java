@@ -88,7 +88,7 @@ final class CallTargets {
 		}
 		return switch (transport) {
 			case Profile.TRANSPORT_RPC -> RpcCallTarget.connect(profile, endpoint, metrics, options.ioThreads(), options.flushConsolidation(),
-					ClusterChoice.resolve(profile, options), controlPorts);
+					ClusterChoice.resolve(profile, options), controlPorts, options.outlierDetection());
 			case Profile.TRANSPORT_HTTP -> {
 				if (metrics != null) {
 					throw new IllegalArgumentException("--metrics-port does not apply to transport = http");

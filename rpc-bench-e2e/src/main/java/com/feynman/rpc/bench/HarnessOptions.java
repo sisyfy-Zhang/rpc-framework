@@ -24,9 +24,19 @@ import java.util.Map;
  * @param preWarmup   第 1 轮之前以同样负载跑的预热段（不计入任何一轮）；null = 卡片的 {@code load.warmup}，{@link Duration#ZERO} = 不跑
  * @param flushConsolidation rpc 卡：{@code RpcClientConfig.flushConsolidation}（{@code --flush-consolidation on|off}）；null = 框架缺省（开）。
  *                    只用于同一构建内的 A/B 对照；其它 transport 给了就是用法错误
+ * @param outlierDetection rpc 卡：{@code RpcClientConfig.outlierDetection} 开 / 关（{@code --outlier-detection on|off}，开时用框架缺省阈值）；
+ *                    null = 框架缺省（开）。只用于 rpc 卡的 A/B 对照；其它 transport 给了就是用法错误
  */
 public record HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
-		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation, String loadBalance, String cluster, Integer retries) {
+		Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation, String loadBalance, String cluster, Integer retries,
+		Boolean outlierDetection) {
+
+	/** 不含 {@code outlierDetection} 的形式，等价于它为 null（框架缺省：开）。 */
+	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
+			Integer pinDispatcher, Duration preWarmup, Boolean flushConsolidation, String loadBalance, String cluster, Integer retries) {
+		this(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation, loadBalance, cluster, retries,
+				null);
+	}
 
 	/** 不含 {@code loadBalance / cluster / retries} 的形式，等价于它们为 null（卡片没写时取框架缺省、重试 0）。 */
 	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
@@ -47,7 +57,21 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 			}
 		}
 		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation,
-				loadBalance == null ? null : loadBalance.trim(), cluster == null ? null : cluster.trim(), n);
+				loadBalance == null ? null : loadBalance.trim(), cluster == null ? null : cluster.trim(), n, outlierDetection);
+	}
+
+	/** 同一组选项，{@code outlierDetection} 换成给定值（{@code on} / {@code off} 文本，null = 缺省）。 */
+	HarnessOptions withOutlierDetection(String onOff) {
+		Boolean on = null;
+		if (onOff != null) {
+			on = switch (onOff.trim()) {
+				case "on" -> true;
+				case "off" -> false;
+				default -> throw new IllegalArgumentException("--outlier-detection must be on or off, got \"" + onOff + "\"");
+			};
+		}
+		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flushConsolidation, loadBalance,
+				cluster, retries, on);
 	}
 
 	/** 给了任何只对 rpc 卡有效的集群选项。 */
@@ -65,7 +89,7 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 	static final int OPEN_HTTP_IO_THREADS = 1;
 
 	/** 不带任何选项时的行为。 */
-	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null, null, null, null);
+	static final HarnessOptions DEFAULTS = new HarnessOptions(null, null, null, null, null, null, null, null, null, null, null, null);
 
 	/** 不含 {@code flushConsolidation} 的旧形式（对比模块与既有测试用），等价于它为 null。 */
 	public HarnessOptions(String openWorkers, Integer poolSize, String httpClient, Integer ioThreads, Boolean ioBusyPoll,
@@ -84,7 +108,7 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 			};
 		}
 		return new HarnessOptions(openWorkers, poolSize, httpClient, ioThreads, ioBusyPoll, pinDispatcher, preWarmup, flush, loadBalance, cluster,
-				retries);
+				retries, outlierDetection);
 	}
 
 	public HarnessOptions {
@@ -286,6 +310,8 @@ public record HarnessOptions(String openWorkers, Integer poolSize, String httpCl
 		json.put("pre_warmup_source", preWarmup == null ? "load.warmup" : "--pre-warmup");
 		json.put("flush_consolidation", !profile.target().rpc() ? "n/a (" + transport + ")"
 				: flushConsolidation == null ? "default (on)" : flushConsolidation ? "on" : "off");
+		json.put("outlier_detection", !profile.target().rpc() ? "n/a (" + transport + ")"
+				: outlierDetection == null ? "default (on)" : outlierDetection ? "on" : "off");
 		return json;
 	}
 }

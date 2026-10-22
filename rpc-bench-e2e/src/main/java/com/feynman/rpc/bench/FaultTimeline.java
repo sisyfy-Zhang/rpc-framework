@@ -176,8 +176,9 @@ final class FaultTimeline {
 		Map<String, Object> t = new LinkedHashMap<>();
 		t.put("interval_ms", 1000);
 		t.put("basis", "success / errors / latency by completion time (latency from the scheduled send time, 2 significant digits); "
-				+ "node_attempts / retries from the harness RpcClient (attempts incl. retries, by send time); server_* from each "
-				+ "provider's counters() sampled every second (delta of two samples)");
+				+ "node_attempts / retries from the harness RpcClient (attempts incl. retries, by send time); ejected_nodes = providers in "
+				+ "outlier ejection at the end of the second, ejections / restores = cumulative outlier ejections / restores at the end of the "
+				+ "second; server_* from each provider's counters() sampled every second (delta of two samples)");
 		t.put("rows", rows);
 		return t;
 	}
@@ -224,6 +225,8 @@ final class FaultTimeline {
 			row.put("node_attempts", null);
 			row.put("node_share", null);
 			row.put("retries", null);
+			row.put("ejected_nodes", null);
+			row.put("ejections", null);
 			row.put("server_executor_rejections", null);
 			return;
 		}
@@ -263,6 +266,10 @@ final class FaultTimeline {
 		row.put("node_timeouts", new LinkedHashMap<>(timeouts));
 		row.put("retries", ServerCounters.diff(before.client(), after.client(), RpcCallTarget.CLIENT_RETRY_ATTEMPTS_KEY));
 		row.put("retry_node_switches", ServerCounters.diff(before.client(), after.client(), RpcCallTarget.CLIENT_RETRY_NODE_SWITCHES_KEY));
+		// 离群摘除：该秒末处于摘除期的地址数（瞬时值）与累计摘除 / 放回次数（不是差值）
+		row.put("ejected_nodes", ServerCounters.number(after.client(), RpcCallTarget.CLIENT_OUTLIER_EJECTED_KEY));
+		row.put("ejections", ServerCounters.number(after.client(), RpcCallTarget.CLIENT_OUTLIER_EJECTIONS_KEY));
+		row.put("restores", ServerCounters.number(after.client(), RpcCallTarget.CLIENT_OUTLIER_RESTORES_KEY));
 		long executorRejections = 0;
 		long shutdownRejections = 0;
 		long queued = 0;
@@ -388,9 +395,33 @@ final class FaultTimeline {
 			f.put("target_address", address);
 			double at = (executedMs != null ? executedMs : Durations.millis(fault.at())) / 1000.0;
 			f.put("recovery", recovery(rows, at, baselineP99, address, i));
+			int from = (int) Math.max(0, Math.min(rows.size(), Math.floor(at)));
+			f.put("outlier_ejections", cumulativeSince(rows, from, "ejections"));
+			f.put("outlier_restores", cumulativeSince(rows, from, "restores"));
 			out.add(f);
 		}
 		return out;
+	}
+
+	/**
+	 * 累计列 {@code key} 从第 {@code from} 秒开始到最后一个有样本的行的增量（第 from − 1 秒末的值作起点，from = 0 时起点为 0）；
+	 * 列缺失（旧结果、非 rpc 目标）时为 null。
+	 */
+	static Long cumulativeSince(List<Map<String, Object>> rows, int from, String key) {
+		Number last = null;
+		for (int s = rows.size() - 1; s >= 0 && last == null; s--) {
+			if (rows.get(s).get(key) instanceof Number n) {
+				last = n;
+			}
+		}
+		if (last == null) {
+			return null;
+		}
+		long start = 0;
+		if (from > 0 && from - 1 < rows.size() && rows.get(from - 1).get(key) instanceof Number n) {
+			start = n.longValue();
+		}
+		return last.longValue() - start;
 	}
 
 	/** 第一个"事件"（故障，或第 2 级阶梯）的时刻（秒）：此前的各秒作基线。 */

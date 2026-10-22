@@ -34,8 +34,8 @@ import io.micrometer.core.instrument.MeterRegistry;
  *          [--metrics-port &lt;p&gt;]       （transport: http 的卡不带 --registry / --direct：目标是卡上的 target.http.url）
  *          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads &lt;n&gt;] [--io-busy-poll on|off]
  *                                       （--io-threads 对 rpc 卡 = RpcClientConfig.ioThreads，对比对象由其提供者使用）
- *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0] [--flush-consolidation on|off]
- *                                       （harness 实现选项，见 {@link HarnessOptions}；--flush-consolidation 只用于 rpc 卡）
+ *          [--pin-dispatcher &lt;cpu&gt;|off] [--pre-warmup &lt;时长&gt;|0] [--flush-consolidation on|off] [--outlier-detection on|off]
+ *                                       （harness 实现选项，见 {@link HarnessOptions}；--flush-consolidation / --outlier-detection 只用于 rpc 卡）
  *   report --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]   （压测结果 + crossval 结果 JSON 一起汇总，含对比表）
  *   compare --in &lt;dir|file.json&gt; [--out &lt;file.md&gt;]  （同一负载 / 负载大小、不同 transport 或并发的结果并排成表，见 {@link CompareReport}）
  *   crossval --harness &lt;result.json&gt; --tool wrk|wrk2 --tool-output &lt;file&gt;[,&lt;file&gt;...] [--tool-command &lt;text&gt;] --out &lt;dir&gt;
@@ -290,14 +290,15 @@ public final class Bench {
 	private static int run(Options options, String[] rawArgs, PrintStream out) throws Exception {
 		options.allowOnly("profile", "out", "registry", "direct", "label", "metrics-port", "open-workers", "http-client", "io-threads", "io-busy-poll",
 				"pin-dispatcher", "pre-warmup", "flush-consolidation", "loadbalance", "cluster", "retries", "fault-schedule", "no-faults",
-				"fault-variant", "topology");
+				"fault-variant", "topology", "outlier-detection");
 		HarnessOptions harnessOptions;
 		try {
 			harnessOptions = HarnessOptions.parse(options.value("open-workers", null), options.value("http-client", null),
 					options.value("io-threads", null),
 					options.value("io-busy-poll", null), options.value("pin-dispatcher", null), options.value("pre-warmup", null))
 					.withFlushConsolidation(options.value("flush-consolidation", null))
-					.withCluster(options.value("loadbalance", null), options.value("cluster", null), options.value("retries", null));
+					.withCluster(options.value("loadbalance", null), options.value("cluster", null), options.value("retries", null))
+					.withOutlierDetection(options.value("outlier-detection", null));
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -312,6 +313,9 @@ public final class Bench {
 		Profile profile = ProfileLoader.load(profileFile);
 		if (harnessOptions.flushConsolidation() != null && !profile.target().rpc()) {
 			throw new UsageException("--flush-consolidation is RpcClientConfig.flushConsolidation and applies to transport: rpc cards only");
+		}
+		if (harnessOptions.outlierDetection() != null && !profile.target().rpc()) {
+			throw new UsageException("--outlier-detection is RpcClientConfig.outlierDetection and applies to transport: rpc cards only");
 		}
 		if (harnessOptions.clusterOptionsGiven()) {
 			if (!profile.target().rpc()) {
@@ -566,6 +570,7 @@ public final class Bench {
 				         [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>]
 				         [--io-busy-poll on|off] [--pin-dispatcher <cpu>|off] [--pre-warmup <duration>|0]
 				         [--flush-consolidation on|off]   (rpc cards only: RpcClientConfig.flushConsolidation)
+				         [--outlier-detection on|off]     (rpc cards only: RpcClientConfig.outlierDetection, default on)
 				         [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N]   (rpc cards; the card's
 				                                       target.load_balance / cluster / retries win, a different value is an error)
 				         [--fault-schedule <file> | --no-faults] [--fault-variant sigterm|sigstop|toxic-timeout] [--topology <file>]

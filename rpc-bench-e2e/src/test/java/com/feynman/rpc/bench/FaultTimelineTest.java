@@ -39,6 +39,46 @@ class FaultTimelineTest {
 		return m;
 	}
 
+	private static Map<String, String> withOutlier(Map<String, String> client, long ejections, long restores, long ejectedNow) {
+		Map<String, String> m = new LinkedHashMap<>(client);
+		m.put(RpcCallTarget.CLIENT_OUTLIER_EJECTIONS_KEY, String.valueOf(ejections));
+		m.put(RpcCallTarget.CLIENT_OUTLIER_RESTORES_KEY, String.valueOf(restores));
+		m.put(RpcCallTarget.CLIENT_OUTLIER_EJECTED_KEY, String.valueOf(ejectedNow));
+		return m;
+	}
+
+	/** 离群摘除列：每秒行的 ejected_nodes（该秒末的瞬时值）与累计 ejections / restores；故障的 outlier_ejections = 故障那一秒起的增量。 */
+	@Test
+	void outlierColumnsAndPerFaultEjections() {
+		Profile p = profile("""
+				  rate: 1000
+				  faults: [{ at: 2s, kind: kill-9, target: 2 }]""");
+		long t0 = 1_000 * S;
+		FaultTimeline t = new FaultTimeline(t0, p, p.load().faults());
+		t.sample(0, 0, withOutlier(client(0, 0, 0), 0, 0, 0), server(0));
+		t.sample(1, 1000, withOutlier(client(50, 50, 0), 1, 0, 1), server(0));
+		t.sample(2, 2000, withOutlier(client(100, 100, 0), 1, 1, 0), server(0));
+		t.sample(3, 3000, withOutlier(client(150, 150, 0), 2, 1, 1), server(0));
+		t.sample(4, 4000, withOutlier(client(200, 200, 0), 4, 2, 1), server(0));
+		Map<String, Object> json = t.toJson();
+		List<?> rows = (List<?>) ((Map<?, ?>) json.get("timeline")).get("rows");
+		Map<?, ?> r0 = (Map<?, ?>) rows.get(0);
+		assertEquals(1L, r0.get("ejected_nodes"));
+		assertEquals(1L, r0.get("ejections"));
+		Map<?, ?> r3 = (Map<?, ?>) rows.get(3);
+		assertEquals(4L, r3.get("ejections"), "cumulative, not a delta");
+		assertEquals(2L, r3.get("restores"));
+		assertNull(((Map<?, ?>) rows.get(4)).get("ejections"), "no sample 5");
+		Map<?, ?> fault = (Map<?, ?>) ((List<?>) json.get("faults")).get(0);
+		assertEquals(3L, fault.get("outlier_ejections"), "4 at the end minus 1 at the end of second 1");
+		assertEquals(1L, fault.get("outlier_restores"));
+		StringBuilder md = new StringBuilder();
+		TimelineReport.render(md, "###", List.of(Map.of("round", 1, "faults", json.get("faults"), "timeline", json.get("timeline"))));
+		assertTrue(md.toString().contains("| 摘除次数 |"), md.toString());
+		assertTrue(md.toString().contains("| 3（回归 1） |"), md.toString());
+		assertTrue(md.toString().contains("| 1（1） |"), md.toString());
+	}
+
 	private static Map<String, Map<String, String>> server(long rejections, long... queueWaitsMs) {
 		QueueWaitFilterHarness h = new QueueWaitFilterHarness(queueWaitsMs);
 		Map<String, String> m = new LinkedHashMap<>();

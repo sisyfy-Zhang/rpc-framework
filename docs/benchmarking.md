@@ -191,7 +191,7 @@ server   --transport <grpc|dubbo|...> --port <p> ...      （对比对象的服�
 run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>] [--metrics-port <p>]
          [--open-workers per-request|pool[:N]|pool-platform[:N]] [--http-client netty|blocking] [--io-threads <n>] [--io-busy-poll on|off]
          [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0] [--flush-consolidation on|off]
-         [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N]
+         [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N] [--outlier-detection on|off]
          [--fault-schedule <file> | --no-faults] [--fault-variant sigterm|sigstop|toxic-timeout] [--topology <file>]
          （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文；后两行见“故障注入”）
 report   --in <目录 | 结果.json> [--out <file.md>]
@@ -253,6 +253,7 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...
 | `--io-busy-poll` | netty 客户端：开环卡 **`on`**；闭环卡 **`off`** | 事件循环每圈非阻塞 `epoll_wait` / `selectNow`，从不阻塞：调用方提交写出任务时不需要唤醒它（省掉一次跨线程唤醒），代价是占满一个核。rpc 卡不适用 | 唯一能消掉 harness 固定开销的一项：服务时间 p50 从约 0.225ms 降到 0.147ms（wrk2 未修正 0.149ms），p99 与 wrk2 的差从约 120µs 降到约 85µs |
 | `--pin-dispatcher` | `<cpu>` · `off`（**命令行缺省 off；`bench-run.sh` 在 Linux 绑核启动时缺省加上压测端核列表的第一个核**） | Linux：开环调度线程（`bench-dispatch`）钉到该核，进程里其余线程钉到进程亲和里剩下的核（`taskset -cp`，按 `/proc/self/task/*/comm` 找线程）；每轮计时开始前钉一次，轮末核对是否有线程又落到该核（`rounds[].scheduler.pin.stray_threads_at_end`）。非 Linux 记 `unsupported`、不报错 | 发出滞后 p99 从 0.09~0.18ms 降到 0.02~0.04ms；服务时间 p99.9 / max 明显收窄（短卡 0.66 / 3.2ms vs 5.5 / 20ms）。调度线程忙等，不钉时与 IO 线程、载体线程抢核 |
 | `--flush-consolidation` | **不给 = 框架缺省（on）** · `on` · `off` | 只用于 rpc 卡：`RpcClientConfig.flushConsolidation`（客户端连接 pipeline 首位的 `FlushConsolidationHandler`）。同一构建内做 flush 合并 A/B 时与 `server --flush-consolidation` 一起改；实际取值进 `run.harness_options.flush_consolidation` 与 `run.target.flush_consolidation`。对比对象给了就是用法错误 | 见 [docs/probes/flush-and-executor.md](probes/flush-and-executor.md) |
+| `--outlier-detection` | **不给 = 框架缺省（on）** · `on` · `off` | 只用于 rpc 卡：`RpcClientConfig.outlierDetection`（`on` = 框架缺省阈值，`off` = `OutlierDetectionConfig.disabled()`）。离群摘除的 A/B 对照用；实际开关与阈值进 `run.target.outlier_detection`（`enabled` / `min_requests` / `failure_ratio` / `consecutive_failures` / `window_seconds` / `base_ejection` / `max_ejection` / `max_ejection_percent` / `source`），`run.harness_options.outlier_detection` 记命令行取值，Markdown 口径表多一行"离群摘除"。对比对象与 http 卡给了就是用法错误。注意 `compare` 不按它分区：同一张卡开 / 关两种结果要放在不同目录里比 | 见 [docs/probes/outlier-detection.md](probes/outlier-detection.md) |
 | `--pre-warmup` | **卡片的 `load.warmup`** · 时长 · `0`（关闭） | 第 1 轮之前以同样负载跑一段，不计入任何一轮；摘要（发出数、错误、延迟、发出滞后、最大在途）进 `run.pre_warmup`，`run.harness_options.pre_warmup_ms` 记时长 | 冷 JVM 的第一段（JIT、连接）在预热段里消化。`loopback-latency-v1`：第 1 轮 p99 52.6 → 3.5ms、最大在途 4220 → 387（预热段自己 p99 512ms、最大在途 5515）；HTTP 卡上的改善小于环境噪声，详见探针 |
 
 `bench-run.sh` 另读 `BENCH_HARNESS_OPTS`（追加在命令行参数之后，`crossval.sh` 经它启动 harness，同样生效），对照实验就是这样改选项的：
@@ -709,6 +710,7 @@ bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1 --variant sigterm
 bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1 --variant toxic-timeout # 静默死亡（第 2 个提供者自动经代理）
 bash bench/bin/fault-run.sh --card fault-slow-node-p2c-v1 --behind-toxiproxy all [--no-faults]
 bash bench/bin/fault-run.sh --card fault-burst3x-bounded-v1                            # 只有阶梯、没有故障的卡：脚本只管拓扑
+FAULT_HARNESS_OPTS="--open-workers per-request --outlier-detection off"   bash bench/bin/fault-run.sh --card fault-kill-node-failover-v1 --variant toxic-timeout # 离群摘除关：A/B 的对照侧
 ```
 
 1. 从卡片读提供者数与服务端配置（`server_executor` / `server_queue_capacity` / `server_work` → `--executor` / `--executor-queue` / `--work`），
@@ -752,6 +754,7 @@ export TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOX
 
 - `rounds[].timeline.rows[]`：每秒一行——`success` / `errors` / `errors_by_type` / `p50_ms` / `p99_ms`（按**完成时刻**归秒，延迟从计划时刻算，2 位有效数字）；
   `node_attempts` / `node_share`（该秒压测端向各节点发出的**尝试数**及占比，含重试）、`node_failures` / `node_timeouts`、`retries` / `retry_node_switches`；
+  `ejected_nodes`（该秒末处于离群摘除期的提供者数，瞬时值）与 `ejections` / `restores`（离群摘除的**累计**摘除 / 回归次数，不是差值；rpc 卡）；
   `server_executor_rejections` / `server_shutdown_rejections` / `server_rejections_by_provider`、`server_queued`（该秒末瞬时值之和）、`server_queue_wait_p99_ms`、
   `providers_unreachable`。服务端与客户端列是相邻两个样本之差。
 - `rounds[].steps[]`：每一级的请求 / 成功 / 失败 / 成功率、吞吐、延迟分位数（卡片精度）、失败分类，`server`（该级起止两个样本之差：拒绝数、排队等待分位数、重试数），
@@ -762,8 +765,10 @@ export TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOX
   - `p99_recovery_s`：条件再加"该秒 p99 ≤ 2 × 基线"（基线 = 第一个事件之前、去掉开头 2 秒的各秒 p99 中位数）；
   - `share_recovery_s`（只对 `remove-toxic` / `sigcont`，且有拓扑时）：目标节点每秒份额 ≥ 0.8 × 故障前平均份额、连续 3 秒的第一秒起点。
   - 分辨率都是 1 秒（时间线的粒度）。
+  - `outlier_ejections` / `outlier_restores`：故障那一秒起到本轮最后一个样本，压测端客户端的离群摘除 / 回归次数（累计列之差）；Markdown 故障表的"摘除次数"列
+    （括号里是回归次数）。
 
-Markdown 在轮次表之后多一行"服务端业务执行器（正式轮统计窗口内）"，有阶梯 / 故障时再加阶梯表、故障表与每秒时间线表。
+Markdown 在轮次表之后多一行"服务端业务执行器（正式轮统计窗口内）"，有阶梯 / 故障时再加阶梯表、故障表与每秒时间线表（时间线多一列"被摘节点（累计摘除）"）。
 
 **排队等待**（`rounds[].server_executor.queue_wait_ms`、时间线的 `server_queue_wait_p99_ms`）：bench server 自带的服务端 Filter `QueueWaitFilter`
 （order -4500，在 DeadlineServerFilter 之外）在业务线程开始执行 Filter 链时记 `nanoTime − 到达时刻`（服务端 Invocation 的起点就是 IO 线程解码该帧的时刻，

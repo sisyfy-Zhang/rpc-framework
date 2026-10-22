@@ -19,7 +19,10 @@ import io.micrometer.core.instrument.Tags;
  *   <li>{@value #SEND_BUFFER_REJECTIONS}（FunctionCounter）：连接待写字节超过出站硬上限、没有写出就失败的累计请求数
  *       （{@link RpcClient#sendBufferRejections()}）；</li>
  *   <li>{@value #UNWRITABLE_SWITCHES}（FunctionCounter）：取连接时跳过不可写连接、改用另一条的累计次数
- *       （{@link RpcClient#unwritableConnectionSwitches()}）。</li>
+ *       （{@link RpcClient#unwritableConnectionSwitches()}）；</li>
+ *   <li>{@value #OUTLIER_EJECTIONS} / {@value #OUTLIER_RESTORES}（FunctionCounter）：离群摘除的累计摘除 / 放回次数
+ *       （{@link RpcClient#outlierEjections()} / {@link RpcClient#outlierRestores()}）；</li>
+ *   <li>{@value #OUTLIER_EJECTED}：当前处于离群摘除期的提供者地址数（{@link RpcClient#ejectedNodes()} 的大小）。</li>
  * </ul>
  * Gauge 与 FunctionCounter 以<b>弱引用</b>持有客户端（Micrometer 缺省）：registry 不会让一个已经不用的客户端无法回收，被回收后读数为 NaN。
  * close 之后读数为 0。{@link #close()} 把这些 Gauge 与 FunctionCounter 从 registry 移除（同一个 registry 要换绑另一个客户端时先 close）。
@@ -33,6 +36,9 @@ public final class RpcClientMetrics implements AutoCloseable {
 	public static final String CONNECTIONS = "rpc.client.connections";
 	public static final String SEND_BUFFER_REJECTIONS = "rpc.client.send.buffer.rejections";
 	public static final String UNWRITABLE_SWITCHES = "rpc.client.unwritable.switches";
+	public static final String OUTLIER_EJECTIONS = "rpc.client.outlier.ejections";
+	public static final String OUTLIER_RESTORES = "rpc.client.outlier.restores";
+	public static final String OUTLIER_EJECTED = "rpc.client.outlier.ejected";
 
 	private final MeterRegistry registry;
 	private final List<Gauge> gauges;
@@ -68,7 +74,19 @@ public final class RpcClientMetrics implements AutoCloseable {
 				.description("Times a call skipped an unwritable connection and used another connection to the same provider")
 				.tags(tags)
 				.register(registry);
-		return new RpcClientMetrics(registry, List.of(inflight, connections), List.of(rejections, switches));
+		FunctionCounter ejections = FunctionCounter.builder(OUTLIER_EJECTIONS, client, RpcClient::outlierEjections)
+				.description("Times a provider was ejected from load balancing by outlier detection")
+				.tags(tags)
+				.register(registry);
+		FunctionCounter restores = FunctionCounter.builder(OUTLIER_RESTORES, client, RpcClient::outlierRestores)
+				.description("Times an ejected provider returned to load balancing after its ejection expired")
+				.tags(tags)
+				.register(registry);
+		Gauge ejected = Gauge.builder(OUTLIER_EJECTED, client, c -> c.ejectedNodes().size())
+				.description("Providers currently ejected by outlier detection")
+				.tags(tags)
+				.register(registry);
+		return new RpcClientMetrics(registry, List.of(inflight, connections, ejected), List.of(rejections, switches, ejections, restores));
 	}
 
 	/** 绑定的 Gauge（测试与诊断用）。 */

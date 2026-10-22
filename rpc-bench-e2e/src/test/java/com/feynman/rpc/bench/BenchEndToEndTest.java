@@ -219,6 +219,11 @@ class BenchEndToEndTest {
 		assertEquals(Boolean.TRUE, path(json, "validity", "server_executor", "matches"));
 		assertEquals("default (on)", path(json, "run", "harness_options", "flush_consolidation"));
 		assertEquals("on", path(json, "run", "target", "flush_consolidation"));
+		assertEquals("default (on)", path(json, "run", "harness_options", "outlier_detection"));
+		assertEquals("on", path(json, "run", "target", "outlier_detection", "enabled"), "outlier detection is on by default");
+		assertEquals("default", path(json, "run", "target", "outlier_detection", "source"));
+		assertEquals(5, path(json, "run", "target", "outlier_detection", "consecutive_failures"));
+		assertTrue(md.contains("| 离群摘除 | 开：窗口 10s 内尝试 ≥ 20 且坏结果占比 ≥ 0.5"), md);
 		if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")) {
 			assertTrue(md.contains("上下文切换按线程组") && md.contains("| netty_io |"), md);
 		}
@@ -284,6 +289,22 @@ class BenchEndToEndTest {
 		assertEquals("off", path(r.json(), "run", "harness_options", "flush_consolidation"));
 		assertEquals("off", path(r.json(), "run", "target", "flush_consolidation"));
 		assertEquals("on", path(r.json(), "server_environment", "server_flush_consolidation"));
+	}
+
+	/** {@code --outlier-detection off}：rpc 卡的 RpcClientConfig.outlierDetection，如实记进 harness_options 与 run.target；http 卡给了是用法错误。 */
+	@Test
+	void outlierDetectionCanBeTurnedOffForAnABRun(@TempDir Path dir) throws Exception {
+		String id = "it-outlier-off";
+		Result r = run(dir, id, card(id, "closed", "concurrency: 2", "1s", "200ms", "[200ms, 800ms]", 1, "1s", "{ kind: bytes, size: 64 }", ""),
+				"--direct", "127.0.0.1:" + server.port(), "--outlier-detection", "off");
+		assertEquals(Bench.OK, r.code(), r.err());
+		assertEquals("off", path(r.json(), "run", "harness_options", "outlier_detection"));
+		assertEquals("off", path(r.json(), "run", "target", "outlier_detection", "enabled"));
+		assertEquals("command line (--outlier-detection)", path(r.json(), "run", "target", "outlier_detection", "source"));
+		assertTrue(Files.readString(r.markdown(), StandardCharsets.UTF_8).contains("| 离群摘除 | 关（来源 command line (--outlier-detection)） |"));
+		Result bad = run(dir, id, card(id, "closed", "concurrency: 2", "1s", "200ms", "[200ms, 800ms]", 1, "1s", "{ kind: bytes, size: 64 }", ""),
+				"--direct", "127.0.0.1:" + server.port(), "--outlier-detection", "maybe");
+		assertEquals(1, bad.code(), "not on / off: usage error");
 	}
 
 	/** {@code server --outbound-backpressure off --write-buffer-water-mark 256K:1M}：对照实验的服务端开关，如实记进服务端环境。 */
