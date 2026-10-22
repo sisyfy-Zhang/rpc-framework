@@ -1,0 +1,4 @@
+# rpc-bench-e2e fault schedule v1
+mode inject
+round_start_epoch_ms 1792637993593
+fault 0 20000 kill-9 2

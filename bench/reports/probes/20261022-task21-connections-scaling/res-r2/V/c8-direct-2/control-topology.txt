@@ -1,0 +1,2 @@
+# idx advertised pid listen_port proxy control_http_port   (lib-bench.sh write_control_topology, 2026-10-22T23:31:25+11:00)
+1 127.0.0.1:19300 160963 19300 - 19400

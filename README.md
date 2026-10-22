@@ -470,6 +470,7 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   - [harness-tail-latency.md](docs/probes/harness-tail-latency.md)：harness 开环尾延迟的来源与修稳
   - [nacos-timing.md](docs/probes/nacos-timing.md)：Nacos 首订阅与消失窗口的时序校准
   - [protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
+  - 探针原始结果（探针口径，不作数）：[bench/reports/probes/](bench/reports/probes/)，收录阶段 4a 任务 19 / 20 / 21 的结果 JSON 与报告
 - [rpc-examples/README.md](rpc-examples/README.md)：示例的运行方式
 
 ## 许可证

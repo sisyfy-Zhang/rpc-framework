@@ -164,4 +164,5 @@ virtual 同负载 93.6k req/s、0 错误（1500 / 15.3ms ≈ 98k，接近压测�
 - 单机同机、单提供者、2 条连接；闭环 p99 低估尾延迟（C 组开环为准）。
 - 宿主机桌面同时在用：低吞吐时的 CPU µs/请求混有固定开销与环境噪声，只看量级与同组对比。
 - E 组 fixed 的服务端统计取不到（第 5 节）。
-- 数据未归档进仓库（探针口径）；结果 JSON 与生成的对比表在本次运行的工作目录，归档另行提交。
+- 原始结果（探针口径，不作数）：结果 JSON、生成的对比表与逐轮提取归档在
+  [bench/reports/probes/20261022-task20-executor-blocking/](../../bench/reports/probes/20261022-task20-executor-blocking/)；来源是本次运行的工作目录 `G:\rpc-build-tmp\task20\results\`。

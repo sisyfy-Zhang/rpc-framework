@@ -211,4 +211,5 @@ for od in on off; do
 done
 ```
 
-本文的数字来自 2026-10-22 13:49 ~ 14:51 的 36 次运行（标签 `outlier-probe`），未归档。
+本文的数字来自 2026-10-22 13:49 ~ 14:51 的 36 次运行（标签 `outlier-probe`）。原始结果（探针口径，不作数）归档在
+[bench/reports/probes/20261022-task19-outlier-detection/](../../bench/reports/probes/20261022-task19-outlier-detection/)，来源是压测机 WSL 的 `~/t19/p/`。

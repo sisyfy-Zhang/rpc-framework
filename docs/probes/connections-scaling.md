@@ -162,6 +162,7 @@
 
 ## 数据
 
-- 原序列：`~/t21/res`（WSL），补跑：`~/t21/res-r2`。每次运行一个目录，含 JSON / Markdown / compare.md。逐轮提取在 `~/t21/extract-all.md` 与 `extract-r2-all.md`。
-- 冒烟（短卡，不作数）：`~/t21/smoke`。
-- 这些结果没有入库（`git_dirty = true`）；要归档时由 Fable 另行安排。
+- 原始结果（探针口径，`git_dirty = true`，不作数）归档在 [bench/reports/probes/20261022-task21-connections-scaling/](../../bench/reports/probes/20261022-task21-connections-scaling/)：
+  原序列 `res/`，补跑 `res-r2/`，每次运行一个目录，含 JSON / Markdown / compare.md。逐轮提取在同目录的 `extract-all.md` 与 `extract-r2-all.md`。
+- 冒烟（短卡，不作数）：同目录的 `smoke/`。
+- 来源：压测机 WSL 的 `~/t21/res`、`~/t21/res-r2`、`~/t21/smoke` 与 `~/t21/extract*.md`。

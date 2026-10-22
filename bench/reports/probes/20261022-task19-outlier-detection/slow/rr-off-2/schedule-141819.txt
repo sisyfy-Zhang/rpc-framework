@@ -1,0 +1,5 @@
+# rpc-bench-e2e fault schedule v1
+mode inject
+round_start_epoch_ms 1792639110822
+fault 0 20000 toxic-latency 2 latency_ms=20 jitter_ms=5 stream=downstream
+fault 1 40000 remove-toxic 2

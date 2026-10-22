@@ -1,0 +1,4 @@
+# idx advertised pid listen_port proxy control_http_port   (fault-topology.sh up, 2026-10-22T14:04:54+11:00)
+1 127.0.0.1:19401 128354 19401 - 19501
+2 127.0.0.1:19402 128355 19402 - 19502
+3 127.0.0.1:19403 128356 19403 - 19503

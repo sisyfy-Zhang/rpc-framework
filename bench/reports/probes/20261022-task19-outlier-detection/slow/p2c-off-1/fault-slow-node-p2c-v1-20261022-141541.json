@@ -1,0 +1,3380 @@
+{
+  "schema_version": 1,
+  "label": "outlier-probe",
+  "profile": {
+    "id": "fault-slow-node-p2c-v1",
+    "parsed": {
+      "profile": "fault-slow-node-p2c-v1",
+      "question": "3 个提供者、开环 5000 req/s，其中一个节点变慢 20ms 时，p2c 负载均衡给它的份额与整体 p99；移除后份额多快恢复",
+      "target": {
+        "transport": "rpc",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {
+          "kind": "bytes",
+          "size": 1024
+        },
+        "serializer": "protobuf",
+        "providers": 3,
+        "connections": null,
+        "server_executor": "fixed",
+        "load_balance": "p2c",
+        "cluster": null,
+        "retries": null,
+        "server_queue_capacity": null,
+        "server_work": null,
+        "server_work_ms": null,
+        "server_deregister_grace": null
+      },
+      "load": {
+        "model": "open",
+        "concurrency": null,
+        "rate": 5000,
+        "duration": "60s",
+        "duration_ms": 60000.0,
+        "warmup": "10s",
+        "warmup_ms": 10000.0,
+        "steady_window": ["10s", "60s"],
+        "steady_window_ms": [10000.0, 60000.0],
+        "rounds": 1,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": 10000,
+        "faults": [
+          {
+            "at": "20s",
+            "at_ms": 20000.0,
+            "kind": "toxic-latency",
+            "target": 2,
+            "latency_ms": 20.0,
+            "jitter_ms": 5.0,
+            "stream": "downstream"
+          },
+          {
+            "at": "40s",
+            "at_ms": 40000.0,
+            "kind": "remove-toxic",
+            "target": 2
+          }
+        ]
+      },
+      "isolation": {
+        "client_process": "separate_jvm",
+        "server_process": "separate_jvm",
+        "same_host": true,
+        "registry": "docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）；三个提供者都经 toxiproxy 原生进程（同 WSL，2.13.0，二进制取自 compose 镜像；只有第 2 个加 toxic）"
+      },
+      "measure": {
+        "histogram": {
+          "significant_digits": 3,
+          "max": "10s",
+          "max_ms": 10000.0
+        },
+        "report": ["throughput", "p50", "p99", "p999", "max", "errors_by_status"]
+      },
+      "assert": []
+    },
+    "raw_yaml": "# 口径卡（故障注入：慢节点）：3 个提供者经 ZooKeeper 发现，开环 5000 req/s、60s；第 2 个提供者经 toxiproxy，\n# 20s 时在它的回包方向加 latency 20ms（jitter 5ms），40s 时移除。负载均衡 p2c（按在途数二选一）。\n# 与 fault-slow-node-rr-v1 只差 target.load_balance。对照 = 同卡 --no-faults（不另建卡）。\n# 跑法：TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOXIPROXY_LISTEN_HOST=127.0.0.1 TOXIPROXY_PORT_BASE=21000 \\n#   bench/bin/fault-run.sh --card fault-slow-node-p2c-v1 --behind-toxiproxy all [--no-faults]（原生 toxiproxy 的起法见 docs/benchmarking.md「故障注入」）\n#   （三个提供者都经代理：代理路径本身的开销对三个节点对称，只有第 2 个加 toxic）。故障时刻相对本轮开始（预热段之后）。\n# 改动口径请复制成新 id（-v2），不要原地改。\nprofile: fault-slow-node-p2c-v1\nquestion: 3 个提供者、开环 5000 req/s，其中一个节点变慢 20ms 时，p2c 负载均衡给它的份额与整体 p99；移除后份额多快恢复\ntarget:\n  transport: rpc\n  service: BenchService#echo\n  payload: { kind: bytes, size: 1024 }\n  serializer: protobuf\n  providers: 3\n  load_balance: p2c\nload:\n  model: open\n  rate: 5000\n  faults:\n    - { at: 20s, kind: toxic-latency, target: 2, latency: 20ms, jitter: 5ms }\n    - { at: 40s, kind: remove-toxic, target: 2 }\n  duration: 60s\n  warmup: 10s\n  steady_window: [10s, 60s]\n  rounds: 1\n  timeout: 1s\nisolation:\n  client_process: separate_jvm\n  server_process: separate_jvm\n  same_host: true\n  registry: docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）；三个提供者都经 toxiproxy 原生进程（同 WSL，2.13.0，二进制取自 compose 镜像；只有第 2 个加 toxic）\nmeasure:\n  histogram: { significant_digits: 3, max: 10s }\n  report: [throughput, p50, p99, p999, max, errors_by_status]\n"
+  },
+  "run": {
+    "command": "rpc-bench-e2e run --profile /home/yifan/rpc-bench/bench/profiles/fault-slow-node-p2c-v1.yaml --registry zk://127.0.0.1:2181 --out /home/yifan/t19/p/slow/p2c-off-1 --label outlier-probe --topology /home/yifan/t19/p/slow/p2c-off-1/topology.txt --fault-schedule /home/yifan/t19/p/slow/p2c-off-1/schedule-141541.txt --open-workers per-request --outlier-detection off --pin-dispatcher 5",
+    "target": {
+      "transport": "rpc",
+      "mode": "registry",
+      "address": "zk://127.0.0.1:2181",
+      "providers": ["127.0.0.1:21001", "127.0.0.1:21002", "127.0.0.1:21003"],
+      "serializer": "protobuf",
+      "load_balance": "p2c",
+      "cluster": "failfast",
+      "cluster_options_source": {
+        "cluster": "default",
+        "load_balance": "card",
+        "retries": "default"
+      },
+      "connections_per_node": 2,
+      "connection_model": "2 TCP connection(s) per provider, requests multiplexed by request id",
+      "connections_meaning": "target.connections = RpcClientConfig.connectionsPerNode (default 2)",
+      "connections_source": "default",
+      "io_transport": "nio",
+      "flush_consolidation": "on",
+      "server_executor_expected": "fixed",
+      "io_threads": "default (Netty: 2 x available cores = 10)",
+      "retries": 0,
+      "outlier_detection": {
+        "enabled": "off",
+        "min_requests": 20,
+        "failure_ratio": 0.5,
+        "consecutive_failures": 5,
+        "window_seconds": 10,
+        "base_ejection": "10s",
+        "max_ejection": "60s",
+        "max_ejection_percent": 50,
+        "source": "command line (--outlier-detection)"
+      },
+      "call_style": "sync proxy method",
+      "metrics_filter": false,
+      "server_stats_provider": "127.0.0.1:21001",
+      "server_stats_note": "window gc / io / backpressure / server_executor come from this provider only (the first address in sorted order); per-provider counters are in rounds[].timeline",
+      "server_stats_channel": {
+        "127.0.0.1:21001": "http://127.0.0.1:19501 (HTTP control endpoint, IO thread)",
+        "127.0.0.1:21002": "http://127.0.0.1:19502 (HTTP control endpoint, IO thread)",
+        "127.0.0.1:21003": "http://127.0.0.1:19503 (HTTP control endpoint, IO thread)"
+      }
+    },
+    "harness_options": {
+      "open_workers": "per-request",
+      "open_pool_size": null,
+      "http_client": "n/a (rpc)",
+      "io_threads": "default (Netty: 2 x available cores = 10)",
+      "io_busy_poll": "n/a (rpc)",
+      "io_source": "default",
+      "workers_source": "command line",
+      "pin_dispatcher": 5,
+      "pre_warmup": "10s",
+      "pre_warmup_ms": 10000.0,
+      "pre_warmup_source": "load.warmup",
+      "flush_consolidation": "default (on)",
+      "outlier_detection": "off"
+    },
+    "pre_warmup": {
+      "duration_ms": 10000.0,
+      "issued": 50000,
+      "successes": 50000,
+      "errors": 0,
+      "errors_by_type": {},
+      "latency_ms": {
+        "count": 49996,
+        "mean": 9.848,
+        "min": 0.402,
+        "p50": 1.705,
+        "p90": 15.819,
+        "p95": 60.752,
+        "p99": 146.932,
+        "p999": 204.997,
+        "max": 223.609
+      },
+      "service_time_ms": {
+        "count": 49996,
+        "mean": 8.774,
+        "min": 0.324,
+        "p50": 1.608,
+        "p90": 15.065,
+        "p95": 48.759,
+        "p99": 134.873,
+        "p999": 202.899,
+        "max": 220.332
+      },
+      "dispatch_lag_ms": {
+        "count": 50000,
+        "mean": 0.08,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.01,
+        "p95": 0.24,
+        "p99": 2.666,
+        "p999": 4.764,
+        "max": 8.471
+      },
+      "backlog_dropped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 50000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 230051,
+        "spin_window_final_ns": 460102,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 837,
+        "workers": "per-request",
+        "call_style": "sync proxy method on a new virtual thread per request",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 137869,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 44,
+          "others_pinned": 43,
+          "others_exited": 0,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      }
+    },
+    "faults": {
+      "mode": "inject",
+      "variant": null,
+      "schedule_file": "/home/yifan/t19/p/slow/p2c-off-1/schedule-141541.txt",
+      "faults": [
+        {
+          "at": "20s",
+          "at_ms": 20000.0,
+          "kind": "toxic-latency",
+          "target": 2,
+          "latency_ms": 20.0,
+          "jitter_ms": 5.0,
+          "stream": "downstream"
+        },
+        {
+          "at": "40s",
+          "at_ms": 40000.0,
+          "kind": "remove-toxic",
+          "target": 2
+        }
+      ],
+      "topology": {
+        "1": "127.0.0.1:21001",
+        "2": "127.0.0.1:21002",
+        "3": "127.0.0.1:21003"
+      },
+      "control_ports": {
+        "127.0.0.1:21001": 19501,
+        "127.0.0.1:21002": 19502,
+        "127.0.0.1:21003": 19503
+      },
+      "executor": "bench/bin/fault-run.sh (harness writes the schedule, the script executes it and appends <schedule>.executed)"
+    }
+  },
+  "environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": true,
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": 5,
+    "host_cpus": 10,
+    "cpus_allowed": "5-9",
+    "total_memory_bytes": 10428227584,
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g", "-XX:+AlwaysPreTouch"],
+    "gc": ["G1 Young Generation", "G1 Concurrent GC", "G1 Old Generation"],
+    "netty_version": "4.1.136.Final",
+    "git_sha": "f160df9228c1a605a41cdc4c6f24464bf4db2bc5",
+    "git_dirty": true,
+    "git_dirty_files": ["M README.md", "M docs/benchmarking.md", "M docs/observability.md", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/Bench.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/CallTargets.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/FaultTimeline.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/HarnessOptions.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/MarkdownReport.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/RpcCallTarget.java", "M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/TimelineReport.java", "M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/BenchEndToEndTest.java", "M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/FaultTimelineTest.java", "M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/HarnessOptionsTest.java", "M rpc-core/src/main/java/com/feynman/rpc/core/RpcClient.java", "M rpc-core/src/main/java/com/feynman/rpc/core/cluster/ClusterInvocation.java", "M rpc-core/src/main/java/com/feynman/rpc/core/config/RpcClientConfig.java", "M rpc-core/src/test/java/com/feynman/rpc/core/ClientOutboundBackpressureTest.java", "M rpc-metrics-micrometer/src/main/java/com/feynman/rpc/metrics/micrometer/RpcClientMetrics.java", "M rpc-metrics-micrometer/src/test/java/com/feynman/rpc/metrics/micrometer/RpcMetricsEndToEndTest.java", "M rpc-metrics-micrometer/src/test/java/com/feynman/rpc/metrics/micrometer/StaticRegistryFactory.java", "M rpc-spring-boot-starter/src/main/java/com/feynman/rpc/starter/RpcProperties.java", "M rpc-spring-boot-starter/src/test/java/com/feynman/rpc/starter/RpcAutoConfigurationTest.java", "?? rpc-core/src/main/java/com/feynman/rpc/core/cluster/OutlierDetector.java", "?? rpc-core/src/main/java/com/feynman/rpc/core/config/OutlierDetectionConfig.java", "?? rpc-core/src/test/java/com/feynman/rpc/core/OutlierDetectionEndToEndTest.java", "?? rpc-core/src/test/java/com/feynman/rpc/core/cluster/OutlierClusterTest.java", "?? rpc-core/src/test/java/com/feynman/rpc/core/cluster/OutlierDetectorTest.java", "?? rpc-core/src/test/java/com/feynman/rpc/core/config/OutlierDetectionClientConfigTest.java"],
+    "hostname": "localhost",
+    "power_supply": {
+      "AC1": "1"
+    },
+    "cpu_governor": "n/a",
+    "harness_version": "1.0.0",
+    "pid": 137711,
+    "metrics_enabled": false,
+    "started_at": "2026-10-22T03:15:41.991726893Z",
+    "ended_at": "2026-10-22T03:16:54.943242485Z"
+  },
+  "server_environment": {
+    "os_name": "Linux",
+    "os_version": "6.18.33.2-microsoft-standard-WSL2",
+    "os_arch": "amd64",
+    "wsl": "true",
+    "cpu_model": "AMD Ryzen 5 4600H with Radeon Graphics",
+    "available_cpus": "5",
+    "host_cpus": "10",
+    "cpus_allowed": "0-4",
+    "total_memory_bytes": "10428227584",
+    "jdk_version": "21.0.12.1+1-LTS",
+    "jdk_vendor": "Eclipse Adoptium",
+    "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": "-Xms1g -Xmx1g -XX:+AlwaysPreTouch -Djava.net.preferIPv4Stack=true",
+    "gc": "G1 Young Generation G1 Concurrent GC G1 Old Generation",
+    "netty_version": "4.1.136.Final",
+    "git_sha": "f160df9228c1a605a41cdc4c6f24464bf4db2bc5",
+    "git_dirty": "true",
+    "git_dirty_files": "M README.md M docs/benchmarking.md M docs/observability.md M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/Bench.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/CallTargets.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/FaultTimeline.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/HarnessOptions.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/MarkdownReport.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/RpcCallTarget.java M rpc-bench-e2e/src/main/java/com/feynman/rpc/bench/TimelineReport.java M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/BenchEndToEndTest.java M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/FaultTimelineTest.java M rpc-bench-e2e/src/test/java/com/feynman/rpc/bench/HarnessOptionsTest.java M rpc-core/src/main/java/com/feynman/rpc/core/RpcClient.java M rpc-core/src/main/java/com/feynman/rpc/core/cluster/ClusterInvocation.java M rpc-core/src/main/java/com/feynman/rpc/core/config/RpcClientConfig.java M rpc-core/src/test/java/com/feynman/rpc/core/ClientOutboundBackpressureTest.java M rpc-metrics-micrometer/src/main/java/com/feynman/rpc/metrics/micrometer/RpcClientMetrics.java M rpc-metrics-micrometer/src/test/java/com/feynman/rpc/metrics/micrometer/RpcMetricsEndToEndTest.java M rpc-metrics-micrometer/src/test/java/com/feynman/rpc/metrics/micrometer/StaticRegistryFactory.java M rpc-spring-boot-starter/src/main/java/com/feynman/rpc/starter/RpcProperties.java M rpc-spring-boot-starter/src/test/java/com/feynman/rpc/starter/RpcAutoConfigurationTest.java ?? rpc-core/src/main/java/com/feynman/rpc/core/cluster/OutlierDetector.java ?? rpc-core/src/main/java/com/feynman/rpc/core/config/OutlierDetectionConfig.java ?? rpc-core/src/test/java/com/feynman/rpc/core/OutlierDetectionEndToEndTest.java ?? rpc-core/src/test/java/com/feynman/rpc/core/cluster/OutlierClusterTest.java ?? rpc-core/src/test/java/com/feynman/rpc/core/cluster/OutlierDetectorTest.java ?? rpc-core/src/test/java/com/feynman/rpc/core/config/OutlierDetectionClientConfigTest.java",
+    "hostname": "localhost",
+    "power_supply": "AC1=1",
+    "cpu_governor": "n/a",
+    "harness_version": "1.0.0",
+    "pid": "137561",
+    "metrics_enabled": "false",
+    "server_advertised_port": "21003",
+    "server_deregister_grace_ms": "0",
+    "server_executor": "fixed pool (10 threads, queue 1000): business methods run off the IO threads",
+    "server_executor_kind": "fixed",
+    "server_executor_queue_capacity": "1000",
+    "server_flush_consolidation": "on",
+    "server_io_threads": "default (Netty: 2 x available cores = 10)",
+    "server_outbound_backpressure": "on",
+    "server_outbound_hard_limit": "1048576",
+    "server_queue_wait_filter": "on (bench QueueWaitFilter, order -4500)",
+    "server_work_ms": "0.0",
+    "server_write_buffer_water_mark": "32768:65536",
+    "transport": "rpc"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "started_at": "2026-10-22T03:15:53.160470823Z",
+      "ended_at": "2026-10-22T03:16:53.166778892Z",
+      "elapsed_ms": 60009.886,
+      "issued": 300000,
+      "requests_total": 300000,
+      "successes_total": 300000,
+      "errors_total": 0,
+      "window": {
+        "start_ms": 10000.0,
+        "end_ms": 60000.0,
+        "requests": 249999,
+        "successes": 249999,
+        "errors": 0
+      },
+      "throughput_rps": 4999.98,
+      "latency_ms": {
+        "count": 249999,
+        "mean": 1.289,
+        "min": 0.346,
+        "p50": 0.782,
+        "p90": 1.055,
+        "p95": 1.398,
+        "p99": 20.365,
+        "p999": 49.218,
+        "max": 106.496
+      },
+      "service_time_ms": {
+        "count": 249999,
+        "mean": 1.18,
+        "min": 0.325,
+        "p50": 0.733,
+        "p90": 0.971,
+        "p95": 1.267,
+        "p99": 19.857,
+        "p999": 35.422,
+        "max": 106.365
+      },
+      "dispatch_lag_ms": {
+        "count": 300000,
+        "mean": 0.036,
+        "min": 0.0,
+        "p50": 0.0,
+        "p90": 0.0,
+        "p95": 0.005,
+        "p99": 0.307,
+        "p999": 8.344,
+        "max": 27.001
+      },
+      "errors_by_type": {},
+      "errors_total_by_type": {},
+      "backlog_dropped": 0,
+      "histogram_clamped": 0,
+      "scheduler": {
+        "interval_ns": 200000,
+        "dispatched": 300000,
+        "parks": 0,
+        "calibrated_max_oversleep_ns": 143407,
+        "spin_window_final_ns": 286814,
+        "max_park_oversleep_ns": 0,
+        "inflight_cap": 10000,
+        "max_inflight": 321,
+        "workers": "per-request",
+        "call_style": "sync proxy method on a new virtual thread per request",
+        "dispatcher_thread": "bench-dispatch",
+        "pin": {
+          "cpu": 5,
+          "process_cpus": "5-9",
+          "others_cpus": "6-9",
+          "dispatcher_tid": 138492,
+          "dispatcher_cpus_allowed": "5",
+          "threads_total": 47,
+          "others_pinned": 46,
+          "others_exited": 0,
+          "status": "pinned",
+          "stray_threads_at_end": []
+        }
+      },
+      "cpu": {
+        "source": "/proc/stat, steady window",
+        "window_ms": 50000,
+        "client_cpus": "5-9",
+        "client_busy_pct": 56.4,
+        "server_cpus": "0-4",
+        "server_busy_pct": 44.7
+      },
+      "gc": {
+        "client": {
+          "collections": 3,
+          "pause_ms": 10,
+          "pause_pct": 0.02,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 3,
+              "time_ms": 10
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 203.733,
+          "heap_used_mb_end": 393.361,
+          "heap_committed_mb": 1024.0
+        },
+        "server": {
+          "collections": 1,
+          "pause_ms": 4,
+          "pause_pct": 0.008,
+          "collectors": [
+            {
+              "name": "G1 Young Generation",
+              "kind": "pause",
+              "collections": 1,
+              "time_ms": 4
+            },
+            {
+              "name": "G1 Concurrent GC",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            },
+            {
+              "name": "G1 Old Generation",
+              "kind": "pause",
+              "collections": 0,
+              "time_ms": 0
+            }
+          ],
+          "heap_used_mb_start": 106.845,
+          "heap_used_mb_end": 73.082,
+          "heap_committed_mb": 1024.0
+        }
+      },
+      "io": {
+        "source": "/proc/self/io (syscr, syscw) + sum of /proc/self/task/*/status (voluntary / nonvoluntary_ctxt_switches), grouped by /proc/self/task/*/comm prefix (by_group), steady window",
+        "window_requests": 249999,
+        "client": {
+          "syscr": 485345,
+          "syscw": 485774,
+          "vol_cs": 962326,
+          "nonvol_cs": 40699,
+          "threads": "54 -> 52",
+          "by_group": {
+            "netty_io": {
+              "threads": "6 -> 6",
+              "vol_cs": 471667,
+              "nonvol_cs": 29802,
+              "vol_cs_per_request": 1.887,
+              "nonvol_cs_per_request": 0.119,
+              "cs_per_request": 2.006
+            },
+            "fjp": {
+              "threads": "5 -> 5",
+              "vol_cs": 486833,
+              "nonvol_cs": 10146,
+              "vol_cs_per_request": 1.947,
+              "nonvol_cs_per_request": 0.041,
+              "cs_per_request": 1.988
+            },
+            "timers": {
+              "threads": "2 -> 2",
+              "vol_cs": 161,
+              "nonvol_cs": 12,
+              "vol_cs_per_request": 0.001,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.001
+            },
+            "harness": {
+              "threads": "1 -> 0",
+              "vol_cs": -16,
+              "nonvol_cs": -11,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "jvm": {
+              "threads": "20 -> 20",
+              "vol_cs": 2292,
+              "nonvol_cs": 334,
+              "vol_cs_per_request": 0.009,
+              "nonvol_cs_per_request": 0.001,
+              "cs_per_request": 0.011
+            },
+            "other": {
+              "threads": "20 -> 19",
+              "vol_cs": 1389,
+              "nonvol_cs": 416,
+              "vol_cs_per_request": 0.006,
+              "nonvol_cs_per_request": 0.002,
+              "cs_per_request": 0.007
+            }
+          },
+          "syscr_per_request": 1.941,
+          "syscw_per_request": 1.943,
+          "vol_cs_per_request": 3.849,
+          "nonvol_cs_per_request": 0.163
+        },
+        "server": {
+          "syscr": 191264,
+          "syscw": 190427,
+          "vol_cs": 289789,
+          "nonvol_cs": 6139,
+          "threads": "49 -> 45",
+          "by_group": {
+            "netty_io": {
+              "threads": "6 -> 6",
+              "vol_cs": 190432,
+              "nonvol_cs": 3667,
+              "vol_cs_per_request": 0.762,
+              "nonvol_cs_per_request": 0.015,
+              "cs_per_request": 0.776
+            },
+            "biz_pool": {
+              "threads": "10 -> 10",
+              "vol_cs": 97625,
+              "nonvol_cs": 2353,
+              "vol_cs_per_request": 0.391,
+              "nonvol_cs_per_request": 0.009,
+              "cs_per_request": 0.4
+            },
+            "fjp": {
+              "threads": "3 -> 1",
+              "vol_cs": -9,
+              "nonvol_cs": -2,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            },
+            "jvm": {
+              "threads": "21 -> 20",
+              "vol_cs": 1735,
+              "nonvol_cs": 126,
+              "vol_cs_per_request": 0.007,
+              "nonvol_cs_per_request": 0.001,
+              "cs_per_request": 0.007
+            },
+            "other": {
+              "threads": "9 -> 8",
+              "vol_cs": 6,
+              "nonvol_cs": -5,
+              "vol_cs_per_request": 0.0,
+              "nonvol_cs_per_request": 0.0,
+              "cs_per_request": 0.0
+            }
+          },
+          "syscr_per_request": 0.765,
+          "syscw_per_request": 0.762,
+          "vol_cs_per_request": 1.159,
+          "nonvol_cs_per_request": 0.025
+        }
+      },
+      "backpressure": {
+        "source": "server stats (RpcServer.autoReadPauses / outboundOverloadRejections) + harness client (RpcClient.sendBufferRejections / unwritableConnectionSwitches)",
+        "window": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0,
+          "client_send_buffer_rejections": 0,
+          "client_unwritable_switches": 0
+        },
+        "cumulative_at_window_end": {
+          "auto_read_pauses": 0,
+          "outbound_overload_rejections": 0,
+          "client_send_buffer_rejections": 0,
+          "client_unwritable_switches": 1
+        }
+      },
+      "server_executor": {
+        "source": "server counters (RpcServer.executorRejections / shutdownRejections / queuedBusinessTasks; queue wait = bench QueueWaitFilter: arrival (IO-thread decode) -> business thread starts the filter chain)",
+        "executor_rejections": 0,
+        "shutdown_rejections": 0,
+        "queue_wait_ms": {
+          "count": 97969,
+          "p50": 0.08,
+          "p99": 0.399,
+          "max": 18.481
+        }
+      },
+      "dispatcher_delayed": false,
+      "warmup_completed": true,
+      "valid": true,
+      "invalid_reasons": [],
+      "timeseries": {
+        "interval_ms": 1000,
+        "success": [4968, 5028, 5001, 4999, 5000, 5000, 5000, 4999, 5002, 5000, 5000, 4999, 5000, 5000, 5000, 5001, 4999, 5001, 5001, 4999, 4997, 5000, 5000, 4999, 5002, 4999, 5000, 4999, 5000, 5003, 4998, 4999, 5001, 4999, 5001, 5001, 4999, 4999, 4997, 5004, 5003, 5000, 5000, 5000, 5000, 5000, 5000, 4999, 5000, 5001, 5000, 4695, 5304, 5001, 4999, 5002, 4998, 5001, 5000, 4999, 4, 0],
+        "errors": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      },
+      "timeline": {
+        "interval_ms": 1000,
+        "basis": "success / errors / latency by completion time (latency from the scheduled send time, 2 significant digits); node_attempts / retries from the harness RpcClient (attempts incl. retries, by send time); ejected_nodes = providers in outlier ejection at the end of the second, ejections / restores = cumulative outlier ejections / restores at the end of the second; server_* from each provider's counters() sampled every second (delta of two samples)",
+        "rows": [
+          {
+            "t": 0,
+            "success": 4968,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 1.835,
+            "p99_ms": 12.911,
+            "node_attempts": {
+              "127.0.0.1:21001": 1650,
+              "127.0.0.1:21002": 1621,
+              "127.0.0.1:21003": 1690
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.333,
+              "127.0.0.1:21002": 0.327,
+              "127.0.0.1:21003": 0.341
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 8,
+            "server_queue_wait_p99_ms": 4.325,
+            "providers_unreachable": []
+          },
+          {
+            "t": 1,
+            "success": 5028,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 1.09,
+            "p99_ms": 8.913,
+            "node_attempts": {
+              "127.0.0.1:21001": 1686,
+              "127.0.0.1:21002": 1725,
+              "127.0.0.1:21003": 1590
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.337,
+              "127.0.0.1:21002": 0.345,
+              "127.0.0.1:21003": 0.318
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 7,
+            "server_queue_wait_p99_ms": 4.325,
+            "providers_unreachable": []
+          },
+          {
+            "t": 2,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.827,
+            "p99_ms": 5.079,
+            "node_attempts": {
+              "127.0.0.1:21001": 1692,
+              "127.0.0.1:21002": 1633,
+              "127.0.0.1:21003": 1675
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.338,
+              "127.0.0.1:21002": 0.327,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 2.097,
+            "providers_unreachable": []
+          },
+          {
+            "t": 3,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.844,
+            "p99_ms": 3.195,
+            "node_attempts": {
+              "127.0.0.1:21001": 1654,
+              "127.0.0.1:21002": 1649,
+              "127.0.0.1:21003": 1697
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.331,
+              "127.0.0.1:21002": 0.33,
+              "127.0.0.1:21003": 0.339
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 1.352,
+            "providers_unreachable": []
+          },
+          {
+            "t": 4,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.799,
+            "p99_ms": 1.466,
+            "node_attempts": {
+              "127.0.0.1:21001": 1673,
+              "127.0.0.1:21002": 1650,
+              "127.0.0.1:21003": 1677
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.33,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.242,
+            "providers_unreachable": []
+          },
+          {
+            "t": 5,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.827,
+            "p99_ms": 3.064,
+            "node_attempts": {
+              "127.0.0.1:21001": 1683,
+              "127.0.0.1:21002": 1662,
+              "127.0.0.1:21003": 1655
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.337,
+              "127.0.0.1:21002": 0.332,
+              "127.0.0.1:21003": 0.331
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.436,
+            "providers_unreachable": []
+          },
+          {
+            "t": 6,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 1.044,
+            "p99_ms": 33.03,
+            "node_attempts": {
+              "127.0.0.1:21001": 1709,
+              "127.0.0.1:21002": 1669,
+              "127.0.0.1:21003": 1622
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.342,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.324
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 10.748,
+            "providers_unreachable": []
+          },
+          {
+            "t": 7,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.823,
+            "p99_ms": 1.819,
+            "node_attempts": {
+              "127.0.0.1:21001": 1643,
+              "127.0.0.1:21002": 1671,
+              "127.0.0.1:21003": 1687
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.329,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.337
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.27,
+            "providers_unreachable": []
+          },
+          {
+            "t": 8,
+            "success": 5002,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.889,
+            "p99_ms": 18.743,
+            "node_attempts": {
+              "127.0.0.1:21001": 1640,
+              "127.0.0.1:21002": 1661,
+              "127.0.0.1:21003": 1712
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.327,
+              "127.0.0.1:21002": 0.331,
+              "127.0.0.1:21003": 0.342
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 3.359,
+            "providers_unreachable": []
+          },
+          {
+            "t": 9,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.811,
+            "p99_ms": 1.868,
+            "node_attempts": {
+              "127.0.0.1:21001": 1661,
+              "127.0.0.1:21002": 1674,
+              "127.0.0.1:21003": 1651
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.333,
+              "127.0.0.1:21002": 0.336,
+              "127.0.0.1:21003": 0.331
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.234,
+            "providers_unreachable": []
+          },
+          {
+            "t": 10,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.803,
+            "p99_ms": 2.458,
+            "node_attempts": {
+              "127.0.0.1:21001": 1645,
+              "127.0.0.1:21002": 1676,
+              "127.0.0.1:21003": 1679
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.329,
+              "127.0.0.1:21002": 0.335,
+              "127.0.0.1:21003": 0.336
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.303,
+            "providers_unreachable": []
+          },
+          {
+            "t": 11,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.848,
+            "p99_ms": 7.504,
+            "node_attempts": {
+              "127.0.0.1:21001": 1653,
+              "127.0.0.1:21002": 1673,
+              "127.0.0.1:21003": 1674
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.331,
+              "127.0.0.1:21002": 0.335,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 5,
+            "server_queue_wait_p99_ms": 1.86,
+            "providers_unreachable": []
+          },
+          {
+            "t": 12,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.799,
+            "p99_ms": 1.303,
+            "node_attempts": {
+              "127.0.0.1:21001": 1649,
+              "127.0.0.1:21002": 1673,
+              "127.0.0.1:21003": 1678
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.33,
+              "127.0.0.1:21002": 0.335,
+              "127.0.0.1:21003": 0.336
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.18,
+            "providers_unreachable": []
+          },
+          {
+            "t": 13,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.778,
+            "p99_ms": 1.843,
+            "node_attempts": {
+              "127.0.0.1:21001": 1674,
+              "127.0.0.1:21002": 1668,
+              "127.0.0.1:21003": 1658
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.332
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.287,
+            "providers_unreachable": []
+          },
+          {
+            "t": 14,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.778,
+            "p99_ms": 1.327,
+            "node_attempts": {
+              "127.0.0.1:21001": 1673,
+              "127.0.0.1:21002": 1667,
+              "127.0.0.1:21003": 1661
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.333,
+              "127.0.0.1:21003": 0.332
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.191,
+            "providers_unreachable": []
+          },
+          {
+            "t": 15,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.77,
+            "p99_ms": 1.27,
+            "node_attempts": {
+              "127.0.0.1:21001": 1653,
+              "127.0.0.1:21002": 1653,
+              "127.0.0.1:21003": 1693
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.331,
+              "127.0.0.1:21002": 0.331,
+              "127.0.0.1:21003": 0.339
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.178,
+            "providers_unreachable": []
+          },
+          {
+            "t": 16,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.795,
+            "p99_ms": 1.36,
+            "node_attempts": {
+              "127.0.0.1:21001": 1629,
+              "127.0.0.1:21002": 1687,
+              "127.0.0.1:21003": 1684
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.326,
+              "127.0.0.1:21002": 0.337,
+              "127.0.0.1:21003": 0.337
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.209,
+            "providers_unreachable": []
+          },
+          {
+            "t": 17,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.786,
+            "p99_ms": 1.36,
+            "node_attempts": {
+              "127.0.0.1:21001": 1659,
+              "127.0.0.1:21002": 1671,
+              "127.0.0.1:21003": 1670
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.332,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.334
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.195,
+            "providers_unreachable": []
+          },
+          {
+            "t": 18,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.807,
+            "p99_ms": 1.769,
+            "node_attempts": {
+              "127.0.0.1:21001": 1656,
+              "127.0.0.1:21002": 1671,
+              "127.0.0.1:21003": 1673
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.331,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.365,
+            "providers_unreachable": []
+          },
+          {
+            "t": 19,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.778,
+            "p99_ms": 1.384,
+            "node_attempts": {
+              "127.0.0.1:21001": 1645,
+              "127.0.0.1:21002": 1669,
+              "127.0.0.1:21003": 1686
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.329,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.337
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.198,
+            "providers_unreachable": []
+          },
+          {
+            "t": 20,
+            "success": 4997,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.774,
+            "p99_ms": 22.544,
+            "node_attempts": {
+              "127.0.0.1:21001": 2380,
+              "127.0.0.1:21002": 254,
+              "127.0.0.1:21003": 2366
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.476,
+              "127.0.0.1:21002": 0.051,
+              "127.0.0.1:21003": 0.473
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.211,
+            "providers_unreachable": []
+          },
+          {
+            "t": 21,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.754,
+            "p99_ms": 22.807,
+            "node_attempts": {
+              "127.0.0.1:21001": 2377,
+              "127.0.0.1:21002": 153,
+              "127.0.0.1:21003": 2470
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.475,
+              "127.0.0.1:21002": 0.031,
+              "127.0.0.1:21003": 0.494
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.178,
+            "providers_unreachable": []
+          },
+          {
+            "t": 22,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.774,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2440,
+              "127.0.0.1:21002": 159,
+              "127.0.0.1:21003": 2401
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.488,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.48
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.183,
+            "providers_unreachable": []
+          },
+          {
+            "t": 23,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.762,
+            "p99_ms": 23.069,
+            "node_attempts": {
+              "127.0.0.1:21001": 2413,
+              "127.0.0.1:21002": 160,
+              "127.0.0.1:21003": 2427
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.483,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.485
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.208,
+            "providers_unreachable": []
+          },
+          {
+            "t": 24,
+            "success": 5002,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.745,
+            "p99_ms": 21.889,
+            "node_attempts": {
+              "127.0.0.1:21001": 2406,
+              "127.0.0.1:21002": 156,
+              "127.0.0.1:21003": 2438
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.481,
+              "127.0.0.1:21002": 0.031,
+              "127.0.0.1:21003": 0.488
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.167,
+            "providers_unreachable": []
+          },
+          {
+            "t": 25,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.766,
+            "p99_ms": 22.02,
+            "node_attempts": {
+              "127.0.0.1:21001": 2435,
+              "127.0.0.1:21002": 155,
+              "127.0.0.1:21003": 2410
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.487,
+              "127.0.0.1:21002": 0.031,
+              "127.0.0.1:21003": 0.482
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.171,
+            "providers_unreachable": []
+          },
+          {
+            "t": 26,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.774,
+            "p99_ms": 22.02,
+            "node_attempts": {
+              "127.0.0.1:21001": 2434,
+              "127.0.0.1:21002": 164,
+              "127.0.0.1:21003": 2402
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.487,
+              "127.0.0.1:21002": 0.033,
+              "127.0.0.1:21003": 0.48
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.184,
+            "providers_unreachable": []
+          },
+          {
+            "t": 27,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.782,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2464,
+              "127.0.0.1:21002": 165,
+              "127.0.0.1:21003": 2371
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.493,
+              "127.0.0.1:21002": 0.033,
+              "127.0.0.1:21003": 0.474
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 4,
+            "server_queue_wait_p99_ms": 0.189,
+            "providers_unreachable": []
+          },
+          {
+            "t": 28,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.786,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2384,
+              "127.0.0.1:21002": 173,
+              "127.0.0.1:21003": 2442
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.477,
+              "127.0.0.1:21002": 0.035,
+              "127.0.0.1:21003": 0.488
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.471,
+            "providers_unreachable": []
+          },
+          {
+            "t": 29,
+            "success": 5003,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.762,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2415,
+              "127.0.0.1:21002": 155,
+              "127.0.0.1:21003": 2431
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.483,
+              "127.0.0.1:21002": 0.031,
+              "127.0.0.1:21003": 0.486
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 2,
+            "server_queue_wait_p99_ms": 0.183,
+            "providers_unreachable": []
+          },
+          {
+            "t": 30,
+            "success": 4998,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.754,
+            "p99_ms": 22.544,
+            "node_attempts": {
+              "127.0.0.1:21001": 2402,
+              "127.0.0.1:21002": 166,
+              "127.0.0.1:21003": 2432
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.48,
+              "127.0.0.1:21002": 0.033,
+              "127.0.0.1:21003": 0.486
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.19,
+            "providers_unreachable": []
+          },
+          {
+            "t": 31,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.766,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2408,
+              "127.0.0.1:21002": 163,
+              "127.0.0.1:21003": 2429
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.482,
+              "127.0.0.1:21002": 0.033,
+              "127.0.0.1:21003": 0.486
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.199,
+            "providers_unreachable": []
+          },
+          {
+            "t": 32,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.799,
+            "p99_ms": 22.807,
+            "node_attempts": {
+              "127.0.0.1:21001": 2453,
+              "127.0.0.1:21002": 160,
+              "127.0.0.1:21003": 2386
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.491,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.477
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.179,
+            "providers_unreachable": []
+          },
+          {
+            "t": 33,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.766,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2434,
+              "127.0.0.1:21002": 161,
+              "127.0.0.1:21003": 2406
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.487,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.481
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.193,
+            "providers_unreachable": []
+          },
+          {
+            "t": 34,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.745,
+            "p99_ms": 22.02,
+            "node_attempts": {
+              "127.0.0.1:21001": 2453,
+              "127.0.0.1:21002": 162,
+              "127.0.0.1:21003": 2385
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.491,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.477
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.183,
+            "providers_unreachable": []
+          },
+          {
+            "t": 35,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.729,
+            "p99_ms": 22.807,
+            "node_attempts": {
+              "127.0.0.1:21001": 2382,
+              "127.0.0.1:21002": 159,
+              "127.0.0.1:21003": 2459
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.476,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.492
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.16,
+            "providers_unreachable": []
+          },
+          {
+            "t": 36,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.729,
+            "p99_ms": 22.807,
+            "node_attempts": {
+              "127.0.0.1:21001": 2410,
+              "127.0.0.1:21002": 154,
+              "127.0.0.1:21003": 2436
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.482,
+              "127.0.0.1:21002": 0.031,
+              "127.0.0.1:21003": 0.487
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.167,
+            "providers_unreachable": []
+          },
+          {
+            "t": 37,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.782,
+            "p99_ms": 22.151,
+            "node_attempts": {
+              "127.0.0.1:21001": 2399,
+              "127.0.0.1:21002": 162,
+              "127.0.0.1:21003": 2438
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.48,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.488
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.185,
+            "providers_unreachable": []
+          },
+          {
+            "t": 38,
+            "success": 4997,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.786,
+            "p99_ms": 22.151,
+            "node_attempts": {
+              "127.0.0.1:21001": 2403,
+              "127.0.0.1:21002": 171,
+              "127.0.0.1:21003": 2427
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.481,
+              "127.0.0.1:21002": 0.034,
+              "127.0.0.1:21003": 0.485
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.725,
+            "providers_unreachable": []
+          },
+          {
+            "t": 39,
+            "success": 5004,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.75,
+            "p99_ms": 22.938,
+            "node_attempts": {
+              "127.0.0.1:21001": 2424,
+              "127.0.0.1:21002": 158,
+              "127.0.0.1:21003": 2418
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.485,
+              "127.0.0.1:21002": 0.032,
+              "127.0.0.1:21003": 0.484
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.204,
+            "providers_unreachable": []
+          },
+          {
+            "t": 40,
+            "success": 5003,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.782,
+            "p99_ms": 1.491,
+            "node_attempts": {
+              "127.0.0.1:21001": 1737,
+              "127.0.0.1:21002": 1545,
+              "127.0.0.1:21003": 1718
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.347,
+              "127.0.0.1:21002": 0.309,
+              "127.0.0.1:21003": 0.344
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.189,
+            "providers_unreachable": []
+          },
+          {
+            "t": 41,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.77,
+            "p99_ms": 1.384,
+            "node_attempts": {
+              "127.0.0.1:21001": 1648,
+              "127.0.0.1:21002": 1663,
+              "127.0.0.1:21003": 1690
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.33,
+              "127.0.0.1:21002": 0.333,
+              "127.0.0.1:21003": 0.338
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 4,
+            "server_queue_wait_p99_ms": 0.199,
+            "providers_unreachable": []
+          },
+          {
+            "t": 42,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.762,
+            "p99_ms": 1.278,
+            "node_attempts": {
+              "127.0.0.1:21001": 1677,
+              "127.0.0.1:21002": 1651,
+              "127.0.0.1:21003": 1671
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.33,
+              "127.0.0.1:21003": 0.334
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.186,
+            "providers_unreachable": []
+          },
+          {
+            "t": 43,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.774,
+            "p99_ms": 7.93,
+            "node_attempts": {
+              "127.0.0.1:21001": 1672,
+              "127.0.0.1:21002": 1673,
+              "127.0.0.1:21003": 1655
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.334,
+              "127.0.0.1:21002": 0.335,
+              "127.0.0.1:21003": 0.331
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.991,
+            "providers_unreachable": []
+          },
+          {
+            "t": 44,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.75,
+            "p99_ms": 1.237,
+            "node_attempts": {
+              "127.0.0.1:21001": 1651,
+              "127.0.0.1:21002": 1672,
+              "127.0.0.1:21003": 1677
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.33,
+              "127.0.0.1:21002": 0.334,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.165,
+            "providers_unreachable": []
+          },
+          {
+            "t": 45,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.77,
+            "p99_ms": 1.303,
+            "node_attempts": {
+              "127.0.0.1:21001": 1632,
+              "127.0.0.1:21002": 1666,
+              "127.0.0.1:21003": 1702
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.326,
+              "127.0.0.1:21002": 0.333,
+              "127.0.0.1:21003": 0.34
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.176,
+            "providers_unreachable": []
+          },
+          {
+            "t": 46,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.754,
+            "p99_ms": 1.237,
+            "node_attempts": {
+              "127.0.0.1:21001": 1694,
+              "127.0.0.1:21002": 1621,
+              "127.0.0.1:21003": 1685
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.339,
+              "127.0.0.1:21002": 0.324,
+              "127.0.0.1:21003": 0.337
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.164,
+            "providers_unreachable": []
+          },
+          {
+            "t": 47,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.782,
+            "p99_ms": 1.679,
+            "node_attempts": {
+              "127.0.0.1:21001": 1681,
+              "127.0.0.1:21002": 1649,
+              "127.0.0.1:21003": 1670
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.336,
+              "127.0.0.1:21002": 0.33,
+              "127.0.0.1:21003": 0.334
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.198,
+            "providers_unreachable": []
+          },
+          {
+            "t": 48,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.819,
+            "p99_ms": 3.572,
+            "node_attempts": {
+              "127.0.0.1:21001": 1675,
+              "127.0.0.1:21002": 1681,
+              "127.0.0.1:21003": 1644
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.336,
+              "127.0.0.1:21003": 0.329
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.803,
+            "providers_unreachable": []
+          },
+          {
+            "t": 49,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.758,
+            "p99_ms": 1.343,
+            "node_attempts": {
+              "127.0.0.1:21001": 1673,
+              "127.0.0.1:21002": 1683,
+              "127.0.0.1:21003": 1644
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.335,
+              "127.0.0.1:21002": 0.337,
+              "127.0.0.1:21003": 0.329
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.183,
+            "providers_unreachable": []
+          },
+          {
+            "t": 50,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.791,
+            "p99_ms": 1.442,
+            "node_attempts": {
+              "127.0.0.1:21001": 1692,
+              "127.0.0.1:21002": 1633,
+              "127.0.0.1:21003": 1675
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.338,
+              "127.0.0.1:21002": 0.327,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 0.188,
+            "providers_unreachable": []
+          },
+          {
+            "t": 51,
+            "success": 4695,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.831,
+            "p99_ms": 57.672,
+            "node_attempts": {
+              "127.0.0.1:21001": 1696,
+              "127.0.0.1:21002": 1667,
+              "127.0.0.1:21003": 1663
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.337,
+              "127.0.0.1:21002": 0.332,
+              "127.0.0.1:21003": 0.331
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 3,
+            "server_queue_wait_p99_ms": 16.056,
+            "providers_unreachable": []
+          },
+          {
+            "t": 52,
+            "success": 5304,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 1.057,
+            "p99_ms": 77.07,
+            "node_attempts": {
+              "127.0.0.1:21001": 1612,
+              "127.0.0.1:21002": 1683,
+              "127.0.0.1:21003": 1678
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.324,
+              "127.0.0.1:21002": 0.338,
+              "127.0.0.1:21003": 0.337
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 4.882,
+            "providers_unreachable": []
+          },
+          {
+            "t": 53,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.848,
+            "p99_ms": 3.604,
+            "node_attempts": {
+              "127.0.0.1:21001": 1663,
+              "127.0.0.1:21002": 1644,
+              "127.0.0.1:21003": 1693
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.333,
+              "127.0.0.1:21002": 0.329,
+              "127.0.0.1:21003": 0.339
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.864,
+            "providers_unreachable": []
+          },
+          {
+            "t": 54,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.778,
+            "p99_ms": 1.384,
+            "node_attempts": {
+              "127.0.0.1:21001": 1663,
+              "127.0.0.1:21002": 1646,
+              "127.0.0.1:21003": 1692
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.333,
+              "127.0.0.1:21002": 0.329,
+              "127.0.0.1:21003": 0.338
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.194,
+            "providers_unreachable": []
+          },
+          {
+            "t": 55,
+            "success": 5002,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.848,
+            "p99_ms": 21.234,
+            "node_attempts": {
+              "127.0.0.1:21001": 1666,
+              "127.0.0.1:21002": 1691,
+              "127.0.0.1:21003": 1643
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.333,
+              "127.0.0.1:21002": 0.338,
+              "127.0.0.1:21003": 0.329
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 1.622,
+            "providers_unreachable": []
+          },
+          {
+            "t": 56,
+            "success": 4998,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.827,
+            "p99_ms": 17.957,
+            "node_attempts": {
+              "127.0.0.1:21001": 1643,
+              "127.0.0.1:21002": 1707,
+              "127.0.0.1:21003": 1650
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.329,
+              "127.0.0.1:21002": 0.341,
+              "127.0.0.1:21003": 0.33
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 1,
+            "server_queue_wait_p99_ms": 0.918,
+            "providers_unreachable": []
+          },
+          {
+            "t": 57,
+            "success": 5001,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.856,
+            "p99_ms": 2.023,
+            "node_attempts": {
+              "127.0.0.1:21001": 1660,
+              "127.0.0.1:21002": 1643,
+              "127.0.0.1:21003": 1697
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.332,
+              "127.0.0.1:21002": 0.329,
+              "127.0.0.1:21003": 0.339
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.266,
+            "providers_unreachable": []
+          },
+          {
+            "t": 58,
+            "success": 5000,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.868,
+            "p99_ms": 2.736,
+            "node_attempts": {
+              "127.0.0.1:21001": 1654,
+              "127.0.0.1:21002": 1654,
+              "127.0.0.1:21003": 1692
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.331,
+              "127.0.0.1:21002": 0.331,
+              "127.0.0.1:21003": 0.338
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.713,
+            "providers_unreachable": []
+          },
+          {
+            "t": 59,
+            "success": 4999,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.778,
+            "p99_ms": 1.45,
+            "node_attempts": {
+              "127.0.0.1:21001": 1660,
+              "127.0.0.1:21002": 1662,
+              "127.0.0.1:21003": 1676
+            },
+            "node_share": {
+              "127.0.0.1:21001": 0.332,
+              "127.0.0.1:21002": 0.333,
+              "127.0.0.1:21003": 0.335
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": 0.181,
+            "providers_unreachable": []
+          },
+          {
+            "t": 60,
+            "success": 4,
+            "errors": 0,
+            "errors_by_type": {},
+            "p50_ms": 0.705,
+            "p99_ms": 0.979,
+            "node_attempts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_share": {
+              "127.0.0.1:21001": null,
+              "127.0.0.1:21002": null,
+              "127.0.0.1:21003": null
+            },
+            "node_failures": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "node_timeouts": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "retries": 0,
+            "retry_node_switches": 0,
+            "ejected_nodes": 0,
+            "ejections": 0,
+            "restores": 0,
+            "server_executor_rejections": 0,
+            "server_shutdown_rejections": 0,
+            "server_rejections_by_provider": {
+              "127.0.0.1:21001": 0,
+              "127.0.0.1:21002": 0,
+              "127.0.0.1:21003": 0
+            },
+            "server_queued": 0,
+            "server_queue_wait_p99_ms": null,
+            "providers_unreachable": []
+          }
+        ]
+      },
+      "faults": [
+        {
+          "at": "20s",
+          "at_ms": 20000.0,
+          "kind": "toxic-latency",
+          "target": 2,
+          "latency_ms": 20.0,
+          "jitter_ms": 5.0,
+          "stream": "downstream",
+          "index": 0,
+          "executed_at_ms": 20023.0,
+          "status": "ok",
+          "detail": "latency toxic on rpc-fault-p2 (downstream) {\"latency\":20,\"jitter\":5}",
+          "target_address": "127.0.0.1:21002",
+          "recovery": {
+            "criterion": "first second s >= floor(event) where errors[s..s+2] == 0; recovery = max(0, s - event); no error at all after the event = 0",
+            "recovered": true,
+            "errors_recovery_s": 0.0,
+            "errors_until_recovery": 0,
+            "first_error_second": null,
+            "last_error_second": null,
+            "baseline_p99_ms": 1.819,
+            "p99_recovery_s": 19.977
+          },
+          "outlier_ejections": 0,
+          "outlier_restores": 0
+        },
+        {
+          "at": "40s",
+          "at_ms": 40000.0,
+          "kind": "remove-toxic",
+          "target": 2,
+          "index": 1,
+          "executed_at_ms": 40023.0,
+          "status": "ok",
+          "detail": "removed toxics on rpc-fault-p2: fault-latency-downstream",
+          "target_address": "127.0.0.1:21002",
+          "recovery": {
+            "criterion": "first second s >= floor(event) where errors[s..s+2] == 0; recovery = max(0, s - event); no error at all after the event = 0",
+            "recovered": true,
+            "errors_recovery_s": 0.0,
+            "errors_until_recovery": 0,
+            "first_error_second": null,
+            "last_error_second": null,
+            "baseline_p99_ms": 1.819,
+            "p99_recovery_s": 0.0,
+            "baseline_share": 0.333,
+            "share_recovery_s": 0.0
+          },
+          "outlier_ejections": 0,
+          "outlier_restores": 0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "official_round": 1,
+    "selection_rule": "开环：窗口 p99 的中位数那一轮",
+    "official": {
+      "throughput_rps": 4999.98,
+      "p50_ms": 0.782,
+      "p90_ms": 1.055,
+      "p95_ms": 1.398,
+      "p99_ms": 20.365,
+      "p999_ms": 49.218,
+      "max_ms": 106.496,
+      "mean_ms": 1.289,
+      "window_requests": 249999,
+      "window_errors": 0
+    },
+    "spread": {
+      "throughput_rps": {
+        "rounds": 1,
+        "min": 4999.98,
+        "max": 4999.98,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "p50_ms": {
+        "rounds": 1,
+        "min": 0.782,
+        "max": 0.782,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "p95_ms": {
+        "rounds": 1,
+        "min": 1.398,
+        "max": 1.398,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "p99_ms": {
+        "rounds": 1,
+        "min": 20.365,
+        "max": 20.365,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "p999_ms": {
+        "rounds": 1,
+        "min": 49.218,
+        "max": 49.218,
+        "range": 0.0,
+        "range_pct": 0.0
+      },
+      "max_ms": {
+        "rounds": 1,
+        "min": 106.496,
+        "max": 106.496,
+        "range": 0.0,
+        "range_pct": 0.0
+      }
+    }
+  },
+  "validity": {
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "client_bound": false,
+    "dispatcher_delayed_rounds": [],
+    "dispatcher_delayed": false,
+    "client_gc_pause_pct_max": 0.02,
+    "server_executor": {
+      "expected": "fixed",
+      "actual": "fixed",
+      "matches": true
+    },
+    "server_options": {
+      "queue_capacity_expected": "1000",
+      "queue_capacity_actual": "1000",
+      "deregister_grace_ms_expected": 0,
+      "deregister_grace_ms_actual": "0",
+      "work_ms_expected": 0.0,
+      "work_ms_actual": "0.0",
+      "matches": true
+    },
+    "faults_executed": true,
+    "statements": ["开环负载（open）：延迟从计划发出时刻算起，发压端自身的调度滞后（见“发出滞后”列）也计入延迟；发出滞后的 p99 明显大于服务时间时，说明压测端本身成了瓶颈，数字不代表被测服务。", "开环调度线程以忙等对齐节拍，独占一个核；本报告的 CPU 亲和见环境表。", "错误不计入延迟分布与吞吐；延迟分位数只统计完成时刻落在统计窗口内的成功调用。"],
+    "topology": "client 与 server 是两个独立 JVM，同一台机器（loopback），3 个提供者（[127.0.0.1:21001, 127.0.0.1:21002, 127.0.0.1:21003]），经 zk://127.0.0.1:2181 发现；卡片声明的注册中心：docker-compose/zookeeper（容器未绑核、与压测进程共享宿主核）；三个提供者都经 toxiproxy 原生进程（同 WSL，2.13.0，二进制取自 compose 镜像；只有第 2 个加 toxic）。",
+    "asserts": [],
+    "asserts_passed": true,
+    "passed": true
+  }
+}

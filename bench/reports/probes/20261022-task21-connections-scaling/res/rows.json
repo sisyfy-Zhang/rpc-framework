@@ -1,0 +1,764 @@
+[
+ {
+  "run": "M/c2-1",
+  "card": "sweep-closed128-rpc-v1",
+  "round": 3,
+  "official": true,
+  "conns": 2,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 145136.0,
+  "p50": 0.816,
+  "p99": 2.103,
+  "err": 0,
+  "ccpu": 65.3,
+  "scpu": 51.5,
+  "csyscw": 0.162,
+  "ssyscw": 0.113,
+  "ccs": 0.188,
+  "scs": 0.174,
+  "ccpu_us": 21.926,
+  "scpu_us": 16.763,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   142240,
+   146206,
+   145136
+  ],
+  "c.netty_io": {
+   "threads": "2 -> 2",
+   "cs": 0.024,
+   "cpu_us": 11.646,
+   "cpu_ms": 59160
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.164,
+   "cpu_us": 10.209,
+   "cpu_ms": 51860
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.008,
+   "cpu_ms": 40
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.067,
+   "cpu_ms": 340
+  },
+  "c.other": {
+   "threads": "6 -> 5",
+   "cs": 0.0,
+   "cpu_us": -0.004,
+   "cpu_ms": -20
+  },
+  "s.netty_io": {
+   "threads": "7 -> 8",
+   "cs": 0.045,
+   "cpu_us": 7.353,
+   "cpu_ms": 37350
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.128,
+   "cpu_us": 9.282,
+   "cpu_ms": 47150
+  },
+  "s.jvm": {
+   "threads": "20 -> 21",
+   "cs": 0.001,
+   "cpu_us": 0.128,
+   "cpu_ms": 650
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "M/c2-2",
+  "card": "sweep-closed128-rpc-v1",
+  "round": 3,
+  "official": true,
+  "conns": 2,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 141148.3,
+  "p50": 0.834,
+  "p99": 2.234,
+  "err": 0,
+  "ccpu": 63.4,
+  "scpu": 51.0,
+  "csyscw": 0.161,
+  "ssyscw": 0.109,
+  "ccs": 0.191,
+  "scs": 0.177,
+  "ccpu_us": 21.985,
+  "scpu_us": 17.014,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   139572,
+   141524,
+   141148
+  ],
+  "c.netty_io": {
+   "threads": "2 -> 2",
+   "cs": 0.026,
+   "cpu_us": 11.619,
+   "cpu_ms": 57400
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.164,
+   "cpu_us": 10.285,
+   "cpu_ms": 50810
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.004,
+   "cpu_ms": 20
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.075,
+   "cpu_ms": 370
+  },
+  "c.other": {
+   "threads": "6 -> 6",
+   "cs": 0.0,
+   "cpu_us": 0.002,
+   "cpu_ms": 10
+  },
+  "s.netty_io": {
+   "threads": "7 -> 8",
+   "cs": 0.045,
+   "cpu_us": 7.392,
+   "cpu_ms": 36520
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.132,
+   "cpu_us": 9.568,
+   "cpu_ms": 47270
+  },
+  "s.jvm": {
+   "threads": "21 -> 21",
+   "cs": 0.001,
+   "cpu_us": 0.053,
+   "cpu_ms": 260
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "M/c4-1",
+  "card": "sweep-c4-closed128-rpc-v1",
+  "round": 3,
+  "official": true,
+  "conns": 4,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 130630.5,
+  "p50": 0.834,
+  "p99": 3.24,
+  "err": 0,
+  "ccpu": 76.2,
+  "scpu": 61.2,
+  "csyscw": 0.416,
+  "ssyscw": 0.242,
+  "ccs": 0.264,
+  "scs": 0.254,
+  "ccpu_us": 28.788,
+  "scpu_us": 22.795,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   127196,
+   131091,
+   130630
+  ],
+  "c.netty_io": {
+   "threads": "4 -> 4",
+   "cs": 0.131,
+   "cpu_us": 18.204,
+   "cpu_ms": 83230
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.131,
+   "cpu_us": 10.47,
+   "cpu_ms": 47870
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.017,
+   "cpu_ms": 80
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.094,
+   "cpu_ms": 430
+  },
+  "c.other": {
+   "threads": "6 -> 5",
+   "cs": 0.0,
+   "cpu_us": 0.002,
+   "cpu_ms": 10
+  },
+  "s.netty_io": {
+   "threads": "9 -> 10",
+   "cs": 0.126,
+   "cpu_us": 12.393,
+   "cpu_ms": 56660
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.127,
+   "cpu_us": 10.295,
+   "cpu_ms": 47070
+  },
+  "s.jvm": {
+   "threads": "20 -> 21",
+   "cs": 0.001,
+   "cpu_us": 0.107,
+   "cpu_ms": 490
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "M/c4-2",
+  "card": "sweep-c4-closed128-rpc-v1",
+  "round": 2,
+  "official": true,
+  "conns": 4,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 114534.7,
+  "p50": 0.922,
+  "p99": 3.985,
+  "err": 0,
+  "ccpu": 75.3,
+  "scpu": 60.1,
+  "csyscw": 0.406,
+  "ssyscw": 0.241,
+  "ccs": 0.267,
+  "scs": 0.26,
+  "ccpu_us": 32.452,
+  "scpu_us": 25.522,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   113893,
+   114535,
+   128989
+  ],
+  "c.netty_io": {
+   "threads": "4 -> 4",
+   "cs": 0.131,
+   "cpu_us": 20.503,
+   "cpu_ms": 82190
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.134,
+   "cpu_us": 11.787,
+   "cpu_ms": 47250
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.022,
+   "cpu_ms": 90
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.137,
+   "cpu_ms": 550
+  },
+  "c.other": {
+   "threads": "6 -> 6",
+   "cs": 0.0,
+   "cpu_us": 0.002,
+   "cpu_ms": 10
+  },
+  "s.netty_io": {
+   "threads": "8 -> 9",
+   "cs": 0.128,
+   "cpu_us": 13.892,
+   "cpu_ms": 55690
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.131,
+   "cpu_us": 11.552,
+   "cpu_ms": 46310
+  },
+  "s.jvm": {
+   "threads": "21 -> 21",
+   "cs": 0.001,
+   "cpu_us": 0.077,
+   "cpu_ms": 310
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "M/c8-1",
+  "card": "sweep-c8-closed128-rpc-v1",
+  "round": 2,
+  "official": true,
+  "conns": 8,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 124495.8,
+  "p50": 0.828,
+  "p99": 4.432,
+  "err": 0,
+  "ccpu": 86.2,
+  "scpu": 68.2,
+  "csyscw": 0.606,
+  "ssyscw": 0.393,
+  "ccs": 0.432,
+  "scs": 0.399,
+  "ccpu_us": 34.271,
+  "scpu_us": 26.883,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   121725,
+   124496,
+   124957
+  ],
+  "c.netty_io": {
+   "threads": "8 -> 8",
+   "cs": 0.299,
+   "cpu_us": 23.576,
+   "cpu_ms": 102730
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.132,
+   "cpu_us": 10.571,
+   "cpu_ms": 46060
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.007,
+   "cpu_ms": 30
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.117,
+   "cpu_ms": 510
+  },
+  "c.other": {
+   "threads": "5 -> 5",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  },
+  "s.netty_io": {
+   "threads": "12 -> 13",
+   "cs": 0.275,
+   "cpu_us": 17.201,
+   "cpu_ms": 74950
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.122,
+   "cpu_us": 9.609,
+   "cpu_ms": 41870
+  },
+  "s.jvm": {
+   "threads": "21 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.073,
+   "cpu_ms": 320
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "M/c8-2",
+  "card": "sweep-c8-closed128-rpc-v1",
+  "round": 3,
+  "official": true,
+  "conns": 8,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 122826.6,
+  "p50": 0.835,
+  "p99": 4.502,
+  "err": 0,
+  "ccpu": 85.3,
+  "scpu": 69.3,
+  "csyscw": 0.608,
+  "ssyscw": 0.397,
+  "ccs": 0.445,
+  "scs": 0.392,
+  "ccpu_us": 34.436,
+  "scpu_us": 27.737,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   122747,
+   125998,
+   122827
+  ],
+  "c.netty_io": {
+   "threads": "8 -> 8",
+   "cs": 0.307,
+   "cpu_us": 23.583,
+   "cpu_ms": 101380
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.137,
+   "cpu_us": 10.742,
+   "cpu_ms": 46180
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.009,
+   "cpu_ms": 40
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.102,
+   "cpu_ms": 440
+  },
+  "c.other": {
+   "threads": "5 -> 5",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  },
+  "s.netty_io": {
+   "threads": "13 -> 14",
+   "cs": 0.275,
+   "cpu_us": 17.909,
+   "cpu_ms": 76990
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.116,
+   "cpu_us": 9.663,
+   "cpu_ms": 41540
+  },
+  "s.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.165,
+   "cpu_ms": 710
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "V/c2-direct",
+  "card": "sweep-closed128-rpc-direct-v1",
+  "round": 2,
+  "official": true,
+  "conns": 2,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "direct",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 179442.8,
+  "p50": 0.674,
+  "p99": 1.584,
+  "err": 0,
+  "ccpu": 64.5,
+  "scpu": 26.5,
+  "csyscw": 0.158,
+  "ssyscw": 0.056,
+  "ccs": 0.168,
+  "scs": 0.021,
+  "ccpu_us": 17.706,
+  "scpu_us": 6.574,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   181058,
+   179443,
+   179097
+  ],
+  "c.netty_io": {
+   "threads": "2 -> 2",
+   "cs": 0.023,
+   "cpu_us": 9.264,
+   "cpu_ms": 58180
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.144,
+   "cpu_us": 8.374,
+   "cpu_ms": 52590
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.011,
+   "cpu_ms": 70
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.057,
+   "cpu_ms": 360
+  },
+  "c.other": {
+   "threads": "6 -> 5",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  },
+  "s.netty_io": {
+   "threads": "6 -> 7",
+   "cs": 0.021,
+   "cpu_us": 6.528,
+   "cpu_ms": 41000
+  },
+  "s.jvm": {
+   "threads": "21 -> 21",
+   "cs": 0.001,
+   "cpu_us": 0.046,
+   "cpu_ms": 290
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "V/c8-direct",
+  "card": "sweep-c8-closed128-rpc-direct-v1",
+  "round": 3,
+  "official": true,
+  "conns": 8,
+  "cio": "default (Netty: 2 x available cores = 10)",
+  "sexec": "direct",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 140051.2,
+  "p50": 0.735,
+  "p99": 4.037,
+  "err": 0,
+  "ccpu": 90.1,
+  "scpu": 51.8,
+  "csyscw": 0.479,
+  "ssyscw": 0.206,
+  "ccs": 0.343,
+  "scs": 0.143,
+  "ccpu_us": 31.837,
+  "scpu_us": 17.553,
+  "valid": true,
+  "passed": true,
+  "bound": true,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   127489,
+   143421,
+   140051
+  ],
+  "c.netty_io": {
+   "threads": "8 -> 8",
+   "cs": 0.23,
+   "cpu_us": 22.318,
+   "cpu_ms": 109400
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.112,
+   "cpu_us": 9.397,
+   "cpu_ms": 46060
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.01,
+   "cpu_ms": 50
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.112,
+   "cpu_ms": 550
+  },
+  "c.other": {
+   "threads": "5 -> 5",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  },
+  "s.netty_io": {
+   "threads": "13 -> 14",
+   "cs": 0.142,
+   "cpu_us": 17.465,
+   "cpu_ms": 85610
+  },
+  "s.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.088,
+   "cpu_ms": 430
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ },
+ {
+  "run": "V/c8-io2",
+  "card": "sweep-c8-closed128-rpc-v1",
+  "round": 3,
+  "official": true,
+  "conns": 8,
+  "cio": 2,
+  "sexec": "fixed",
+  "channel": "http://127.0.0.1:19400 (HTTP control endpoint, IO thread)",
+  "tp": 119130.4,
+  "p50": 1.001,
+  "p99": 2.621,
+  "err": 0,
+  "ccpu": 65.8,
+  "scpu": 65.6,
+  "csyscw": 0.275,
+  "ssyscw": 0.414,
+  "ccs": 0.179,
+  "scs": 0.432,
+  "ccpu_us": 26.801,
+  "scpu_us": 26.998,
+  "valid": true,
+  "passed": true,
+  "bound": false,
+  "sha": "22801f574c1205b551aa6c65beebbc10b96908ba",
+  "dirty": true,
+  "all_tp": [
+   118307,
+   119733,
+   119130
+  ],
+  "c.netty_io": {
+   "threads": "2 -> 2",
+   "cs": 0.01,
+   "cpu_us": 15.985,
+   "cpu_ms": 66650
+  },
+  "c.fjp": {
+   "threads": "5 -> 5",
+   "cs": 0.168,
+   "cpu_us": 10.737,
+   "cpu_ms": 44770
+  },
+  "c.timers": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.002,
+   "cpu_ms": 10
+  },
+  "c.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.077,
+   "cpu_ms": 320
+  },
+  "c.other": {
+   "threads": "6 -> 6",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  },
+  "s.netty_io": {
+   "threads": "13 -> 14",
+   "cs": 0.299,
+   "cpu_us": 16.582,
+   "cpu_ms": 69140
+  },
+  "s.biz_pool": {
+   "threads": "10 -> 10",
+   "cs": 0.131,
+   "cpu_us": 10.363,
+   "cpu_ms": 43210
+  },
+  "s.jvm": {
+   "threads": "20 -> 20",
+   "cs": 0.001,
+   "cpu_us": 0.053,
+   "cpu_ms": 220
+  },
+  "s.other": {
+   "threads": "2 -> 2",
+   "cs": 0.0,
+   "cpu_us": 0.0,
+   "cpu_ms": 0
+  }
+ }
+]
