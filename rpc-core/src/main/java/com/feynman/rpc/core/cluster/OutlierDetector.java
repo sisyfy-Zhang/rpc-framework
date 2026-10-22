@@ -30,7 +30,7 @@ import com.feynman.rpc.core.registry.ServiceInstance;
  * 没有离群摘除时这个节点会一直分到 1/n 的首次尝试、每个都等到超时（docs/probes/fault-injection.md 的 toxic-timeout）。
  * 进程被 kill -9 时注册中心要等会话超时（ZooKeeper 缺省 30s）才摘，failfast 下这段时间 1/n 的请求失败。
  *
- * <p><b>倍数衰减</b>：摘除时长 = baseEjection × 累计被摘次数；某地址放回之后没有再被摘、满一个 maxEjection，累计次数减 1（最低 1），
+ * <p><b>倍数衰减</b>：摘除时长 = baseEjection × 累计被摘次数；某地址放回之后没有再被摘、满一个 maxEjection，累计次数减 1（最低 0，即下一次摘除回到 baseEjection），
  * 每再满一个 maxEjection 再减 1——偶发一次的节点不会永远背着上限时长。衰减在下一次摘除（与观测）时按经过的时间一次算清，不需要定时器。
  *
  * <p><b>刻意不做的</b>：半开探测（摘除到期直接放回，Envoy 式时间驱动；放回后若仍坏，几个坏结果之后再摘，时长倍增）、
@@ -286,11 +286,11 @@ public final class OutlierDetector {
 	}
 
 	/**
-	 * 倍数衰减（锁内）：放回之后每连续健康（没有再被摘）满一个 maxEjection，累计被摘次数减 1，最低 1；起点随之前移，
+	 * 倍数衰减（锁内）：放回之后每连续健康（没有再被摘）满一个 maxEjection，累计被摘次数减 1，最低 0；起点随之前移，
 	 * 不足一个 maxEjection 的零头留到下次。摘除期内不衰减。
 	 */
 	private void decayLocked(Node node, long now) {
-		if (node.ejected || node.ejections <= 1) {
+		if (node.ejected || node.ejections <= 0) {
 			return;
 		}
 		long healthy = now - node.healthySince;
@@ -298,7 +298,7 @@ public final class OutlierDetector {
 			return;
 		}
 		long steps = healthy / maxNanos;
-		node.ejections = (int) Math.max(1, node.ejections - steps);
+		node.ejections = (int) Math.max(0, node.ejections - steps);
 		node.healthySince += steps * maxNanos;
 	}
 

@@ -13,7 +13,7 @@ import java.time.Duration;
  *       （0 = 不用这个条件）；</li>
  *   <li><b>摘除时长</b>：{@code baseEjection} × 该地址累计被摘次数，上限 {@code maxEjection}；到期自动回到候选集（时间驱动，
  *       不做半开探测、不做主动健康检查、不按延迟摘除），回来时连续坏结果计数清零，窗口保留；放回后连续健康（没有再被摘）
- *       每满一个 {@code maxEjection}，累计被摘次数减 1（最低 1）；</li>
+ *       每满一个 {@code maxEjection}，累计被摘次数减 1（最低 0：长期健康后回到 baseEjection）；</li>
  *   <li><b>最大摘除比例</b> {@code maxEjectionPercent}：摘掉之后健康节点会少于 {@code max(1, ceil(n × (100 − p) / 100))} 时不摘
  *       （n = 该服务当前的提供者数）；万一全部候选都处于摘除期（推送收窄了列表等），退回全部候选——宁可打到坏节点，也不无节点可用。</li>
  * </ul>

@@ -247,10 +247,10 @@ class OutlierDetectorTest {
 		clock.advance(Duration.ofSeconds(40));
 		assertEquals(2, d.snapshot(A.address()).get("ejections"), "another healthy maxEjection: -1 again");
 		ejectAndExpectDuration(d, Duration.ofSeconds(30));
-		// 很久之后：衰减到下限 1，下一次摘除 = 第 2 次 = 20s（不会回到 base，见 OutlierDetector 的说明）
+		// 很久之后：衰减到下限 0，下一次摘除 = 第 1 次 = baseEjection（10s）
 		clock.advance(Duration.ofSeconds(4000));
-		assertEquals(1, d.snapshot(A.address()).get("ejections"), "floor 1");
-		ejectAndExpectDuration(d, Duration.ofSeconds(20));
+		assertEquals(0, d.snapshot(A.address()).get("ejections"), "floor 0");
+		ejectAndExpectDuration(d, Duration.ofSeconds(10));
 	}
 
 	@Test

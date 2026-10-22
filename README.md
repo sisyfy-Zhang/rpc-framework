@@ -291,7 +291,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `outlier-detection.enabled` | `outlierDetection(OutlierDetectionConfig)` | true | 离群摘除开关（`OutlierDetectionConfig.disabled()` 关闭）。坏结果 = 本地超时、`DEADLINE_EXCEEDED`、传输失败（含"未发出"）、`SERVER_OVERLOADED`；业务异常与其它服务端错误不算 |
 | `outlier-detection.min-requests` / `failure-ratio` | 同上（`OutlierDetectionConfig.builder()`） | 20 / 0.5 | 比例条件：最近 10 秒（10 个 1 秒桶）内尝试 ≥ min-requests 且坏结果占比 ≥ failure-ratio 时摘除 |
 | `outlier-detection.consecutive-failures` | 同上 | 5 | 连续条件：连续这么多个坏结果时摘除；0 = 不用这个条件 |
-| `outlier-detection.base-ejection` / `max-ejection` | 同上 | 10s / 60s | 摘除时长 = base × 该地址累计被摘次数，上限 max；到期自动回到候选集（不做半开探测、不做主动健康检查）；放回后每连续健康满一个 max，累计次数减 1（最低 1） |
+| `outlier-detection.base-ejection` / `max-ejection` | 同上 | 10s / 60s | 摘除时长 = base × 该地址累计被摘次数，上限 max；到期自动回到候选集（不做半开探测、不做主动健康检查）；放回后每连续健康满一个 max，累计次数减 1（最低 0，长期健康后下一次摘除回到 base） |
 | `outlier-detection.max-ejection-percent` | 同上 | 50 | 最多摘除的提供者比例：摘掉之后健康的至少保留 `ceil(n × (100 − p) / 100)` 个、且至少 1 个；万一候选全在摘除期，退回全部候选 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
