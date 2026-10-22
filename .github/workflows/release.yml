@@ -17,6 +17,7 @@ concurrency:
 
 env:
   MVN_FLAGS: -B -ntp
+# Maven 版本由 ./mvnw 固定（.mvn/wrapper/maven-wrapper.properties，3.9.12），与 ci.yml 相同，不用 runner 镜像自带的 mvn
 
 jobs:
   deploy:
@@ -50,14 +51,14 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           expected="${tag#v}"
-          version=$(mvn $MVN_FLAGS -N -q -DforceStdout help:evaluate -Dexpression=project.version)
-          bom_version=$(mvn $MVN_FLAGS -q -DforceStdout -f rpc-bom/pom.xml help:evaluate -Dexpression=project.version)
+          version=$(./mvnw $MVN_FLAGS -N -q -DforceStdout help:evaluate -Dexpression=project.version)
+          bom_version=$(./mvnw $MVN_FLAGS -q -DforceStdout -f rpc-bom/pom.xml help:evaluate -Dexpression=project.version)
           echo "tag=$tag rpc-parent=$version rpc-bom=$bom_version"
           [ "$version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-parent version $version"; exit 1; }
           [ "$bom_version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-bom version $bom_version"; exit 1; }
           case "$version" in *-SNAPSHOT) echo "::error::refusing to release a SNAPSHOT version ($version)"; exit 1;; esac
 
-      - name: mvn -Prelease deploy (sign, bundle, upload, wait until validated)
+      - name: ./mvnw -Prelease deploy (sign, bundle, upload, wait until validated)
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
@@ -66,10 +67,10 @@ jobs:
         # maven.test.skip：测试由 ci.yml 保证，同时让 rpc-core 的 test-jar 不生成、不发布；
         # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败。
         # maven.install.skip：发布用不到本地安装，且让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同（pitfalls 第 37 条）。
-        # mvn -v 先打出 Maven / resolver 版本：runner 镜像的 Maven 会随镜像升级（3.10 换了 resolver 2，曾让 bundle 混入本地仓库跟踪文件）
+        # ./mvnw -v 先打出 Maven / resolver 版本，留作核对：版本由 wrapper 固定为 3.9.12；之前用 runner 镜像自带的 mvn 时，镜像升到 3.10（resolver 2）曾让 bundle 混入本地仓库跟踪文件
         run: |
-          mvn -v
-          mvn $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy
+          ./mvnw -v
+          ./mvnw $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy
 
       # 便于核对上传了什么：各发布模块的 jar / sources / javadoc / pom 与 .asc，以及 central-publishing 打出的 bundle
       - name: Upload release artifacts

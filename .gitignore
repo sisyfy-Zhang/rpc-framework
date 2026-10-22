@@ -1,6 +1,8 @@
 # Maven（含 JaCoCo 的 jacoco.exec 与报告，都在各模块 target/ 下）
 target/
 dependency-reduced-pom.xml
+# Maven Wrapper 用 only-script 方式（mvnw 自己下载 Maven 发行包），不入库 wrapper jar
+.mvn/wrapper/maven-wrapper.jar
 
 # jqwik 失败样本库（已配置到 target/jqwik-database；这里兜底防止在模块根目录生成）
 .jqwik-database

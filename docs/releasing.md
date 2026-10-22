@@ -57,7 +57,7 @@
 
 ## 发布步骤
 
-以 `1.0.0` 为例，在 main 上、工作区干净、CI 全绿：
+以 `1.0.0` 为例，在 main 上、工作区干净、CI 全绿（下面给人看的命令写 `mvn`，本机 Maven 3.9.x 即可；CI 用仓库里的 `./mvnw`，Maven 版本固定为 3.9.12）：
 
 ```bash
 # 1. 去掉 -SNAPSHOT（只改 pom 里的版本号；改完核对再没有 $V-SNAPSHOT）
@@ -83,7 +83,7 @@ git commit -am "版本回到 1.0.1-SNAPSHOT" && git push origin main
    用户名 / 密码写成 `${env.CENTRAL_USERNAME}` / `${env.CENTRAL_TOKEN}`，真实值只在 deploy 步骤的环境变量里出现。
 2. `gpg --batch --import` 导入 `GPG_PRIVATE_KEY`。
 3. 核对 tag 与版本：`v1.0.0` 必须对应根 pom 与 rpc-bom 的 `1.0.0`，且不是 SNAPSHOT。
-4. 先 `mvn -v`（打出 runner 上的 Maven / resolver 版本），再 `mvn -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy`（`MAVEN_GPG_PASSPHRASE` 来自 `GPG_PASSPHRASE`）：release profile 生成 sources / javadoc jar（javadoc 的
+4. 先 `./mvnw -v`（打出 Maven / resolver 版本；wrapper 把 Maven 固定为 3.9.12，不用 runner 镜像自带的 mvn），再 `./mvnw -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy`（`MAVEN_GPG_PASSPHRASE` 来自 `GPG_PASSPHRASE`）：release profile 生成 sources / javadoc jar（javadoc 的
    doclint 为 `all,-missing`，有错误即失败）、gpg 签名（`--pinentry-mode loopback`），central-publishing 把发布模块打成一个 bundle 上传，
    等到 Central 校验通过（`waitUntil=validated`）。测试由 ci.yml 保证，这里用 `-Dmaven.test.skip=true` 连测试编译一起跳过（因此 rpc-core 的 test-jar 也不生成、不发布）。
 5. 把各发布模块 `target/` 下的 jar / pom / asc 与 central-publishing 的 bundle 作为 workflow artifact 上传，便于核对。
@@ -107,7 +107,8 @@ release.yml 成功后，到 central.sonatype.com → *Publish* → *Deployments*
 ## 本地演练（不上传）
 
 **只在 CI（Linux）上真正发布。** 在 Windows 上 central-publishing 打出的 bundle 里条目路径是反斜杠（`io\github\...`），不要从 Windows 本机上传。
-本地只做演练，且不碰自己的钥匙环：用临时目录与一次性测试密钥。
+本地只做演练，且不碰自己的钥匙环：用临时目录与一次性测试密钥。下面的命令在 Git Bash 里用 `./mvnw`（与 release.yml 同一个 Maven 3.9.12；
+wrapper 把发行包下载到 `$HOME/.m2/wrapper`，改了 HOME 会在临时目录里再下载一次）；在 Windows 的 cmd / PowerShell 里把 `./mvnw` 换成 `mvnw.cmd`。
 
 ```bash
 # Git Bash 的 gpg 是 MSYS 程序：GNUPGHOME 若写成 G:/... 会被当成相对路径；Maven（java.exe）再拉起 gpg 时只有 HOME 会被换回 POSIX 路径，
@@ -117,11 +118,11 @@ gpg --batch --passphrase 'test-pass' --pinentry-mode loopback --quick-generate-k
 KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}')
 
 # 1. 产物与签名：每个发布模块的 target/ 下应有 .jar / -sources.jar / -javadoc.jar / .pom 与各自的 .asc，rpc-bom 与根目录只有 .pom 与 .asc
-MAVEN_GPG_PASSPHRASE=test-pass mvn -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID verify
+MAVEN_GPG_PASSPHRASE=test-pass ./mvnw -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID verify
 
 # 2. 仓库目录结构：绕开 deploy 阶段（那里是 central-publishing），直接调 maven-deploy-plugin 写进本地文件仓库；
 #    它认 maven.deploy.skip，结果应只有 io/github/sisyfy-zhang/ 下 10 个 artifactId
-MAVEN_GPG_PASSPHRASE=test-pass mvn -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID verify \
+MAVEN_GPG_PASSPHRASE=test-pass ./mvnw -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID verify \
   org.apache.maven.plugins:maven-deploy-plugin:3.1.2:deploy -DaltDeploymentRepository=local::file:///G:/tmp/staging
 
 gpg --batch --yes --delete-secret-and-public-key <FINGERPRINT>
@@ -129,12 +130,13 @@ gpg --batch --yes --delete-secret-and-public-key <FINGERPRINT>
 
 想看 central-publishing 真正打出的 bundle：在**版本已改成非 SNAPSHOT 的副本**上（不要在工作区里改），用一个只含假凭据的 settings.xml，
 把上传地址指向本机一个没人监听的端口，并跳过 install（免得把测试签名的 1.0.0 装进本地仓库）——这条命令与 release.yml 的 deploy 步骤逐字相同，
-只多了假凭据、测试密钥与上传地址。**还要用与 CI runner 相同的 Maven 版本**（release.yml 先打印 `mvn -v`；ubuntu-24.04 镜像 20261018 是 Maven 3.10.0，
-resolver 2）：bundle 的内容随 Maven 与 central-publishing 的版本组合而变，Maven 3.9 上干净不代表 CI 上干净（pitfalls 第 37 条）。
+只多了假凭据、测试密钥与上传地址。**还要用与 CI 相同的 Maven 版本**：CI（ci.yml / release.yml）用 `./mvnw`，版本由 `.mvn/wrapper/maven-wrapper.properties` 固定为 3.9.12，
+本地演练同样用 `./mvnw`。bundle 的内容随 Maven 与 central-publishing 的版本组合而变：此前 CI 用 runner 镜像自带的 Maven，
+ubuntu-24.04 镜像 20261018 升到 3.10.0（resolver 2）后 bundle 混进了本地仓库跟踪文件（pitfalls 第 37 条）。
 演练后核对 bundle 里只有 `io/github/sisyfy-zhang/<artifactId>/<版本>/` 下的文件，没有 `maven-metadata-*.xml` 与 `_remote.repositories`：
 
 ```bash
-mvn -s settings-dummy.xml -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID \
+./mvnw -s settings-dummy.xml -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true -Dgpg.keyname=$KEYID \
     -DcentralBaseUrl=http://127.0.0.1:9 deploy
 # 上传必然失败（连接被拒），但 bundle 已生成：rpc-bom/target/central-publishing/central-bundle.zip（工作目录在 reactor 第一个模块下）
 unzip -l rpc-bom/target/central-publishing/central-bundle.zip

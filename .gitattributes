@@ -5,3 +5,5 @@
 *.bat text eol=crlf
 *.patch text eol=lf
 *.lua text eol=lf
+mvnw text eol=lf
+*.cmd text eol=crlf

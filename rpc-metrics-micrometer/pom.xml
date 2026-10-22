@@ -51,6 +51,23 @@
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>com.feynman.rpc.metrics.micrometer</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <!-- 与 rpc-core 同一条依赖护栏：指标模块给纯 Java 进程用，任何直接或传递引入 Spring 的改动都让构建失败 -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

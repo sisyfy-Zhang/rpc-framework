@@ -30,6 +30,7 @@
 mvn -pl rpc-bench-e2e -am package -DskipTests
 ```
 
+本文的命令写 `mvn`（本机与 WSL 压测机都是 Maven 3.9.12）；CI 用仓库里的 `./mvnw`，Maven 版本同样固定为 3.9.12，两者可以互换。
 `-DskipTests` 同时跳过 JaCoCo（根 pom 里 `jacoco.skip` 缺省取 `skipTests`），`install` / `verify` 也不需要再加 `-Djacoco.skip=true`。
 
 产物是 `rpc-bench-e2e/target/classes` 与 `rpc-bench-e2e/target/lib/*`（`maven-dependency-plugin` 在 package 阶段复制运行时依赖，不打 fat jar），

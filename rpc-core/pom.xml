@@ -116,6 +116,17 @@
         <artifactId>maven-jar-plugin</artifactId>
         <executions>
           <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>com.feynman.rpc.core</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+          <execution>
             <!-- release（-Prelease）下用 -Dmaven.test.skip=true 构建：test-jar 目标随之跳过，不生成、不签名、不进 Central bundle，不对外发布；release 构建同时用 -pl '!rpc-integration-tests' 排除唯一使用它的模块 -->
             <id>leak-check-test-jar</id>
             <goals>

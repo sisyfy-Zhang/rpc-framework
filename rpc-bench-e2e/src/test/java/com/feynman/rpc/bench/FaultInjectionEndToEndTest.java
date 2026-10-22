@@ -77,6 +77,16 @@ class FaultInjectionEndToEndTest {
 				""".formatted(id, FaultCardSchemaTest.nest(targetExtra), FaultCardSchemaTest.nest(loadBody), duration, window);
 	}
 
+	/**
+	 * 同 {@link #card}，但 {@code load.model: closed}（固定并发、没有发出计划）。闭环轮没有"发出滞后"这一项，也就不会因为
+	 * {@code dispatcher_delayed}（调度线程被环境停顿推迟，CI runner 上偶发）被判无效；只关心核对逻辑、不关心开环轮次有效性的用例用它。
+	 */
+	static String closedCard(String id, String targetExtra, int concurrency, String duration, String window) {
+		String open = card(id, targetExtra, "  concurrency: " + concurrency, duration, window);
+		assertTrue(open.contains("\n  model: open\n"), open);
+		return open.replace("\n  model: open\n", "\n  model: closed\n");
+	}
+
 	static final String STEPS_AND_FAULTS = """
 			  steps: [{ rate: 200, duration: 1s }, { rate: 600, duration: 1s }, { rate: 200, duration: 1s }]
 			  faults:
@@ -245,6 +255,12 @@ class FaultInjectionEndToEndTest {
 		assertEquals(Bench.ERROR, bad.code());
 	}
 
+	/**
+	 * 这里验的是"卡片声明的服务端排队上限 / 业务等待"与服务端报告的环境逐项核对（{@code validity.server_options}），不是轮次有效性。
+	 * 三次运行都用闭环短卡（{@link #closedCard}）：开环卡在 CI runner 上偶发 {@code dispatcher_delayed}（发出滞后 p99 &gt; 1ms，轮次判无效、
+	 * 退出码 2），会让"相符应当通过"的断言因为与本用例无关的原因失败，"不符应当退出码 2"的断言也可能因为错误的原因通过。
+	 * 闭环轮没有发出计划，不存在这条无效原因；退出码只反映核对结果。
+	 */
 	@Test
 	void serverQueueCapacityAndWorkAreCheckedAgainstTheServer(@TempDir Path dir) throws Exception {
 		int threads = ((ExecutorConfig.Fixed) ExecutorConfig.defaults()).threads();
@@ -254,19 +270,20 @@ class FaultInjectionEndToEndTest {
 			assertEquals("2.0", working.environment().get("server_work_ms"));
 			assertTrue(working.environment().get("server_executor").contains(threads + " threads, queue 50"), working.environment().toString());
 			String id = "it-server-options";
-			Result r = run(dir, id, card(id, "  server_queue_capacity: 50\n  server_work: 2ms", "  rate: 200", "1s", "[500ms, 1s]"), "--direct",
+			Result r = run(dir, id, closedCard(id, "  server_queue_capacity: 50\n  server_work: 2ms", 4, "1s", "[500ms, 1s]"), "--direct",
 					"127.0.0.1:" + working.port());
 			assertEquals(Bench.OK, r.code(), r.out() + r.err());
 			assertEquals(Boolean.TRUE, path(r.json(), "validity", "server_options", "matches"));
 			assertTrue(((Number) path(r.json(), "summary", "official", "p50_ms")).doubleValue() >= 2.0, "every call waits 2ms on the server");
 
 			String mismatch = "it-server-options-mismatch";
-			Result m = run(dir, mismatch, card(mismatch, "  server_work: 3ms", "  rate: 100", "1s", "[500ms, 1s]"), "--direct",
+			Result m = run(dir, mismatch, closedCard(mismatch, "  server_work: 3ms", 4, "1s", "[500ms, 1s]"), "--direct",
 					"127.0.0.1:" + working.port());
 			assertEquals(Bench.FAILED_ASSERTIONS, m.code(), m.out() + m.err());
 			assertEquals(Boolean.FALSE, path(m.json(), "validity", "server_options", "matches"));
+			assertEquals(Boolean.TRUE, path(m.json(), "validity", "all_rounds_valid"), "exit code 2 comes from the mismatch, not from an invalid round");
 		}
-		Result defaults = run(dir, "it-server-defaults", card("it-server-defaults", "", "  rate: 100", "1s", "[500ms, 1s]"), "--direct",
+		Result defaults = run(dir, "it-server-defaults", closedCard("it-server-defaults", "", 4, "1s", "[500ms, 1s]"), "--direct",
 				"127.0.0.1:" + server.port());
 		assertEquals(Bench.OK, defaults.code(), defaults.err());
 		assertEquals(Boolean.TRUE, path(defaults.json(), "validity", "server_options", "matches"), "defaults: queue 1000, no work");

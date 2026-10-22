@@ -409,10 +409,23 @@
           <artifactId>jacoco-maven-plugin</artifactId>
           <version>${jacoco.version}</version>
         </plugin>
+        <!-- 所有 jar 的 MANIFEST 带 Implementation-Title / Version（取 name / version）与 Implementation-Vendor；
+             各发布模块在自己的 pom 里给主 jar（default-jar）加 Automatic-Module-Name（= 根包名），
+             放在模块路径上时模块名稳定，不随 jar 文件名变化。PublishedJarManifestTest 核对。 -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
           <version>3.4.1</version>
+          <configuration>
+            <archive>
+              <manifest>
+                <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+              </manifest>
+              <manifestEntries>
+                <Implementation-Vendor>sisyfy-Zhang</Implementation-Vendor>
+              </manifestEntries>
+            </archive>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

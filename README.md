@@ -3,7 +3,7 @@
 一个可以被真实项目依赖的 Java RPC 库：Netty 传输 + 自研二进制协议 + ZooKeeper / Nacos 服务发现 + Spring Boot starter。
 核心是纯 Java（不依赖任何容器），同一个 JVM 里可以 new 出多个客户端与服务端；Spring Boot 只是在它外面包了一层。
 
-> 当前状态：**阶段 0 ~ 3 已完成**（可用性修复、证据基础设施、实测数据、发布就绪），版本 `1.0.0` 发布中（见[快速开始](#快速开始)）。
+> 当前状态：**阶段 0 ~ 3 已完成**（可用性修复、证据基础设施、实测数据、发布就绪），`1.0.0` 已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)（见[快速开始](#快速开始)）。
 > 压测数字与对比见[测试与证据](#测试与证据)与 [docs/comparison.md](docs/comparison.md)；还没有链路追踪（见[路线图](#路线图)），调用指标见 [docs/observability.md](docs/observability.md)。使用前请先读[已知边界](#已知边界)。
 
 ## 目录
@@ -96,7 +96,7 @@
 
 ## 快速开始
 
-依赖坐标：groupId 为 `io.github.sisyfy-zhang`，版本 `1.0.0`（发布中，坐标以 [Maven Central 页面](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)为准）。
+依赖坐标：groupId 为 `io.github.sisyfy-zhang`，版本 `1.0.0`，已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，按下面的坐标直接依赖即可。
 注意 **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证），
 代码里 import 的包仍是 `com.feynman.rpc.*`。
 
@@ -137,7 +137,7 @@
 
 BOM 只管本框架自己的模块版本，不覆盖你工程里 Netty、Spring 等第三方依赖的版本。不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
 
-发布到 Maven Central 的版本见 [Releases](https://github.com/sisyfy-Zhang/rpc-framework/releases)。在 Central 上线之前（或想用 main 上的最新代码），在仓库根目录 `mvn install -DskipTests`
+已发布的版本见 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)。只有想用 main 上的最新代码时，才需要在仓库根目录 `mvn install -DskipTests`
 装到本地仓库，把上面的版本换成根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
 
 ### 1. 纯 Java
@@ -422,7 +422,7 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   归档 [`bench/reports/20261022-d23e39d/`](bench/reports/20261022-d23e39d/)；传输路径调研（[docs/research/transport-path-comparison.md](docs/research/transport-path-comparison.md)）
   之后的 flush 合并、出站背压、direct 执行器（opt-in）各有 A/B 探针，每连接写队列实测无收益已回退；慢节点 / 杀节点 / 突增三组故障注入。
 - **阶段 3 · 发布**：已完成就绪项。CI 全绿；坐标 `io.github.sisyfy-zhang`、`rpc-bom`、release profile 与 release.yml（[docs/releasing.md](docs/releasing.md)）；
-  空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 上 Central 以 Releases 为准。
+  空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 已发布到 Maven Central，空白工程从 Central 解析 1.0.0 复验通过。
 - **阶段 4 · 可选（每项自带对比实验）**：
   - **离群摘除 / 熔断**：按节点的超时 / 失败率摘除。证据：连接静默挂起时 1/3 流量持续超时到轮次结束（[故障注入](docs/probes/fault-injection.md)）。
   - 自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。

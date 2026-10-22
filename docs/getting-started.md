@@ -21,9 +21,9 @@
 ## 1. 准备
 
 - JDK 21、Maven 3.9+。
-- 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `1.0.0`（发布中，坐标以 [Maven Central 页面](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)为准）。
+- 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `1.0.0`，已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，第 2 节的 pom 片段直接从 Central 解析。
   **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`，代码里 import 的包是 `com.feynman.rpc.*`。
-- 在 Central 上线之前（或想用 main 上的最新代码），先把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成本仓库根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
+- 用已发布的 `1.0.0` 不需要 clone 本仓库。只有想用 main 上的最新代码时，才需要把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成本仓库根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
   第 3 步的方式 B（嵌入式 ZooKeeper）也要用到这份 clone：
 
 ```bash
@@ -845,8 +845,15 @@ public class TenantFilter implements ServerFilter {
 ```bash
 mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.provider.ProviderApplication "-Dspring-boot.run.arguments=--spring.main.web-application-type=servlet --management.endpoints.web.exposure.include=health,prometheus"
 curl -s localhost:8080/actuator/prometheus | grep '^rpc_server_calls_seconds_count'
+# rpc_server_calls_seconds_count{method="buyers",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
+# rpc_server_calls_seconds_count{method="buyersAsync",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
+# rpc_server_calls_seconds_count{method="reserve",service="com.feynman.rpc.examples.api.InventoryService",status="BIZ_EXCEPTION"} 1
+# rpc_server_calls_seconds_count{method="reserve",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
 # rpc_server_calls_seconds_count{method="saveUser",service="com.feynman.rpc.examples.api.UserFacade",status="OK"} 1
 ```
+
+（这 5 行来自第 7 节 consumer 的一次运行：`DemoRunner` 的 `saveUser`，加上 `CallShapesRunner` 的四次 `InventoryService` 调用；
+业务异常记为 `status="BIZ_EXCEPTION"`。）
 
 抓取地址是 `http://<host>:<management 端口>/actuator/prometheus`（未单独设 `management.server.port` 时就是应用的 HTTP 端口，缺省 8080）。
 

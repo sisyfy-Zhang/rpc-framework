@@ -650,3 +650,5 @@ WSL 上同一份代码对照（假凭据、上传地址指向关闭的端口，`
   CI 的工具版本要么打印出来、要么固定住。
 - 先在本地复现、再下结论：最初的假设（"deploy 生命周期先跑了 install，污染了暂存目录"）在对照实验里不成立——跳过 install 前后 bundle 完全一样。
 - 托管 runner 的镜像每周更新，构建工具的大版本（这里是 resolver 1 → 2）会在没有任何代码改动时变化。
+
+**后续**：CI（ci.yml / release.yml）改用 Maven Wrapper（`./mvnw`，`.mvn/wrapper/maven-wrapper.properties` 固定 3.9.12 并校验 sha256），docs/releasing.md 的本地演练也用 `./mvnw`，版本不再随 runner 镜像漂移。同一批改动给发布模块的主 jar 加了 `Automatic-Module-Name`（下个版本生效）。备注（只记录、不处理）：rpc-serialize-protobuf 里有一个 `io.protostuff.runtime` 包（为访问 protostuff 的包内 API），与 protostuff-runtime 构成拆分包，两者同放模块路径时会冲突，`Automatic-Module-Name` 解决不了；目前按 classpath 使用。

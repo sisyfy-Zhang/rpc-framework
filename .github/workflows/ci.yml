@@ -18,6 +18,8 @@ concurrency:
 env:
   # -B 非交互、-ntp 关掉下载进度日志（不用 MAVEN_ARGS 这个名字：Maven 3.9 会自动读取它，显式再传一遍会重复）
   MVN_FLAGS: -B -ntp
+# 所有构建都走 ./mvnw：Maven 版本由 .mvn/wrapper/maven-wrapper.properties 固定（3.9.12，与本机 / WSL 压测机一致），
+# 不随 runner 镜像升级漂移（镜像 20261018 把 Maven 换成 3.10 / resolver 2，见 pitfalls 第 37 条）
 
 jobs:
   verify:
@@ -34,8 +36,8 @@ jobs:
       - name: Docker info (Nacos contract tests run only when Docker is available)
         run: docker version
       # 全量：单元 + 集成 + ArchUnit + Registry TCK（Nacos 经 Testcontainers 实跑）+ JaCoCo check（rpc-core ≥ 70%）
-      - name: mvn clean install
-        run: mvn $MVN_FLAGS clean install
+      - name: ./mvnw clean install
+        run: ./mvnw $MVN_FLAGS clean install
       - name: Nacos contract tests must have run on this runner (only the known capability skip allowed)
         run: |
           report=rpc-registry-nacos/target/surefire-reports/TEST-com.feynman.rpc.registry.nacos.NacosRegistryContractTest.xml
@@ -78,13 +80,13 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Build and install all modules (no tests)
-        run: mvn $MVN_FLAGS install -DskipTests -Djacoco.skip=true
+        run: ./mvnw $MVN_FLAGS install -DskipTests -Djacoco.skip=true
       # SigtermShutdownTest：独立 JVM 起 rpc-examples 的 provider，连测试进程里的 ZooKeeper（curator TestingServer），
       # 慢调用进行中 kill -TERM，断言：慢调用正常返回、节点先于它消失、进程在 shutdown-timeout 内以 143 退出。
       # 本机（Windows）上该用例被 @EnabledOnOs(LINUX) 跳过。
       - name: Run SigtermShutdownTest
         run: >
-          mvn $MVN_FLAGS -pl rpc-integration-tests verify -Djacoco.skip=true
+          ./mvnw $MVN_FLAGS -pl rpc-integration-tests verify -Djacoco.skip=true
           -Dtest=SigtermShutdownTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: The SIGTERM test must have run (not skipped)
         run: |
@@ -111,10 +113,10 @@ jobs:
           java-version: '21'
           cache: maven
       # 每次分配都记录访问轨迹，未释放的 ByteBuf 被 GC 时打印 "LEAK:"（logback / slf4j 输出到控制台）
-      - name: mvn clean install with paranoid leak detection
+      - name: ./mvnw clean install with paranoid leak detection
         run: |
           set -o pipefail
-          mvn $MVN_FLAGS clean install -Djacoco.skip=true \
+          ./mvnw $MVN_FLAGS clean install -Djacoco.skip=true \
             "-DargLine=-Dio.netty.leakDetection.level=paranoid" 2>&1 | tee build.log
       - name: Leak detection was really on
         run: grep -q "ResourceLeakDetector level = PARANOID" build.log
@@ -139,5 +141,5 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.java }}
           cache: maven
-      - name: mvn clean install on JDK ${{ matrix.java }}
-        run: mvn $MVN_FLAGS clean install
+      - name: ./mvnw clean install on JDK ${{ matrix.java }}
+        run: ./mvnw $MVN_FLAGS clean install
