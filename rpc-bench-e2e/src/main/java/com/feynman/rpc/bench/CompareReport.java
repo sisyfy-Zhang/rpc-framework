@@ -24,6 +24,10 @@ import java.util.Set;
  *   <li><b>transport 表</b>：{@code server_executor} 与 {@code flush_consolidation} 是各 transport 的固有属性（本框架 fixed / 合并开、gRPC
  *       grpc-default、Dubbo 没有这两项），不参与 transport 表的分区，只在"服务端配置"列里展示；本框架的非缺省配置（执行器不是 fixed，
  *       或任一端 flush 合并关）不进 transport 表，只进 {@code server_executor} / {@code flush_consolidation} 轴的表。</li>
+ *   <li><b>服务端业务等待</b>（卡片的 {@code target.server_work} / {@code server_work_mode}）也进分组键：业务每次等 2ms 与原样回显、
+ *       park 与 synchronized 内等待不是同一个负载，不混在一张表里。有业务等待（或窗口内有执行器拒绝）的表多四列：
+ *       执行器拒绝（SERVER_OVERLOADED）、排队等待 p50 / p99、业务线程组的上下文切换 / 请求与线程数（固定池看 {@code biz_pool}，
+ *       虚拟线程看载体 {@code fjp}，direct 看 {@code netty_io}）、服务端 CPU µs / 请求。</li>
  *   <li>只读 JSON（与 {@link MarkdownReport} 同一原则）：表里每个数字都能在对应的结果文件里找到。</li>
  * </ul>
  */
@@ -51,9 +55,9 @@ final class CompareReport {
 	private CompareReport() {
 	}
 
-	/** 一份结果里对比要用的字段（全部取自 JSON）。 */
+	/** 一份结果里对比要用的字段（全部取自 JSON）。{@code serverWork}：卡片声明了服务端业务等待（{@code target.server_work} &gt; 0）。 */
 	record Run(String file, Map<?, ?> json, Map<String, String> axes, String groupKey, String groupTitle, boolean closed,
-			boolean explicitConnections) {
+			boolean explicitConnections, boolean serverWork) {
 
 		/** connections 轴的显示：实际连接数，卡片没写 target.connections（各框架缺省）时标"缺省"。 */
 		String connectionsText() {
@@ -202,6 +206,7 @@ final class CompareReport {
 
 	private static void table(StringBuilder md, List<Run> rows, String axis) {
 		boolean closed = rows.get(0).closed();
+		boolean executorColumns = rows.stream().anyMatch(r -> r.serverWork() || executorRejections(r.officialRound()) > 0);
 		List<String> header = new ArrayList<>();
 		if (axis != null) {
 			header.add(axisTitle(axis));
@@ -214,7 +219,12 @@ final class CompareReport {
 			header.add("服务时间 p99 (ms)");
 		}
 		header.addAll(List.of("客户端核 CPU", "服务端核 CPU", "client_bound", "GC 停顿 客户端/服务端 (ms)", "write 系统调用/请求 客户端/服务端",
-				"上下文切换/请求 客户端/服务端", "暂停读次数", "窗口错误", "判定", "连接",
+				"上下文切换/请求 客户端/服务端"));
+		if (executorColumns) {
+			header.addAll(List.of("执行器拒绝（SERVER_OVERLOADED）", "排队等待 p50/p99 (ms)", "业务线程组 上下文切换/请求", "业务线程组 线程数",
+					"服务端 CPU µs/请求"));
+		}
+		header.addAll(List.of("暂停读次数", "窗口错误", "判定", "连接",
 				"客户端 IO 线程", "服务端配置", "结果文件"));
 		md.append("| ").append(String.join(" | ", header)).append(" |\n|").append("---|".repeat(header.size())).append('\n');
 		Double first = null;
@@ -250,6 +260,9 @@ final class CompareReport {
 			cells.add(gc(round, "client") + " / " + gc(round, "server"));
 			cells.add(round.get("io") == null ? "—" : IoSampler.cell(round, "client", "syscw") + " / " + IoSampler.cell(round, "server", "syscw"));
 			cells.add(round.get("io") == null ? "—" : contextSwitches(round, "client") + " / " + contextSwitches(round, "server"));
+			if (executorColumns) {
+				executorCells(cells, run, round, throughput);
+			}
 			// rpc 服务端的出站背压：窗口内暂停读次数（有硬上限拒绝时附上）；对比对象与旧结果没有这项，记 —
 			cells.add(BackpressureStats.windowPauses(round) == null ? "—" : BackpressureStats.cell(round));
 			cells.add(str(official.get("window_errors")));
@@ -269,7 +282,51 @@ final class CompareReport {
 				.append("）。CPU 是统计窗口内两组核的平均忙碌率；client_bound = 是 表示该结果的吞吐受发压端 CPU 限制，是 harness 的上限而不是服务端上限。")
 				.append("暂停读次数是统计窗口内 rpc 服务端因出站不可写而停读的次数（对比对象没有这项，记 —）。")
 				.append(closed ? "闭环的 p99 / p99.9 低估尾延迟，尾延迟以开环为准。" : "开环延迟从计划发出时刻算起（修正 coordinated omission）。")
+				.append(executorColumns ? EXECUTOR_COLUMNS_NOTE : "")
 				.append("\n\n");
+	}
+
+	/** 执行器列的说明（有业务等待或执行器拒绝的表）。 */
+	static final String EXECUTOR_COLUMNS_NOTE = "执行器拒绝是统计窗口内服务端业务执行器的过载拒绝数（调用方收到 SERVER_OVERLOADED，计入窗口错误）；"
+			+ "排队等待是服务端 QueueWaitFilter 记的\"入队 → 开始执行\"；业务线程组按服务端执行器取：固定池 `biz_pool`、虚拟线程 `fjp`"
+			+ "（载体线程）、direct `netty_io`，线程数是窗口起 → 止的存活数；服务端 CPU µs/请求 = 服务端核平均忙碌率 × 核数 × 窗口 / 窗口内成功调用数。";
+
+	/** 业务线程组：服务端执行器为 fixed → biz_pool，virtual → fjp（载体线程），direct → netty_io。 */
+	static String businessGroup(String executorKind) {
+		return switch (executorKind) {
+			case "virtual" -> IoSampler.GROUP_FJP;
+			case "direct" -> IoSampler.GROUP_NETTY_IO;
+			default -> IoSampler.GROUP_BIZ;
+		};
+	}
+
+	private static long executorRejections(Map<?, ?> round) {
+		return MarkdownReport.path(round, "server_executor", "executor_rejections") instanceof Number n ? n.longValue() : 0;
+	}
+
+	private static void executorCells(List<String> cells, Run run, Map<?, ?> round, Double throughput) {
+		Object rejections = MarkdownReport.path(round, "server_executor", "executor_rejections");
+		cells.add(rejections instanceof Number ? str(rejections) : "—");
+		Object wait = MarkdownReport.path(round, "server_executor", "queue_wait_ms");
+		cells.add(wait instanceof Map<?, ?> w ? num(w.get("p50"), 3) + " / " + num(w.get("p99"), 3) : "—");
+		String group = businessGroup(run.axes().get(AXIS_SERVER_EXECUTOR));
+		Double cs = IoSampler.groupPerRequest(round, "server", group);
+		cells.add(cs == null ? "—" : String.format(Locale.ROOT, "%.2f（%s）", cs, group));
+		Object threads = IoSampler.groupField(round, "server", group, "threads");
+		cells.add(threads == null ? "—" : threads + "（" + group + "）");
+		cells.add(num(serverCpuMicrosPerRequest(round, throughput), 1));
+	}
+
+	/**
+	 * 服务端每请求 CPU（µs）= 服务端核平均忙碌率 × 核数 / 吞吐。取不到（非 Linux、未绑核、旧结果）时 null。
+	 */
+	static Double serverCpuMicrosPerRequest(Map<?, ?> round, Double throughput) {
+		if (throughput == null || throughput <= 0 || !(round.get("cpu") instanceof Map<?, ?> cpu)
+				|| !(cpu.get("server_busy_pct") instanceof Number busy) || !CpuSampler.isCpuList(cpu.get("server_cpus"))) {
+			return null;
+		}
+		int cores = CpuSampler.parseCpuList(String.valueOf(cpu.get("server_cpus"))).size();
+		return busy.doubleValue() / 100.0 * cores * 1e6 / throughput;
 	}
 
 	/** 由一份结果 JSON 得到分组键、组标题与各轴的取值。 */
@@ -303,13 +360,18 @@ final class CompareReport {
 		// 目标的寻址方式（run.target.mode，harness 写出的机器值：direct / registry / http）进分组键：经注册中心的结果
 		// （loopback-* 卡）与直连的对比卡口径不同，不能在同一张表里并排
 		String mode = str(MarkdownReport.path(json, "run", "target", "mode"));
+		// 服务端业务等待（卡片的 server_work / server_work_mode）进分组键：不同的业务负载不混表；没写为 —（原样回显）
+		boolean serverWork = target.get("server_work_ms") instanceof Number w && w.doubleValue() > 0;
+		String workMs = serverWork ? str(target.get("server_work_ms")) : "—";
+		String workMode = serverWork ? (target.get("server_work_mode") == null ? "park" : str(target.get("server_work_mode"))) : "—";
 		List<Object> key = List.of(str(load.get("model")), str(target.get("service")), str(payload.get("kind")), str(payload.get("size")),
 				str(load.get("duration_ms")), str(load.get("warmup_ms")), str(load.get("steady_window_ms")), str(load.get("rounds")),
-				str(load.get("timeout_ms")), str(isolation.get("same_host")), mode);
+				str(load.get("timeout_ms")), str(isolation.get("same_host")), mode, workMs, workMode);
 		String title = (closed ? "闭环" : "开环") + " · " + payloadText + " · `" + str(target.get("service")) + "` · 每轮 "
 				+ str(load.get("duration")) + "（预热 " + str(load.get("warmup")) + "，窗口 [" + String.join(", ", strings(load.get("steady_window")))
-				+ "]）× " + str(load.get("rounds")) + " 轮 · 超时 " + str(load.get("timeout")) + modeSuffix(mode);
-		return new Run(file, json, axes, String.valueOf(key), title, closed, explicitConnections);
+				+ "]）× " + str(load.get("rounds")) + " 轮 · 超时 " + str(load.get("timeout")) + modeSuffix(mode)
+				+ (serverWork ? " · 服务端业务每次" + BenchRunner.workModeText(workMode) + " " + str(target.get("server_work")) : "");
+		return new Run(file, json, axes, String.valueOf(key), title, closed, explicitConnections, serverWork);
 	}
 
 	/** 组标题里的寻址方式：直连（对比卡的口径）与没有这项的旧结果不加后缀，其余写明。 */

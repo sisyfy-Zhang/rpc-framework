@@ -103,7 +103,7 @@ public final class Bench {
 		}
 		options.allowOnly("transport", "port", "host", "registry", "no-registry", "serializer", "metrics-port", "http-port", "io-threads",
 				"executor", "flush-consolidation", "outbound-backpressure", "write-buffer-water-mark", "executor-queue", "work", "advertise-port",
-				"deregister-grace");
+				"deregister-grace", "work-mode");
 		int port = options.intValue("port");
 		int ioThreads = options.has("io-threads") ? options.intValue("io-threads") : 0;
 		ExecutorConfig executor = executor(options.value("executor", BenchServer.EXECUTOR_FIXED),
@@ -114,6 +114,17 @@ public final class Bench {
 				workNanos = Durations.parse(options.value("work", null)).toNanos();
 			} catch (IllegalArgumentException e) {
 				throw new UsageException("--work: " + e.getMessage());
+			}
+		}
+		BenchServiceImpl.WorkMode workMode = BenchServiceImpl.WorkMode.PARK;
+		if (options.has("work-mode")) {
+			workMode = BenchServiceImpl.WorkMode.of(options.value("work-mode", null));
+			if (workMode == null) {
+				throw new UsageException("--work-mode must be one of " + String.join(", ", BenchServiceImpl.WorkMode.cardValues()) + ", got \""
+						+ options.value("work-mode", null) + "\"");
+			}
+			if (workNanos == 0) {
+				throw new UsageException("--work-mode only applies together with --work <duration>");
 			}
 		}
 		Integer advertisePort = options.has("advertise-port") ? options.intValue("advertise-port") : null;
@@ -144,7 +155,7 @@ public final class Bench {
 		BenchServer server;
 		try {
 			server = BenchServer.start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation,
-					outboundBackpressure, waterMark, advertisePort, workNanos, deregisterGrace);
+					outboundBackpressure, waterMark, advertisePort, workNanos, deregisterGrace, workMode);
 		} catch (IllegalArgumentException e) {
 			throw new UsageException(e.getMessage());
 		}
@@ -181,6 +192,7 @@ public final class Bench {
 				+ (server.environment().containsKey("server_executor_queue_capacity")
 						? " executor_queue=" + server.environment().get("server_executor_queue_capacity") : "")
 				+ " work_ms=" + server.environment().get("server_work_ms")
+				+ " work_mode=" + server.environment().get("server_work_mode")
 				+ " deregister_grace_ms=" + server.environment().get("server_deregister_grace_ms")
 				+ (advertisePort == null ? "" : " advertised_port=" + advertisePort));
 		out.flush();
@@ -564,6 +576,8 @@ public final class Bench {
 				         [--flush-consolidation on|off] [--outbound-backpressure on|off] [--write-buffer-water-mark <low>:<high>]
 				         [--executor-queue <n>] [--work <duration>] [--advertise-port <p>] [--deregister-grace <duration>|0]
 				                                       (fault-injection experiments)
+				         [--work-mode park|monitor|sync-park]   (how --work waits: parkNanos / Object.wait inside synchronized /
+				                                       parkNanos inside synchronized; executor experiments)
 				  server --transport <name> --port <p> ...   (comparison server from a CallTargetProvider on the classpath)
 				  run    --profile <card.yaml> (--registry zk://host:port | --direct host:port[,host:port]) [--out <dir>] [--label <text>]
 				         [--metrics-port <p>]          (transport: http cards take neither --registry nor --direct)

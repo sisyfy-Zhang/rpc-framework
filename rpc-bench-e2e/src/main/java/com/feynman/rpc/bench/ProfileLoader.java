@@ -102,7 +102,7 @@ final class ProfileLoader {
 			return null;
 		}
 		s.allowOnly("transport", "service", "payload", "serializer", "providers", "connections", "http", "server_executor", "load_balance",
-				"cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace");
+				"cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace", "server_work_mode");
 		// 内置 rpc / http + classpath 上的 CallTargetProvider（对比对象）；不认识的名字报错并列出可用的全部 transport
 		Map<String, CallTargetProvider> plugins;
 		try {
@@ -171,7 +171,8 @@ final class ProfileLoader {
 
 	/** rpc 卡的可选字段（负载均衡、容错、重试、服务端排队上限与业务等待）；其它 transport 写了就拒绝。 */
 	private static Profile.RpcOptions rpcOptions(Section s, List<String> problems, String transport, String serverExecutor) {
-		List<String> keys = List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace");
+		List<String> keys = List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace",
+				"server_work_mode");
 		if (!Profile.TRANSPORT_RPC.equals(transport)) {
 			for (String key : keys) {
 				if (s.has(key)) {
@@ -198,7 +199,11 @@ final class ProfileLoader {
 		if (grace != null && grace.compareTo(Duration.ofSeconds(30)) > 0) {
 			problems.add("target.server_deregister_grace: " + Durations.format(grace) + " is longer than 30s");
 		}
-		return new Profile.RpcOptions(loadBalance, cluster, retries, queue, work, grace);
+		String workMode = s.has("server_work_mode") ? s.oneOf("server_work_mode", false, BenchServiceImpl.WorkMode.cardValues()) : null;
+		if (workMode != null && work == null && !s.has("server_work")) {
+			problems.add("target.server_work_mode: only applies together with target.server_work (there is nothing to wait for)");
+		}
+		return new Profile.RpcOptions(loadBalance, cluster, retries, queue, work, grace, workMode);
 	}
 
 	/**
@@ -220,7 +225,8 @@ final class ProfileLoader {
 		if (s.has("connections")) {
 			problems.add("target.connections: does not apply to transport = http (the connection pool is target.http.connections)");
 		}
-		for (String key : List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace")) {
+		for (String key : List.of("load_balance", "cluster", "retries", "server_queue_capacity", "server_work", "server_deregister_grace",
+				"server_work_mode")) {
 			if (s.has(key)) {
 				problems.add("target." + key + ": only applies to transport = rpc");
 			}

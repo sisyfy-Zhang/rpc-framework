@@ -103,6 +103,18 @@ final class BenchServer implements AutoCloseable {
 	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
 			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark, Integer advertisePort,
 			long workNanos, java.time.Duration deregisterGrace) throws Exception {
+		return start(port, host, registry, serializer, metrics, ioThreads, executor, flushConsolidation, outboundBackpressure, waterMark,
+				advertisePort, workNanos, deregisterGrace, BenchServiceImpl.WorkMode.PARK);
+	}
+
+	/**
+	 * @param workMode {@code server --work-mode}：业务等待的方式（park / monitor / sync-park，见 {@link BenchServiceImpl.WorkMode}）；
+	 *                 null = park。记进 {@code server_work_mode}，压测端与卡片的 {@code target.server_work_mode} 核对
+	 */
+	static BenchServer start(int port, String host, RegistryConfig registry, String serializer, MeterRegistry metrics, int ioThreads,
+			ExecutorConfig executor, boolean flushConsolidation, boolean outboundBackpressure, int[] waterMark, Integer advertisePort,
+			long workNanos, java.time.Duration deregisterGrace, BenchServiceImpl.WorkMode workMode) throws Exception {
+		BenchServiceImpl.WorkMode mode = workMode == null ? BenchServiceImpl.WorkMode.PARK : workMode;
 		if (advertisePort != null && registry == null) {
 			throw new IllegalArgumentException("--advertise-port needs --registry (it changes the port written to the registry)");
 		}
@@ -143,6 +155,7 @@ final class BenchServer implements AutoCloseable {
 				environment.put("server_executor_queue_capacity", String.valueOf(fixed.queueCapacity()));
 			}
 			environment.put("server_work_ms", String.valueOf(RoundRecorder.round3(workNanos / 1e6)));
+			environment.put("server_work_mode", mode.cardValue());
 			environment.put("server_deregister_grace_ms", String.valueOf(server.config().deregisterGrace().toMillis()));
 			environment.put("server_advertised_port", advertisePort == null ? "same as listen port" : String.valueOf(advertisePort));
 			environment.put("server_queue_wait_filter", "on (bench QueueWaitFilter, order " + QueueWaitFilter.ORDER + ")");
@@ -152,7 +165,7 @@ final class BenchServer implements AutoCloseable {
 				return out;
 			};
 			java.util.function.Supplier<Map<String, String>> counters = () -> ServerCounters.of(server, queueWait);
-			BenchServiceImpl impl = new BenchServiceImpl(environment, extra, counters, workNanos);
+			BenchServiceImpl impl = new BenchServiceImpl(environment, extra, counters, workNanos, mode);
 			server.export(BenchService.class, impl);
 			if (metrics != null) {
 				RpcServerMetrics.bind(server, metrics);

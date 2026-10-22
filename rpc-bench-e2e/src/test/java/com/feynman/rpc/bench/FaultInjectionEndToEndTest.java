@@ -290,6 +290,33 @@ class FaultInjectionEndToEndTest {
 	}
 
 	/**
+	 * 业务等待方式（{@code target.server_work_mode}）与服务端环境的 {@code server_work_mode} 核对：相符通过；卡片没写（= park）而服务端是
+	 * monitor 时判定不通过（退出码 2，原因是核对而不是轮次无效）。闭环短卡，理由同上。
+	 */
+	@Test
+	void serverWorkModeIsCheckedAgainstTheServer(@TempDir Path dir) throws Exception {
+		try (BenchServer monitor = BenchServer.start(0, "127.0.0.1", null, "protobuf", null, 0, Bench.executor("virtual"), true, true, null,
+				null, Duration.ofMillis(2).toNanos(), null, BenchServiceImpl.WorkMode.MONITOR)) {
+			String id = "it-work-mode";
+			Result r = run(dir, id, closedCard(id, "  server_executor: virtual\n  server_work: 2ms\n  server_work_mode: monitor", 4, "1s",
+					"[500ms, 1s]"), "--direct", "127.0.0.1:" + monitor.port());
+			assertEquals(Bench.OK, r.code(), r.out() + r.err());
+			assertEquals(Boolean.TRUE, path(r.json(), "validity", "server_options", "matches"));
+			assertEquals("monitor", path(r.json(), "validity", "server_options", "work_mode_actual"));
+			assertTrue(((List<?>) path(r.json(), "validity", "statements")).stream()
+					.anyMatch(s -> String.valueOf(s).contains("业务方法每次在 synchronized 块内 Object.wait 2ms")), r.json().toString());
+
+			String mismatch = "it-work-mode-mismatch";
+			Result m = run(dir, mismatch, closedCard(mismatch, "  server_executor: virtual\n  server_work: 2ms", 4, "1s", "[500ms, 1s]"),
+					"--direct", "127.0.0.1:" + monitor.port());
+			assertEquals(Bench.FAILED_ASSERTIONS, m.code(), m.out() + m.err());
+			assertEquals(Boolean.FALSE, path(m.json(), "validity", "server_options", "matches"));
+			assertEquals("park", path(m.json(), "validity", "server_options", "work_mode_expected"));
+			assertEquals(Boolean.TRUE, path(m.json(), "validity", "all_rounds_valid"), "exit code 2 comes from the mismatch, not from an invalid round");
+		}
+	}
+
+	/**
 	 * 拓扑文件第 6 列给了 HTTP 控制端口时，每秒的服务端计数与窗口统计改经 {@code GET /counters} / {@code GET /stats} 取（IO 线程回答，
 	 * 不经业务执行器）。这里的业务执行器是 1 个线程、队列 0、每次调用占 30ms：经 RPC 取统计会被拒绝，经 HTTP 照样取得到。
 	 */

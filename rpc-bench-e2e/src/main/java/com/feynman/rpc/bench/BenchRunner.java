@@ -431,10 +431,19 @@ final class BenchRunner {
 			}
 			result = result == null ? workMatches : result && workMatches;
 		}
+		// 业务等待方式：旧服务端没有这个键时只记 unknown（与其它各项同一规则）
+		String expectedMode = o.serverWorkModeOrDefault();
+		Object actualMode = env.get("server_work_mode");
+		check.put("work_mode_expected", expectedMode);
+		check.put("work_mode_actual", actualMode == null ? EnvironmentProbe.UNKNOWN : actualMode);
+		if (actualMode != null) {
+			boolean modeMatches = expectedMode.equals(String.valueOf(actualMode));
+			result = result == null ? modeMatches : result && modeMatches;
+		}
 		check.put("matches", result);
 		validity.put("server_options", check);
 		if (Boolean.FALSE.equals(result)) {
-			statements.add("服务端配置与卡片不符（排队上限 / 业务等待 / 摘注册宽限）：" + check + "。数字不属于这张卡声明的配置，判定不通过。");
+			statements.add("服务端配置与卡片不符（排队上限 / 业务等待及其方式 / 摘注册宽限）：" + check + "。数字不属于这张卡声明的配置，判定不通过。");
 		}
 		if (o.serverDeregisterGrace() != null && !o.serverDeregisterGrace().isZero()) {
 			statements.add("非缺省配置：服务端 deregisterGrace = " + Durations.format(o.serverDeregisterGrace()) + "（框架缺省 0）。");
@@ -442,9 +451,19 @@ final class BenchRunner {
 		if (o.serverQueueCapacity() != null || o.serverWork() != null) {
 			statements.add("非缺省配置：服务端" + (o.serverQueueCapacity() != null ? "固定池排队上限 " + o.serverQueueCapacity() : "")
 					+ (o.serverQueueCapacity() != null && o.serverWork() != null ? "，" : "")
-					+ (o.serverWork() != null ? "业务方法每次 parkNanos " + Durations.format(o.serverWork()) + "（模拟 IO 等待）" : "") + "。");
+					+ (o.serverWork() != null ? "业务方法每次" + workModeText(o.serverWorkModeOrDefault()) + " " + Durations.format(o.serverWork())
+							+ "（模拟 IO 等待）" : "") + "。");
 		}
 		return result;
+	}
+
+	/** 声明段里业务等待方式的说法（{@code target.server_work_mode}）。 */
+	static String workModeText(String mode) {
+		return switch (mode) {
+			case "monitor" -> "在 synchronized 块内 Object.wait";
+			case "sync-park" -> "在 synchronized 块内 parkNanos";
+			default -> " parkNanos";
+		};
 	}
 
 	/**

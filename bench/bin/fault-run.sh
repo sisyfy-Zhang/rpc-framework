@@ -57,11 +57,13 @@ PROVIDERS="$(card_field providers)"
 EXECUTOR="$(card_field server_executor)"
 QUEUE="$(card_field server_queue_capacity)"
 WORK="$(card_field server_work)"
+WORK_MODE="$(card_field server_work_mode)"
 GRACE="$(card_field server_deregister_grace)"
 SARGS=()
 [ -n "$EXECUTOR" ] && [ "$EXECUTOR" != fixed ] && SARGS+=(--executor "$EXECUTOR")
 [ -n "$QUEUE" ] && SARGS+=(--executor-queue "$QUEUE")
 [ -n "$WORK" ] && SARGS+=(--work "$WORK")
+[ -n "$WORK_MODE" ] && SARGS+=(--work-mode "$WORK_MODE")
 [ -n "$GRACE" ] && SARGS+=(--deregister-grace "$GRACE")
 # shellcheck disable=SC2206
 SARGS+=($SERVER_ARGS)

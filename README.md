@@ -352,6 +352,12 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 持有一份带白名单的 ID 策略：多态位置的类名不在白名单（JDK 集合与基础类型 + `protobuf.allowed-packages`）内就拒绝加载。
 这比 autoType 黑名单更稳：默认拒绝，新的利用链不需要追着补。
 
+**何时把执行器换成 virtual。** 业务方法以阻塞等待为主、且阻塞时长 × QPS 超过固定池线程数（缺省 2 × 核数）时：业务等 10ms、闭环 256 并发，
+固定池 973 req/s（成功请求 p50 266ms 几乎全是排队），virtual 22.4k（23×），每请求服务端 CPU 反而更低；没超过时（开环、固定池约 60% 利用率）两者 p99 无差别，
+保持缺省即可。代价：JDK 21 上 synchronized 内阻塞会钉住载体——`Object.wait` 靠补偿扩到 256 个载体线程（每请求 CPU 4.4×），park / sleep 不补偿，
+吞吐跌到"核数 / 阻塞时长"（实测 480 req/s）；virtual 没有排队语义，只有同时执行上限（缺省 10000）。固定池则要让"排队上限 × 业务时长 / 线程数"远小于调用超时，
+否则过载时队列里的请求全部超时作废（并发 1500 时成功率约 0）。数据与方法见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
+
 **为什么停机顺序是"先摘注册、再拒新请求"。** 先拒绝会让还没收到下线推送的消费端持续撞上拒绝；先摘注册，绝大多数新流量在推送到达后
 自然不再进来。完整顺序：取消后台注册 → 摘注册 → 宽限期（`deregister-grace`，等推送传播）→ DRAINING（新请求回
 `SERVER_OVERLOADED`，业务未执行，配了重试的调用方会换节点）→ 等在途（上限 `shutdown-timeout`）→ 关端口与连接 → 关注册中心会话。
@@ -373,6 +379,9 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
   但它**不做半开探测与主动健康检查**——到期直接放回，若节点仍坏，放回后的前几个请求会再失败一次才再被摘（时长按次数倍增到 60s）；**不按延迟摘除**（慢节点交给 `p2c`）；
   只有一个提供者的服务永远不摘（最多摘一半、至少留 1 个）；没有服务级熔断。实验见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。
 - **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。
+- **固定池过载时可能"拥塞崩溃"**：执行器只按队列长度拒绝，不看排队等待。若"排队上限 × 业务时长 / 线程数 ≥ 调用超时"，过载时挤进队列的请求轮到执行时调用方已经超时，
+  服务端满负荷却几乎没有成功（实测业务 10ms、缺省 10 线程 + 队列 1000、超时 1s、闭环 1500 并发：每秒约 8.4 万次拒绝，成功率约 0）。阻塞型业务按
+  "线程数 ≥ 阻塞时长 × 峰值 QPS、排队等待远小于超时"配置，或换 virtual；排队等待感知的准入 / 自适应限流列在路线图。见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
 - **服务端 Filter 运行在业务线程上**：IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
 
 ## 测试与证据
@@ -435,7 +444,9 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 已发布到 Maven Central，空白工程从 Central 解析 1.0.0 复验通过。
 - **阶段 4 · 可选（每项自带对比实验）**：
   - **离群摘除**：已完成（缺省开）。按节点的超时 / 传输失败 / 过载拒绝摘除，时间驱动放回；A/B 见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。服务级熔断未做。
-  - 自适应并发限制、虚拟线程与固定池对比、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
+  - **虚拟线程 vs 固定池**：已完成对比实验（执行器缺省不变，仍是固定池）。阻塞型业务下何时换 virtual、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃，
+    见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
+  - 自适应并发限制、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
 
 ## 文档
 
@@ -452,6 +463,7 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   - [write-queue-and-context-switches.md](docs/probes/write-queue-and-context-switches.md)：每连接写队列（否定结果，已回退）与上下文切换按线程组归因
   - [outbound-backpressure.md](docs/probes/outbound-backpressure.md)：出站背压的机制、"只发不读"对照与正常负载下的代价
   - [fault-injection.md](docs/probes/fault-injection.md)：慢节点、杀节点、突增三组故障注入
+  - [executor-blocking.md](docs/probes/executor-blocking.md)：虚拟线程 vs 固定池（阻塞型业务）、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃
   - [harness-tail-latency.md](docs/probes/harness-tail-latency.md)：harness 开环尾延迟的来源与修稳
   - [nacos-timing.md](docs/probes/nacos-timing.md)：Nacos 首订阅与消失窗口的时序校准
   - [protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果

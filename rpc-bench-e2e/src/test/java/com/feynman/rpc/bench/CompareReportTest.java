@@ -395,6 +395,77 @@ class CompareReportTest {
 		assertFalse(registryGroup.contains("`c-rpc`") || registryGroup.contains("`c-grpc`"), registryGroup);
 	}
 
+	/** 给 fixture 写上服务端业务等待（卡片的 server_work / server_work_mode）与执行器读数（正式轮的 server_executor、io.server.by_group）。 */
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> work(Map<String, Object> json, double workMs, String mode, long rejections, String group, double cs,
+			String threads) {
+		Map<String, Object> profile = new LinkedHashMap<>((Map<String, Object>) json.get("profile"));
+		Map<String, Object> parsed = new LinkedHashMap<>((Map<String, Object>) profile.get("parsed"));
+		Map<String, Object> target = new LinkedHashMap<>((Map<String, Object>) parsed.get("target"));
+		target.put("server_work", (int) workMs + "ms");
+		target.put("server_work_ms", workMs);
+		target.put("server_work_mode", mode);
+		parsed.put("target", target);
+		profile.put("parsed", parsed);
+		json.put("profile", profile);
+		Map<String, Object> official = (Map<String, Object>) ((List<Object>) json.get("rounds")).get(1);
+		official.put("server_executor", Map.of("executor_rejections", rejections, "shutdown_rejections", 0, "queue_wait_ms",
+				Map.of("count", 100, "p50", 10.5, "p99", 12.0, "max", 13.0)));
+		official.put("io", Map.of("server", Map.of("by_group", Map.of(group, Map.of("threads", threads, "cs_per_request", cs)))));
+		Map<String, Object> cpu = new LinkedHashMap<>((Map<String, Object>) official.get("cpu"));
+		cpu.put("server_cpus", "0-4");
+		official.put("cpu", cpu);
+		return json;
+	}
+
+	/**
+	 * 任务 20：服务端业务等待（server_work / server_work_mode）进分组键，不同的等待不混表；有业务等待的表多出执行器拒绝、排队等待、
+	 * 业务线程组（fixed → biz_pool，virtual → fjp）的上下文切换与线程数、服务端 CPU µs/请求五列。
+	 */
+	@Test
+	void serverWorkIsAGroupKeyAndAddsExecutorColumns() {
+		Map<String, Object> fixed = work(serverConfig(
+				connections(result("exec-fixed", "rpc", "protobuf", "closed", 64, 4800.0, 14.0, 30.0, 20.0, false, "t1"), 2, true), "fixed", "on"),
+				2.0, null, 0, IoSampler.GROUP_BIZ, 2.5, "10 -> 10");
+		Map<String, Object> virtual = work(serverConfig(
+				connections(result("exec-virtual", "rpc", "protobuf", "closed", 64, 30000.0, 2.2, 60.0, 40.0, false, "t2"), 2, true), "virtual",
+				"on"), 2.0, null, 0, IoSampler.GROUP_FJP, 1.2, "5 -> 5");
+		Map<String, Object> rejecting = work(serverConfig(
+				connections(result("exec-fixed-10ms", "rpc", "protobuf", "closed", 64, 1000.0, 300.0, 10.0, 5.0, false, "t3"), 2, true), "fixed",
+				"on"), 10.0, null, 1234, IoSampler.GROUP_BIZ, 3.0, "10 -> 10");
+		Map<String, Object> virtual10 = work(serverConfig(
+				connections(result("exec-virtual-10ms", "rpc", "protobuf", "closed", 64, 6000.0, 11.0, 50.0, 30.0, false, "t4"), 2, true),
+				"virtual", "on"), 10.0, null, 0, IoSampler.GROUP_FJP, 1.0, "5 -> 5");
+		Map<String, Object> monitor = work(serverConfig(
+				connections(result("exec-virtual-10ms-monitor", "rpc", "protobuf", "closed", 64, 5000.0, 12.0, 50.0, 30.0, false, "t5"), 2, true),
+				"virtual", "on"), 10.0, "monitor", 0, IoSampler.GROUP_FJP, 4.0, "5 -> 64");
+		Map<String, Object> plain = serverConfig(
+				connections(result("compare-closed64-rpc", "rpc", "protobuf", "closed", 64, 100000.0, 1.5, 57.0, 49.0, false, "t6"), 2, true),
+				"virtual", "on");
+		String text = CompareReport.document(List.of(Map.entry("fixed.json", fixed), Map.entry("virtual.json", virtual),
+				Map.entry("rejecting.json", rejecting), Map.entry("virtual10.json", virtual10), Map.entry("monitor.json", monitor),
+				Map.entry("plain.json", plain)));
+		System.out.println(text);
+
+		assertTrue(text.contains("超时 1s · 服务端业务每次 parkNanos 2ms\n"), text);
+		assertTrue(text.contains("超时 1s · 服务端业务每次 parkNanos 10ms\n"), text);
+		assertFalse(text.contains("Object.wait"), "a lone monitor result forms no table: " + text);
+		String two = section(text.substring(text.indexOf("parkNanos 2ms")), "> 对比轴：`server_executor`。");
+		assertTrue(two.contains("`exec-fixed`") && two.contains("`exec-virtual`"), two);
+		assertFalse(two.contains("`compare-closed64-rpc`") || two.contains("10ms`"), "different work, different table: " + two);
+		assertTrue(two.contains("| 执行器拒绝（SERVER_OVERLOADED） | 排队等待 p50/p99 (ms) | 业务线程组 上下文切换/请求 | 业务线程组 线程数 | 服务端 CPU µs/请求 |"), two);
+		// 服务端 CPU µs/请求 = 20% × 5 核 / 4800 req/s = 208.3；virtual 40% × 5 / 30000 = 66.7
+		assertTrue(two.contains("| 0 | 10.500 / 12.000 | 2.50（biz_pool） | 10 -> 10（biz_pool） | 208.3 |"), two);
+		assertTrue(two.contains("| 0 | 10.500 / 12.000 | 1.20（fjp） | 5 -> 5（fjp） | 66.7 |"), two);
+		assertTrue(two.contains(CompareReport.EXECUTOR_COLUMNS_NOTE), two);
+		String ten = section(text.substring(text.indexOf("parkNanos 10ms")), "> 对比轴：`server_executor`。");
+		assertTrue(ten.contains("| 1234 | 10.500 / 12.000 | 3.00（biz_pool） |"), ten);
+
+		assertEquals(IoSampler.GROUP_NETTY_IO, CompareReport.businessGroup("direct"));
+		assertEquals(IoSampler.GROUP_BIZ, CompareReport.businessGroup("—"));
+		assertEquals(null, CompareReport.serverCpuMicrosPerRequest(Map.of("cpu", "n/a"), 1000.0));
+	}
+
 	/** 从标记行开始到下一个空行之后的表格结束（下一个以 "> " 或 "#" 开头的行）为止。 */
 	private static String section(String text, String marker) {
 		int start = text.indexOf(marker);

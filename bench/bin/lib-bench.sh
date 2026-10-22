@@ -4,6 +4,7 @@
 #   stop_server                                                                   # SIGTERM，10s 不退再 KILL
 #   extra_cp_for <transport>                                                      # 对比模块的 classpath（rpc 为空）
 #   card_server_executor <card.yaml>                                              # 卡片的 target.server_executor（没写 = fixed）
+#   card_server_options <card.yaml>                                               # 卡片的 server_work / server_work_mode / server_queue_capacity → 服务端参数（都没写 = -）
 
 SERVER_PID=""
 
@@ -26,6 +27,22 @@ card_server_executor() {
   local value
   value="$(sed -n 's/^  server_executor:[[:space:]]*\([a-z-]*\).*/\1/p' "$1" | head -n 1)"
   echo "${value:-fixed}"
+}
+
+card_target_field() { # 只看两格缩进的 target 字段（与 card_server_executor 同一做法）
+  sed -n "s/^  $2:[[:space:]]*\([^ #]*\).*/\1/p" "$1" | head -n 1
+}
+
+card_server_options() {
+  local work mode queue out=""
+  work="$(card_target_field "$1" server_work)"
+  mode="$(card_target_field "$1" server_work_mode)"
+  queue="$(card_target_field "$1" server_queue_capacity)"
+  [ -n "$queue" ] && out="$out --executor-queue $queue"
+  [ -n "$work" ] && out="$out --work $work"
+  [ -n "$mode" ] && out="$out --work-mode $mode"
+  out="${out# }"
+  echo "${out:--}"
 }
 
 start_server() {

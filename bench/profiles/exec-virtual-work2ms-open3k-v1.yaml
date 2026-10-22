@@ -1,0 +1,32 @@
+# 口径卡（执行器对照，非缺省配置：服务端业务方法带等待）：本框架，同机 loopback、1KB、单提供者，直连（--direct）。
+# 固定池 10 个线程：容量约 5k req/s，3000 req/s 约 60% 利用率（有排队）；虚拟线程不排队。开环两边吞吐相同，比的是延迟。
+# 成对的卡只在 target.server_executor 一处不同（fixed = 框架缺省 ExecutorConfig.defaults() / virtual = ExecutorConfig.virtualThreads()）；
+# 压测端核对服务端环境的 server_executor_kind / server_work_ms / server_work_mode，不符判定不通过。错误（含 SERVER_OVERLOADED）按类型统计，不判无效。
+# 跑法：bench/bin/sweep.sh --cards exec-virtual-work2ms-open3k-v1（sweep.sh 按卡片给服务端传 --executor / --work / --work-mode）。见 docs/probes/executor-blocking.md。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: exec-virtual-work2ms-open3k-v1
+question: 单提供者、直连、1KB，服务端业务方法每次 parkNanos 2ms（模拟 IO 等待），开环 3000 req/s：服务端执行器 virtual 的延迟分布（固定池约 60% 利用率）
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  server_executor: virtual
+  server_work: 2ms
+load:
+  model: open
+  rate: 3000
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]

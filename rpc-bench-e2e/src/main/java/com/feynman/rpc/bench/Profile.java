@@ -91,16 +91,32 @@ public record Profile(String id, String question, Target target, Load load, Isol
 	 *                            null = 不等（原样回显）；即 bench server 的 {@code --work}
 	 * @param serverDeregisterGrace {@code target.server_deregister_grace}：被压服务端的 {@code RpcServerConfig.deregisterGrace}（优雅停机时
 	 *                            摘注册之后、开始拒绝新请求之前的等待），null = 框架缺省 0；即 bench server 的 {@code --deregister-grace}
+	 * @param serverWorkMode      {@code target.server_work_mode}：{@code server_work} 怎么等（{@code park} | {@code monitor} | {@code sync-park}，
+	 *                            见 {@code BenchServiceImpl.WorkMode}），null = park；即 bench server 的 {@code --work-mode}
 	 */
 	public record RpcOptions(String loadBalance, String cluster, Integer retries, Integer serverQueueCapacity, Duration serverWork,
-			Duration serverDeregisterGrace) {
+			Duration serverDeregisterGrace, String serverWorkMode) {
+
+		/** 不含 {@code serverWorkMode} 的形式（= park）。 */
+		public RpcOptions(String loadBalance, String cluster, Integer retries, Integer serverQueueCapacity, Duration serverWork,
+				Duration serverDeregisterGrace) {
+			this(loadBalance, cluster, retries, serverQueueCapacity, serverWork, serverDeregisterGrace, null);
+		}
 
 		/** 不含 {@code serverDeregisterGrace} 的形式（= 框架缺省 0）。 */
 		public RpcOptions(String loadBalance, String cluster, Integer retries, Integer serverQueueCapacity, Duration serverWork) {
 			this(loadBalance, cluster, retries, serverQueueCapacity, serverWork, null);
 		}
 
-		static final RpcOptions DEFAULTS = new RpcOptions(null, null, null, null, null, null);
+		static final RpcOptions DEFAULTS = new RpcOptions(null, null, null, null, null, null, null);
+
+		/** 卡片没写时的等待方式。 */
+		static final String DEFAULT_WORK_MODE = "park";
+
+		/** 生效的等待方式：没写为 {@value #DEFAULT_WORK_MODE}。 */
+		String serverWorkModeOrDefault() {
+			return serverWorkMode == null ? DEFAULT_WORK_MODE : serverWorkMode;
+		}
 
 		/** 卡片是否写了任何一项。 */
 		boolean declared() {
@@ -272,6 +288,7 @@ public record Profile(String id, String question, Target target, Load load, Isol
 				t.put("server_work", o.serverWork() == null ? null : Durations.format(o.serverWork()));
 				t.put("server_work_ms", o.serverWork() == null ? null : Durations.millis(o.serverWork()));
 				t.put("server_deregister_grace", o.serverDeregisterGrace() == null ? null : Durations.format(o.serverDeregisterGrace()));
+				t.put("server_work_mode", o.serverWorkMode());
 			}
 		}
 		if (target.http()) {

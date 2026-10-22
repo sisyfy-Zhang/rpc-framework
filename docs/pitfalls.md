@@ -652,3 +652,24 @@ WSL 上同一份代码对照（假凭据、上传地址指向关闭的端口，`
 - 托管 runner 的镜像每周更新，构建工具的大版本（这里是 resolver 1 → 2）会在没有任何代码改动时变化。
 
 **后续**：CI（ci.yml / release.yml）改用 Maven Wrapper（`./mvnw`，`.mvn/wrapper/maven-wrapper.properties` 固定 3.9.12 并校验 sha256），docs/releasing.md 的本地演练也用 `./mvnw`，版本不再随 runner 镜像漂移。同一批改动给发布模块的主 jar 加了 `Automatic-Module-Name`（下个版本生效）。备注（只记录、不处理）：rpc-serialize-protobuf 里有一个 `io.protostuff.runtime` 包（为访问 protostuff 的包内 API），与 protostuff-runtime 构成拆分包，两者同放模块路径时会冲突，`Automatic-Module-Name` 解决不了；目前按 classpath 使用。
+
+## 38. 基准里的锁对象必须逃逸：局部 new 出来的锁被 C2 消除，JIT 之后"钉住"凭空消失
+
+**现象**：任务 20 测 JDK 21 虚拟线程在 `synchronized` 内阻塞的钉住退化，bench server 的业务方法写成
+`Object lock = new Object(); synchronized (lock) { parkNanos(10ms); }`（`server --work-mode sync-park`）。12s 冒烟里每秒成功数先是
+474 / 481 / 480 … 482（5 个载体 / 10ms ≈ 500，钉住的预期值），第 10 秒起 692、1621，**第 11 秒跳到 22 046**，整轮平均 3.3k req/s，
+服务端排队等待 p50 只有 0.09ms——像是"没有钉住"。同一段代码在 Windows 上 3 秒的小探针里是 313 ops/s（钉住）。
+
+**根因**：C2 的逃逸分析看到锁对象是方法内新建、从不外泄（NoEscape），不可能有别的线程同步它，于是把 `monitorenter / monitorexit`
+整个消除（lock elision，`-XX:+EliminateLocks` 缺省开）。解释执行与 C1 阶段锁还在，虚拟线程被钉住；`work()` 被 C2 编译后 synchronized 不存在了，
+parkNanos 照常卸载虚拟线程——测到的是"没有 synchronized"。短探针来不及触发 C2，所以没暴露。
+`Object.wait` 那一种（`monitor`）不受影响：对象作为接收者传进了 native 方法，已经逃逸。
+
+**修法**：每次新建的锁对象写进一个 `volatile static` 字段（全局逃逸），C2 不能再消除这把锁；仍是每次调用一个新对象，不引入跨请求的锁竞争
+（`BenchServiceImpl.escapedLock`）。修复后同一张卡全程稳定在 470 req/s、载体 5 个、排队等待 p50 522ms。
+
+**教训**：
+- **基准里"为了测某种同步而写的同步"，同步对象必须逃逸**（写进共享字段、传给不内联的方法），否则 JIT 会把实验对象优化掉；
+  同类的还有死代码消除、常量折叠（JMH 的 Blackhole 防的就是这一类）。
+- 看每秒时间序列，不只看整轮平均：平均 3.3k 是"约 500 与 22k 的混合"，时间序列一眼看出 JIT 前后两个台阶。
+- 冒烟时长要覆盖 JIT 稳态：3 秒的小探针与 60 秒的正式轮测的可能不是同一段机器码。

@@ -1,0 +1,35 @@
+# 口径卡（执行器对照，非缺省配置：服务端业务方法带等待）：本框架，同机 loopback、1KB、单提供者，直连（--direct）。
+# 固定池 10 个线程：容量约 10 / 10ms = 1k req/s；排队上限 1000（框架缺省）。虚拟线程：上限是压测端的 256 并发 / 10ms ≈ 25.6k req/s。
+# 与 exec-virtual-work10ms-closed256-v1 只差 target.server_work_mode: sync-park（在 synchronized 块内 parkNanos）。JDK 21 上钉住载体且
+# 不补偿：同时在等的请求数被载体数（= 服务端可用核数 5）封顶，预期 ≈ 5 / 10ms = 500 req/s（JEP 491 在 JDK 24 修掉）。
+# 对照：exec-fixed-work10ms-closed256-v1 与 exec-virtual-work10ms-closed256-v1（park）。
+# 压测端核对服务端环境的 server_executor_kind / server_work_ms / server_work_mode，不符判定不通过。错误（含 SERVER_OVERLOADED）按类型统计，不判无效。
+# 跑法：bench/bin/sweep.sh --cards exec-virtual-work10ms-closed256-syncpark-v1（sweep.sh 按卡片给服务端传 --executor / --work / --work-mode）。见 docs/probes/executor-blocking.md。
+# 改动口径请复制成新 id（-v2），不要原地改。
+profile: exec-virtual-work10ms-closed256-syncpark-v1
+question: 单提供者、直连、1KB，服务端业务方法每次在 synchronized 块内 parkNanos 10ms（模拟 IO 等待），闭环 256 并发：服务端执行器 virtual 的吞吐、延迟、拒绝数、每请求 CPU 与线程数
+target:
+  transport: rpc
+  service: BenchService#echo
+  payload: { kind: bytes, size: 1024 }
+  serializer: protobuf
+  providers: 1
+  server_executor: virtual
+  server_work: 10ms
+  server_work_mode: sync-park
+load:
+  model: closed
+  concurrency: 256
+  duration: 60s
+  warmup: 20s
+  steady_window: [20s, 55s]
+  rounds: 3
+  timeout: 1s
+isolation:
+  client_process: separate_jvm
+  server_process: separate_jvm
+  same_host: true
+  registry: none (--direct)
+measure:
+  histogram: { significant_digits: 3, max: 10s }
+  report: [throughput, p50, p95, p99, p999, max, errors_by_status]

@@ -11,7 +11,8 @@
 # 选项：--concurrency <n,n,...>（缺省 64,128,256；64 用 compare-closed64-rpc-<s>，其余用 sweep-closed<n>-rpc-<s>）；
 #       --connections <n,n,...>（给了就改做连接数扫描：并发固定 128，2 用 sweep-closed128-rpc-<s>，其余用 sweep-c<n>-closed128-rpc-<s>）；
 #       --cards <id,id,...>（给了就只跑这几张卡：<profiles>/<id>.yaml，不加后缀；各卡的 target.server_executor 必须一致，
-#       不是 fixed 时给服务端传 --executor <它>）；
+#       不是 fixed 时给服务端传 --executor <它>；target.server_work / server_work_mode / server_queue_capacity 同样必须一致，
+#       写了就给服务端传 --work / --work-mode / --executor-queue）；
 #       --profiles <dir>（缺省 bench/profiles）、--suffix <s>（缺省 v1）、--out <dir>（缺省 target/sweep/run-<时间>）、--label <text>（缺省 sweep）。
 # 环境变量：BENCH_SERVER_CPUS / BENCH_CLIENT_CPUS（缺省 0-4 / 5-9）；SWEEP_SERVER_ARGS（追加给服务端，例如 "--io-threads 5"、
 #           "--flush-consolidation off"）；BENCH_HARNESS_OPTS（追加给每次 run，例如 "--io-threads 2"、"--flush-consolidation off"）；
@@ -85,11 +86,23 @@ for n in "${LEVELS[@]}"; do
   fi
   EXECUTOR="$e"
 done
+# 服务端业务等待与排队上限同样取自卡片（各卡必须一致：同一个服务端进程只有一种配置）
+SERVER_OPTS=""
+for n in "${LEVELS[@]}"; do
+  o="$(card_server_options "$(card_for "$n")")"
+  if [ -n "$SERVER_OPTS" ] && [ "$o" != "$SERVER_OPTS" ]; then
+    echo "the cards declare different server options ($SERVER_OPTS vs $o); run them separately" >&2
+    exit 1
+  fi
+  SERVER_OPTS="$o"
+done
 
 PORT=19300
 # shellcheck disable=SC2206
 SERVER_ARGS=(${SWEEP_SERVER_ARGS:-})
 if [ "$EXECUTOR" != fixed ]; then SERVER_ARGS=(--executor "$EXECUTOR" "${SERVER_ARGS[@]}"); fi
+# shellcheck disable=SC2206
+if [ "$SERVER_OPTS" != "-" ]; then SERVER_ARGS=($SERVER_OPTS "${SERVER_ARGS[@]}"); fi
 start_server rpc "$OUT/server-rpc.log" "" --port "$PORT" --host 127.0.0.1 --no-registry "${SERVER_ARGS[@]}"
 for n in "${LEVELS[@]}"; do
   echo "== rpc / $(basename "$(card_for "$n")" .yaml)"
