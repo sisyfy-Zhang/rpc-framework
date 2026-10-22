@@ -616,3 +616,37 @@ hs_err 是 `G1 virtual space` mmap 失败。
 - 修一个可见性窗口时，要列出读这份状态的**所有**路径（这里有 awaitProviders 的唤醒、awaitProviders 的"已非空"、Cluster 选点、providers()），
   只修其中一条（D-015）会把剩下的变成低概率偶发。
 - 低概率偶发先找能放大窗口的确定性复现（忙等读者、或在回调里注入延迟），再改代码；"单独重跑通过"不是结论。
+
+## 37. Central 校验失败 "Bundle has content that does NOT have a .pom file"：runner 的 Maven 升到 3.10，central-publishing 0.11 的 bundle 混进本地仓库跟踪文件
+
+**现象**（阶段 3，v1.0.0 的 release.yml 第二次运行）：GPG 导入、版本核对、签名、上传都成功，Central 校验失败：
+`Bundle has content that does NOT have a .pom file: io/github/sisyfy-zhang/rpc-core, …`。下载 workflow artifact 里的 `central-bundle.zip`：
+每个模块的 artifactId 目录下多了 `maven-metadata-local.xml`（artifact 级目录，没有 pom，触发校验错误），`1.0.0/` 下多了 `_remote.repositories`。
+发布前在 Windows 上做过 bundle 演练，打出的 bundle 是干净的。
+
+**根因**：CI 的 runner 镜像（ubuntu-24.04，20261018）带的是 **Maven 3.10.0**，换成了 **resolver 2**（3.10.0 的 `lib/` 里是 `maven-resolver-api-2.0.24`）；
+本机演练用的是 Maven 3.9.12（resolver 1.9.25）。central-publishing 把各模块先"安装"进 `target/central-staging` 这个临时本地仓库再打包，
+打包前（"Pre Bundling"）只删它认识的跟踪文件。0.11.x 在 resolver 1 下暂存出来的是 `maven-metadata-central-staging.xml`，它删得掉；
+在 resolver 2 下暂存仓库按增强本地仓库写出 `maven-metadata-local.xml` 与 `_remote.repositories`，0.11.x 不认识，原样打进 bundle。
+WSL 上同一份代码对照（假凭据、上传地址指向关闭的端口，`-Dgpg.skip=true`）：
+
+| Maven | central-publishing | `-Dmaven.install.skip` | bundle 文件数 | artifact 级文件 | `_remote.repositories` |
+|---|---|---|---|---|---|
+| 3.9.12 | 0.11.0 | 否 / 是 | 170 / 170 | 0 / 0 | 0 / 0 |
+| 3.10.0 | 0.11.0 | 否 / 是 | 230 / 230 | 10 / 10（`maven-metadata-local.xml`） | 50 / 50 |
+| 3.10.0 | 0.11.1 | 否 | 230 | 10 | 50 |
+| 3.10.0 | 0.11.0 + `-llr` | 否 | 170 | 0 | 0 |
+| 3.10.0 / 3.9.12 | **0.12.0** | 否 | **170 / 170**（两份清单逐行相同） | 0 | 0 |
+
+跳过 install **不是**修法：污染来自插件自己的暂存仓库，与 install 阶段无关。0.12.0 的 Pre Bundling 会删掉
+`maven-metadata-local.xml` 与 `_remote.repositories`（日志里逐条打印 `Pre Bundling - deleted …`）。
+
+**修法**：central-publishing 升到 0.12.0（根 pom 属性与 rpc-bom 写死的版本两处）。没用 `-llr`（Maven 2 式本地仓库）：它是已弃用的全局开关，
+会改变整个本地仓库（含 setup-java 缓存）的行为，只是绕开症状。release.yml 的 deploy 步骤先打印 `mvn -v`，并加 `-Dmaven.install.skip=true`，
+让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同（演练只多假凭据、测试密钥与上传地址）。
+
+**教训**：
+- **本地演练必须与 CI 是同一条命令、同一个 Maven 版本**。只换了一个变量（这里是 runner 镜像自带的 Maven 版本）的"演练通过"不证明 CI 会通过；
+  CI 的工具版本要么打印出来、要么固定住。
+- 先在本地复现、再下结论：最初的假设（"deploy 生命周期先跑了 install，污染了暂存目录"）在对照实验里不成立——跳过 install 前后 bundle 完全一样。
+- 托管 runner 的镜像每周更新，构建工具的大版本（这里是 resolver 1 → 2）会在没有任何代码改动时变化。

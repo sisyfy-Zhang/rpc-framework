@@ -64,8 +64,12 @@ jobs:
           # maven-gpg-plugin 缺省从这个环境变量读口令（配合 pom 里的 --pinentry-mode loopback）
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         # maven.test.skip：测试由 ci.yml 保证，同时让 rpc-core 的 test-jar 不生成、不发布；
-        # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败
-        run: mvn $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' deploy
+        # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败。
+        # maven.install.skip：发布用不到本地安装，且让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同（pitfalls 第 37 条）。
+        # mvn -v 先打出 Maven / resolver 版本：runner 镜像的 Maven 会随镜像升级（3.10 换了 resolver 2，曾让 bundle 混入本地仓库跟踪文件）
+        run: |
+          mvn -v
+          mvn $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy
 
       # 便于核对上传了什么：各发布模块的 jar / sources / javadoc / pom 与 .asc，以及 central-publishing 打出的 bundle
       - name: Upload release artifacts

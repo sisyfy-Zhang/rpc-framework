@@ -101,8 +101,10 @@
     <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
     <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-    <!-- rpc-bom 不继承本 pom，它的 release profile 里写死了同一个版本，升级时两处一起改 -->
-    <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
+    <!-- rpc-bom 不继承本 pom，它的 release profile 里写死了同一个版本，升级时两处一起改。
+         至少 0.12.0：0.11.x 在 Maven 3.10（resolver 2）下暂存目录里会留下 maven-metadata-local.xml 与 _remote.repositories，
+         被打进 bundle，Central 校验失败（docs/pitfalls.md 第 37 条） -->
+    <central-publishing-maven-plugin.version>0.12.0</central-publishing-maven-plugin.version>
   </properties>
 
   <dependencyManagement>
