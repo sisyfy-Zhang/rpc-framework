@@ -5,6 +5,8 @@
 #   extra_cp_for <transport>                                                      # 对比模块的 classpath（rpc 为空）
 #   card_server_executor <card.yaml>                                              # 卡片的 target.server_executor（没写 = fixed）
 #   card_server_options <card.yaml>                                               # 卡片的 server_work / server_work_mode / server_queue_capacity → 服务端参数（都没写 = -）
+#   control_http_enabled                                                          # BENCH_CONTROL_HTTP 不是 off 时为真（缺省开）
+#   write_control_topology <file> <listen port> <control port>                     # 单提供者拓扑文件（格式同 fault-topology.sh），供 run --topology
 
 SERVER_PID=""
 
@@ -85,16 +87,34 @@ stop_server() {
   SERVER_PID=""
 }
 
-# run_card <card.yaml> <port> <out> <label> <BENCH_EXTRA_CP 或空>：退出码 0 / 2 照常返回（2 = 卡片判定未通过，结果照样进对比表），1 = 运行出错
+# HTTP 控制端点（bench server --http-port，GET /stats、/counters 在 IO 线程上回答、不经业务执行器）：sweep.sh / compare.sh 给 rpc 服务端
+# 另开 <监听端口 + 100>，harness 经 run --topology 读到它，窗口起止的服务端统计改走 HTTP（执行器饱和时 RPC 的 stats() 会被拒，该端只能记 unknown）。
+# BENCH_CONTROL_HTTP=off 时不开，统计照旧经 RPC（回退）。
+control_http_enabled() {
+  [ "${BENCH_CONTROL_HTTP:-on}" != off ]
+}
+
+write_control_topology() {
+  local file="$1" port="$2" control="$3"
+  {
+    echo "# idx advertised pid listen_port proxy control_http_port   (lib-bench.sh write_control_topology, $(date -Iseconds))"
+    echo "1 127.0.0.1:$port ${SERVER_PID:--} $port - $control"
+  } > "$file"
+}
+
+# run_card <card.yaml> <port> <out> <label> <BENCH_EXTRA_CP 或空> [<拓扑文件>]：退出码 0 / 2 照常返回（2 = 卡片判定未通过，结果照样进对比表），
+# 1 = 运行出错。给了拓扑文件（write_control_topology）时传 --topology：服务端统计经 HTTP 控制端点取。
 run_card() {
-  local card="$1" port="$2" out="$3" label="$4" extra="$5" code
+  local card="$1" port="$2" out="$3" label="$4" extra="$5" topology="${6:-}" code
+  local topo_args=()
   if [ ! -f "$card" ]; then
     echo "card not found: $card" >&2
     return 1
   fi
+  [ -n "$topology" ] && topo_args=(--topology "$topology")
   set +e
   BENCH_EXTRA_CP="$extra" BENCH_CLIENT_CPUS="${BENCH_CLIENT_CPUS:-5-9}" "$ROOT/bench/bin/bench-run.sh" --profile "$card" \
-    --direct "127.0.0.1:$port" --out "$out" --label "$label"
+    --direct "127.0.0.1:$port" --out "$out" --label "$label" ${topo_args[@]+"${topo_args[@]}"}
   code=$?
   set -e
   if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then

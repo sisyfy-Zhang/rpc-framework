@@ -15,7 +15,10 @@
 #       --label <text>（缺省 compare，透传给 run --label）。
 # 环境变量：BENCH_SERVER_CPUS / BENCH_CLIENT_CPUS（缺省 0-4 / 5-9）；COMPARE_SERVER_ARGS_<TRANSPORT 大写>（追加给该 transport
 #           服务端的参数，例如 COMPARE_SERVER_ARGS_GRPC="--executor fixed"、COMPARE_SERVER_ARGS_RPC="--flush-consolidation off"）；
-#           BENCH_HARNESS_OPTS 等 bench-run.sh 的变量照常生效；BENCH_JFR=1 时两端各录一份 JFR 到结果目录（BENCH_JFR_DIR 缺省 = --out）。
+#           BENCH_HARNESS_OPTS 等 bench-run.sh 的变量照常生效；BENCH_JFR=1 时两端各录一份 JFR 到结果目录（BENCH_JFR_DIR 缺省 = --out）；
+#           BENCH_CONTROL_HTTP=off 时 rpc 服务端不开 HTTP 控制端点，统计照旧经 RPC。
+# 服务端统计：rpc 服务端另开 --http-port <端口 + 100>（HTTP 控制端点），脚本写 <out>/control-topology-<transport>.txt 并给它的 run 传 --topology，
+#           窗口起止的服务端统计经 GET /stats 取（IO 线程回答、不经业务执行器）；对比对象的服务端没有这个端点，照旧经各自的统计调用。
 # 端口：第 i 个 transport 用 19300 + i（rpc 19300、grpc 19301……）。对比模块须已构建：
 #   mvn -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
 # 退出码：0 全部跑完（单张卡判定未通过也算跑完，判定写在对比表里）；1 运行出错。
@@ -90,16 +93,22 @@ for t in "${TRANSPORT_LIST[@]}"; do
   var="COMPARE_SERVER_ARGS_$(echo "$base" | tr '[:lower:]-' '[:upper:]_')"
   # shellcheck disable=SC2206
   server_args=(${!var:-})
+  topology=""
   if [ "$base" = rpc ]; then
     executor="$(executor_of "$t")"
     if [ "$executor" != fixed ]; then server_args=(--executor "$executor" "${server_args[@]}"); fi
+    if control_http_enabled; then server_args+=(--http-port "$((port + 100))"); fi
     start_server "$t" "$OUT/server-$t.log" "" --port "$port" --host 127.0.0.1 --no-registry "${server_args[@]}"
+    if control_http_enabled; then
+      topology="$OUT/control-topology-$t.txt"
+      write_control_topology "$topology" "$port" "$((port + 100))"
+    fi
   else
     start_server "$t" "$OUT/server-$t.log" "$extra" --transport "$base" --port "$port" --host 127.0.0.1 "${server_args[@]}"
   fi
   for l in "${LOAD_LIST[@]}"; do
     echo "== $t / $l"
-    run_card "$PROFILES/compare-$l-$t-$SUFFIX.yaml" "$port" "$OUT" "$LABEL" "$extra"
+    run_card "$PROFILES/compare-$l-$t-$SUFFIX.yaml" "$port" "$OUT" "$LABEL" "$extra" "$topology"
   done
   stop_server
 done

@@ -36,7 +36,8 @@ final class RpcCallTarget implements CallTarget {
 
 	private final RpcClient client;
 	/**
-	 * 每个提供者一个只连它的元数据客户端（direct 注册中心，1 个 IO 线程、1 条连接），按地址排序；只在多提供者或卡片声明了阶梯 / 故障时创建。
+	 * 每个提供者一个只连它的统计通道（有 HTTP 控制端口时经 HTTP，否则是 direct 注册中心、1 个 IO 线程、1 条连接的元数据客户端），按地址排序；
+	 * 只在多提供者、卡片声明了阶梯 / 故障，或给了 HTTP 控制端口时创建。
 	 * 统计调用必须落在确定的提供者上：经主客户端的负载均衡时，窗口起止两次 stats() 可能打到不同的节点，差值没有意义。
 	 */
 	private final Map<String, ProviderProbe> probes;
@@ -133,7 +134,10 @@ final class RpcCallTarget implements CallTarget {
 			BenchService service = client.reference(BenchService.class,
 					ReferenceOptions.defaults().timeout(timeout).retries(choice.retries()).awaitProviders(DISCOVERY_TIMEOUT));
 			List<ServiceInstance> providers = awaitProviderCount(client, profile.target().providers());
-			if (providers.size() > 1 || profile.load().timeline()) {
+			// 单提供者、无时间线时原本经主客户端取统计；给了它的 HTTP 控制端口（sweep.sh / compare.sh 的 --topology）时同样建统计通道，
+			// 窗口统计改经 GET /stats（执行器饱和时 RPC 的 stats() 会被拒，该端只能记 unknown）
+			boolean controlPortGiven = providers.stream().anyMatch(instance -> controlPorts.containsKey(instance.address()));
+			if (providers.size() > 1 || profile.load().timeline() || controlPortGiven) {
 				for (ServiceInstance instance : providers) {
 					probes.put(instance.address(), ProviderProbe.connect(instance, profile.target().serializer(),
 							controlPorts.get(instance.address())));

@@ -121,6 +121,7 @@ gRPC / Dubbo 单连接开环卡的各轮 p99 从几毫秒到几十毫秒，只�
   p99.9 被宿主抢占 vCPU 的停顿主导，两边都只看量级。
 - **加连接数反而递减。** 并发 128 时每节点 2 → 4 → 8 条连接，吞吐 141,161.6 → 138,567.0 → 126,244.3 req/s，p99 2.191 → 2.830 → 4.420ms，
   两侧核都更忙、都没满（[sweep/compare.md](../bench/reports/20261022-d23e39d/sweep/compare.md)）。原因本批没有剥离，与任务 11 的冒烟结论不一致（[NOTES.md](../bench/reports/20261022-d23e39d/NOTES.md#观察连接数扫描)）。
+  原因已在阶段 4a 剥离：连接增多稀释两端事件循环的唤醒批量，`netty_io` 每请求 CPU 成倍上升，缺省 2 条不改（[probes/connections-scaling.md](probes/connections-scaling.md)）；本页数字仍是 1.0.0 的。
 - **单连接卡第 3 轮掉 12%。** `sweep-c1-closed64-rpc-v1` 三轮吞吐 93,609.5 / 92,771.5 / 81,588.4 req/s，极差 14.7%
   （[sweep-c1](../bench/reports/20261022-d23e39d/sweep/sweep-c1-closed64-rpc-v1-20261022-013349.md)），是本批可重复性最差的 rpc 卡；第 3 轮的原因未查。
 - **静默死亡没有离群摘除。** 进程存活但不回包（连接静默挂起）时，打到它的 1/3 流量持续超时到轮次结束：框架不重试超时（共享 deadline）、

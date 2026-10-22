@@ -188,6 +188,15 @@ class BenchEndToEndTest {
 					assertEquals(((Number) path(round, "io", side, "nonvol_cs")).longValue(), nonvol);
 					assertTrue(byGroup.containsKey(IoSampler.GROUP_NETTY_IO), String.valueOf(byGroup.keySet()));
 					assertTrue(path(round, "io", side, "by_group", IoSampler.GROUP_NETTY_IO, "cs_per_request") instanceof Number);
+					// 按线程组的 CPU 时间（utime + stime 的窗口差值）：各组之和就是该端的 cpu_ms，每请求值是微秒
+					long cpuMs = 0;
+					for (Object g : byGroup.values()) {
+						cpuMs += ((Number) ((Map<?, ?>) g).get("cpu_ms")).longValue();
+					}
+					assertEquals(((Number) path(round, "io", side, "cpu_ms")).longValue(), cpuMs, "groups sum to the side's cpu_ms: " + byGroup);
+					assertTrue(cpuMs > 0, "the window used some CPU");
+					assertTrue(path(round, "io", side, "cpu_us_per_request") instanceof Number);
+					assertTrue(path(round, "io", side, "by_group", IoSampler.GROUP_NETTY_IO, "cpu_us_per_request") instanceof Number);
 				} else {
 					assertEquals(EnvironmentProbe.NA, path(round, "io", side), "rounds[].io off Linux: " + round.get("io"));
 				}
@@ -234,6 +243,43 @@ class BenchEndToEndTest {
 		assertTrue(md.contains("| 指标 | 压测端 metrics_enabled=false · 服务端 metrics_enabled=false |"), md);
 		assertFalse(md.contains(BenchRunner.OPEN_LOOP_BUSY_SPIN_STATEMENT), "busy-spin statement is for open-loop cards only");
 		assertTrue(r.out().contains("verdict: PASSED"));
+	}
+
+	/**
+	 * sweep.sh / compare.sh 的路径：单提供者、无时间线的卡也能经 {@code --topology} 第 6 列的 HTTP 控制端口取窗口统计（{@code GET /stats}，
+	 * IO 线程回答、不经业务执行器）；不给拓扑时照旧经 RPC 的 {@code stats()}。两种通道取回的是同一份统计（GC / io / 背压 / 执行器都在）。
+	 */
+	@Test
+	void windowServerStatsUseTheHttpControlEndpointWhenTheTopologyGivesOne(@TempDir Path dir) throws Exception {
+		try (BenchHttpServer control = BenchHttpServer.start(0, server.environment(), server.statsSupplier(), server.countersSupplier())) {
+			Path topology = dir.resolve("topology.txt");
+			Files.writeString(topology, "# idx advertised pid listen_port proxy control_http_port\n1 127.0.0.1:" + server.port() + " "
+					+ ProcessHandle.current().pid() + " " + server.port() + " - " + control.port() + "\n");
+			String id = "it-control-http";
+			Result r = run(dir, id, card(id, "closed", "concurrency: 4", "2s", "500ms", "[500ms, 1.8s]", 1, "1s",
+					"{ kind: bytes, size: 1024 }", "assert:\n  errors_max: 0"), "--direct", "127.0.0.1:" + server.port(),
+					"--topology", topology.toString());
+			assertEquals(Bench.OK, r.code(), r.out() + r.err());
+			Map<?, ?> channels = (Map<?, ?>) path(r.json(), "run", "target", "server_stats_channel");
+			assertNotNull(channels, "a control port makes a stats channel even for one provider: " + path(r.json(), "run", "target"));
+			assertTrue(String.valueOf(channels.get("127.0.0.1:" + server.port())).contains("HTTP control endpoint"), channels.toString());
+			Map<?, ?> round = (Map<?, ?>) ((List<?>) r.json().get("rounds")).get(0);
+			assertTrue(path(round, "gc", "server", "pause_ms") instanceof Number, "window server stats over HTTP: " + round.get("gc"));
+			assertTrue(path(round, "backpressure", "window", "auto_read_pauses") instanceof Number, String.valueOf(round.get("backpressure")));
+			if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")) {
+				assertTrue(path(round, "io", "server", "by_group", IoSampler.GROUP_NETTY_IO, "cpu_ms") instanceof Number, String.valueOf(round.get("io")));
+			}
+			assertEquals(null, r.json().get("faults"), "a topology alone does not make a fault run");
+			assertEquals(null, path(r.json(), "run", "faults"));
+
+			String plain = "it-control-rpc";
+			Result p = run(dir, plain, card(plain, "closed", "concurrency: 4", "2s", "500ms", "[500ms, 1.8s]", 1, "1s",
+					"{ kind: bytes, size: 1024 }", "assert:\n  errors_max: 0"), "--direct", "127.0.0.1:" + server.port());
+			assertEquals(Bench.OK, p.code(), p.out() + p.err());
+			assertEquals(null, path(p.json(), "run", "target", "server_stats_channel"), "no topology: stats over RPC as before");
+			Map<?, ?> plainRound = (Map<?, ?>) ((List<?>) p.json().get("rounds")).get(0);
+			assertTrue(path(plainRound, "gc", "server", "pause_ms") instanceof Number, String.valueOf(plainRound.get("gc")));
+		}
 	}
 
 	/**

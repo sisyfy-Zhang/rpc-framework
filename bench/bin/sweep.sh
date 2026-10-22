@@ -16,7 +16,9 @@
 #       --profiles <dir>（缺省 bench/profiles）、--suffix <s>（缺省 v1）、--out <dir>（缺省 target/sweep/run-<时间>）、--label <text>（缺省 sweep）。
 # 环境变量：BENCH_SERVER_CPUS / BENCH_CLIENT_CPUS（缺省 0-4 / 5-9）；SWEEP_SERVER_ARGS（追加给服务端，例如 "--io-threads 5"、
 #           "--flush-consolidation off"）；BENCH_HARNESS_OPTS（追加给每次 run，例如 "--io-threads 2"、"--flush-consolidation off"）；
-#           BENCH_JFR=1 时两端各录一份 JFR 到结果目录。
+#           BENCH_JFR=1 时两端各录一份 JFR 到结果目录；BENCH_CONTROL_HTTP=off 时不开 HTTP 控制端点（见下）。
+# 服务端统计：服务端另开 --http-port <端口 + 100>（HTTP 控制端点，缺省 19400），脚本写 <out>/control-topology.txt 并给每次 run 传 --topology，
+#           窗口起止的服务端统计经 GET /stats 取（IO 线程回答、不经业务执行器：执行器饱和时 RPC 的 stats() 会被拒）；BENCH_CONTROL_HTTP=off 时照旧经 RPC。
 # 退出码：0 全部跑完；1 运行出错。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
@@ -103,10 +105,20 @@ SERVER_ARGS=(${SWEEP_SERVER_ARGS:-})
 if [ "$EXECUTOR" != fixed ]; then SERVER_ARGS=(--executor "$EXECUTOR" "${SERVER_ARGS[@]}"); fi
 # shellcheck disable=SC2206
 if [ "$SERVER_OPTS" != "-" ]; then SERVER_ARGS=($SERVER_OPTS "${SERVER_ARGS[@]}"); fi
+CONTROL_TOPOLOGY=""
+if control_http_enabled; then
+  CONTROL_PORT=$((PORT + 100))
+  SERVER_ARGS+=(--http-port "$CONTROL_PORT")
+fi
 start_server rpc "$OUT/server-rpc.log" "" --port "$PORT" --host 127.0.0.1 --no-registry "${SERVER_ARGS[@]}"
+if control_http_enabled; then
+  CONTROL_TOPOLOGY="$OUT/control-topology.txt"
+  write_control_topology "$CONTROL_TOPOLOGY" "$PORT" "$CONTROL_PORT"
+  echo "server stats over the HTTP control endpoint 127.0.0.1:$CONTROL_PORT ($CONTROL_TOPOLOGY)"
+fi
 for n in "${LEVELS[@]}"; do
   echo "== rpc / $(basename "$(card_for "$n")" .yaml)"
-  run_card "$(card_for "$n")" "$PORT" "$OUT" "$LABEL" ""
+  run_card "$(card_for "$n")" "$PORT" "$OUT" "$LABEL" "" "$CONTROL_TOPOLOGY"
 done
 stop_server
 

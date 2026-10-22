@@ -120,8 +120,61 @@ class IoSamplerTest {
 		StringBuilder md = new StringBuilder();
 		IoSampler.groupTable(md, round);
 		String table = md.toString();
-		assertTrue(table.contains("| netty_io | 2 -> 2 | 1.010（1.000 / 0.010） | — | — |"), table);
-		assertTrue(table.contains("| 合计 | | 2.020 | | — |"), table);
+		assertTrue(table.contains("| netty_io | 2 -> 2 | 1.010（1.000 / 0.010） | — | — | — | — |"), table);
+		assertTrue(table.contains("| 合计 | | 2.020 | — | | — | — |"), table);
+		assertNull(delta.get("cpu_ms"), "snapshots without cpu ticks: no cpu_ms on the side");
+		assertNull(io.get("cpu_ms"), "nor per group");
+	}
+
+	@Test
+	void parsesUtimePlusStimeFromTaskStat() {
+		// 线程名里带空格与括号：从最后一个 ')' 之后数，第 14、15 项是 utime / stime
+		String stat = "4242 (rpc-client) io-1) S 4200 4200 4200 0 -1 4194368 120 0 0 0 1234 56 0 0 20 0 1 0 100 0 0 18446744073709551615";
+		assertEquals(1290L, IoSampler.cpuTicks(stat));
+		assertEquals(-1L, IoSampler.cpuTicks("garbage"));
+		assertEquals(-1L, IoSampler.cpuTicks("1 (x) S 1 2"), "too few fields");
+		assertEquals(-1L, IoSampler.cpuTicks(null));
+	}
+
+	@Test
+	void cpuTicksBecomeMillisecondsAndMicrosecondsPerRequestPerGroup() {
+		IoSampler.Snapshot before = new IoSampler.Snapshot(100, 200, 1000, 10, 4, Map.of(
+				IoSampler.GROUP_NETTY_IO, new IoSampler.GroupCounts(600, 6, 2, 1000),
+				IoSampler.GROUP_FJP, new IoSampler.GroupCounts(400, 4, 2, 500)));
+		IoSampler.Snapshot after = new IoSampler.Snapshot(1100, 700, 3000, 30, 5, Map.of(
+				IoSampler.GROUP_NETTY_IO, new IoSampler.GroupCounts(1600, 16, 2, 1350),
+				IoSampler.GROUP_FJP, new IoSampler.GroupCounts(1400, 4, 2, 600),
+				IoSampler.GROUP_JVM, new IoSampler.GroupCounts(0, 10, 1, 5)));
+		Map<String, String> flat = after.toStrings();
+		assertEquals("1350", flat.get("io.group.netty_io.cpu_ticks"));
+		assertEquals(after, IoSampler.Snapshot.fromStrings(flat), "cpu ticks round-trip through the stats map");
+
+		Map<String, Object> delta = IoSampler.delta(before, after);
+		IoSampler.perRequest(delta, 100_000);
+		Map<?, ?> byGroup = (Map<?, ?>) delta.get("by_group");
+		Map<?, ?> io = (Map<?, ?>) byGroup.get(IoSampler.GROUP_NETTY_IO);
+		assertEquals(3500L, io.get("cpu_ms"), "350 ticks x 10ms");
+		assertEquals(35.0, io.get("cpu_us_per_request"), "3500ms / 100000 requests = 35us");
+		assertEquals(1000L, ((Map<?, ?>) byGroup.get(IoSampler.GROUP_FJP)).get("cpu_ms"));
+		assertEquals(50L, ((Map<?, ?>) byGroup.get(IoSampler.GROUP_JVM)).get("cpu_ms"), "a group that appeared inside the window counts from 0");
+		assertEquals(4550L, delta.get("cpu_ms"), "the side total is the sum of the groups");
+		assertEquals(45.5, delta.get("cpu_us_per_request"));
+
+		// 一端的某次快照不带 CPU（旧服务端）：整端不出 cpu 字段，不出半套
+		IoSampler.Snapshot old = new IoSampler.Snapshot(100, 200, 1000, 10, 4, Map.of(
+				IoSampler.GROUP_NETTY_IO, new IoSampler.GroupCounts(600, 6, 2),
+				IoSampler.GROUP_FJP, new IoSampler.GroupCounts(400, 4, 2)));
+		Map<String, Object> mixed = IoSampler.delta(old, after);
+		assertNull(mixed.get("cpu_ms"));
+		assertNull(((Map<?, ?>) ((Map<?, ?>) mixed.get("by_group")).get(IoSampler.GROUP_NETTY_IO)).get("cpu_ms"));
+
+		Map<String, Object> round = Map.of("io", Map.of("client", delta, "server", mixed));
+		StringBuilder md = new StringBuilder();
+		IoSampler.groupTable(md, round);
+		String table = md.toString();
+		assertTrue(table.contains("| 线程组 | 客户端 线程数 | 客户端 切换/请求（自愿 / 非自愿） | 客户端 CPU µs/请求 | 服务端 线程数 |"), table);
+		assertTrue(table.contains("| netty_io | 2 -> 2 | 0.010（0.010 / 0.000） | 35.00 | 2 -> 2 |"), table);
+		assertTrue(table.contains("| 合计 | | 0.020 | 45.50 | |"), table);
 	}
 
 	@Test
@@ -143,6 +196,9 @@ class IoSamplerTest {
 			assertTrue(now.threads() > 1 && now.volCs() > 0, now.toString());
 			assertEquals(now.volCs(), now.groups().values().stream().mapToLong(IoSampler.GroupCounts::volCs).sum(), "groups sum to the total");
 			assertEquals(now.threads(), now.groups().values().stream().mapToInt(IoSampler.GroupCounts::threads).sum());
+			assertTrue(now.groups().values().stream().allMatch(IoSampler.GroupCounts::hasCpu), "utime + stime per group: " + now.groups());
+			assertTrue(now.groups().values().stream().mapToLong(IoSampler.GroupCounts::cpuTicks).sum() > 0, "a JVM has used some CPU");
+			assertTrue(ServerProbes.stats().containsKey("io.group.jvm.cpu_ticks"));
 			assertTrue(now.groups().containsKey(IoSampler.GROUP_JVM), now.groups().toString());
 			assertTrue(ServerProbes.stats().containsKey("io.group.jvm.vol_cs"));
 			assertTrue(ServerProbes.stats().containsKey("io.syscw"));

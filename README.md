@@ -446,6 +446,8 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   - **离群摘除**：已完成（缺省开）。按节点的超时 / 传输失败 / 过载拒绝摘除，时间驱动放回；A/B 见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。服务级熔断未做。
   - **虚拟线程 vs 固定池**：已完成对比实验（执行器缺省不变，仍是固定池）。阻塞型业务下何时换 virtual、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃，
     见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
+  - **连接数递减探针**：已完成（缺省 `connectionsPerNode = 2` 不改）。闭环 128 下每节点 2 → 8 条连接吞吐 143k → 123k 的归因：连接增多稀释两端事件循环每次唤醒的批量，
+    `netty_io` 每请求 CPU 成倍上升（压测端 +12.0、服务端 +10.2 µs），其它线程组不变；见 [docs/probes/connections-scaling.md](docs/probes/connections-scaling.md)。
   - 自适应并发限制、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
 
 ## 文档
@@ -464,6 +466,7 @@ gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连�
   - [outbound-backpressure.md](docs/probes/outbound-backpressure.md)：出站背压的机制、"只发不读"对照与正常负载下的代价
   - [fault-injection.md](docs/probes/fault-injection.md)：慢节点、杀节点、突增三组故障注入
   - [executor-blocking.md](docs/probes/executor-blocking.md)：虚拟线程 vs 固定池（阻塞型业务）、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃
+  - [connections-scaling.md](docs/probes/connections-scaling.md)：连接数递减的归因（事件循环唤醒批量被稀释、`netty_io` CPU 按线程组计量）
   - [harness-tail-latency.md](docs/probes/harness-tail-latency.md)：harness 开环尾延迟的来源与修稳
   - [nacos-timing.md](docs/probes/nacos-timing.md)：Nacos 首订阅与消失窗口的时序校准
   - [protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果

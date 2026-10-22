@@ -197,7 +197,8 @@ run      --profile <card.yaml> (--registry zk://host:port | --direct host:port[,
          [--pin-dispatcher <cpu>|off] [--pre-warmup <时长>|0] [--flush-consolidation on|off]
          [--loadbalance rr|p2c] [--cluster failfast|failover|failback] [--retries N] [--outlier-detection on|off]
          [--fault-schedule <file> | --no-faults] [--fault-variant sigterm|sigstop|toxic-timeout] [--topology <file>]
-         （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文；后两行见“故障注入”）
+         （transport: http 的卡不带 --registry / --direct；对比对象只用 --direct；harness 实现选项见下文；后两行见“故障注入”；
+          --topology 也用于没有故障的卡：给出提供者的 HTTP 控制端口，服务端统计改经 GET /stats 取，见“并发扫描与连接数扫描”）
 report   --in <目录 | 结果.json> [--out <file.md>]
 compare  --in <目录 | 结果.json> [--out <file.md>]
 crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...] [--tool-command <text>] [--tool-version <text>]
@@ -406,7 +407,19 @@ WSL2 分配 10 个 vCPU（`.wslconfig` 的 `processors=10`）时的推荐划分�
   `java` 的主线程）。每组记 `threads`（两次快照的存活线程数）、`vol_cs` / `nonvol_cs` 差值与 `vol_cs_per_request` / `nonvol_cs_per_request` /
   `cs_per_request`。各组之和等于该端的 `vol_cs` / `nonvol_cs`（同一批线程）。窗口内退出又新建的线程（例如 JIT 的动态编译线程）会让所在组出现
   小的负值，与总数的口径相同。服务端经同一个统计端点返回（键 `io.group.<组>.vol_cs` 等），旧服务端没有这些键时该端不出 `by_group`。
-  Markdown 报告在轮次表后给正式轮的分组小表。实测归因见 [docs/probes/write-queue-and-context-switches.md](probes/write-queue-and-context-switches.md)。
+- **CPU 时间按线程组**（`rounds[].io.<端>.by_group.<组>.cpu_ms` / `cpu_us_per_request`，Linux）：同一次遍历里再读每个线程的
+  `/proc/self/task/<tid>/stat` 第 14、15 项（`utime + stime`，单位 `USER_HZ`；Linux 对用户态固定为 100，即 **10ms 一个滴答**，本机 `getconf CLK_TCK` = 100），
+  组内求和、窗口起止做差：`cpu_ms` 是该组在统计窗口内用掉的 CPU 毫秒数，`cpu_us_per_request` = `cpu_ms × 1000 / window.requests`（微秒 / 请求）。
+  各组之和另记为该端的 `io.<端>.cpu_ms` / `cpu_us_per_request`（只是存活线程之和：窗口内退出的线程其 CPU 时间丢失，与切换计数同一口径；
+  它与 `rounds[].cpu` 的核忙碌率是两种量法——后者是绑定核组的忙碌率，含其它进程与中断）。服务端键 `io.group.<组>.cpu_ticks`；
+  两次快照里任一组没有 CPU 值（旧服务端、`stat` 解析不了）时该端整端不出 CPU 字段。用途：回答"多出来的 CPU 花在哪组线程上"——
+  例如连接数增加时压测端 `netty_io` 与 `fjp`（虚拟线程载体）在同一组核上的份额此消彼长。
+  读数时的三点口径：① **各组之和低于核忙碌率折算值**——`rounds[].cpu` 的忙碌率按核计，含没有记到任何线程头上的时间（loopback 收包的 softirq 等）与同组核上的
+  其它进程；任务 21 冒烟里压测端按线程求和 37.9 µs/请求、按核忙碌率折算约 50.8 µs/请求。所以用组间份额与随配置的变化论证，不拿两者直接相减。
+  ② **`jvm` 组可能出现负值**：JIT 的动态编译线程在窗口内退出、又新建同名线程时，退出线程累计的 CPU 从结束快照里消失（与切换计数同一口径），
+  该端的 `cpu_ms` 也随之略偏低。③ **控制端点带来的线程**：经 HTTP 控制端点取统计时，服务端 `netty_io` 多 2 个几乎空闲的线程（见
+  [并发扫描与连接数扫描](#并发扫描与连接数扫描)），压测端 `other` 组多 JDK HttpClient 的 3 ~ 4 个线程（约 0.05 µs/请求）；线程数因此不能与此前的结果直接比。
+  Markdown 报告在轮次表后给正式轮的分组小表（每组：线程数、切换/请求、CPU µs/请求，两端各三列）。实测归因见 [docs/probes/write-queue-and-context-switches.md](probes/write-queue-and-context-switches.md)。
 - **出站背压**（`rounds[].backpressure`，只有 rpc 服务端）：服务端统计端点（`BenchService.stats()`，与 GC / io 同一次调用）另回传
   `RpcServer.autoReadPauses()` / `outboundOverloadRejections()` 的累计值（键 `backpressure.auto_read_pauses` / `backpressure.outbound_overload_rejections`），
   压测端在窗口起止各取一次做差；同两个时刻再取压测端 `RpcClient` 的 `sendBufferRejections()` / `unwritableConnectionSwitches()`
@@ -670,16 +683,29 @@ bash bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-v1,compare-closed64-rpc-v1
 bash bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-direct-v1,compare-closed64-rpc-direct-v1   # 同上，服务端 direct（取自卡片的 target.server_executor）
 SWEEP_SERVER_ARGS="--flush-consolidation off" BENCH_HARNESS_OPTS="--flush-consolidation off" bash bench/bin/sweep.sh --cards ...   # flush 合并 A/B 的 off 一侧
 SWEEP_SERVER_ARGS="--outbound-backpressure off" bash bench/bin/sweep.sh --cards ...   # 出站背压 A/B 的 off 一侧（服务端开关；客户端不变）
+BENCH_HARNESS_OPTS="--io-threads 2" bash bench/bin/sweep.sh --cards sweep-c8-closed128-rpc-v1   # 连接数探针：8 条连接落在压测端 2 个事件循环上
+bash bench/bin/sweep.sh --cards sweep-closed128-rpc-direct-v1,sweep-c8-closed128-rpc-direct-v1   # 连接数探针：服务端 direct（排除业务池）
 ```
+
+**服务端统计走 HTTP 控制端点**：`sweep.sh` / `compare.sh` 给 rpc 服务端另开 `--http-port <监听端口 + 100>`（sweep 缺省 19400），把"编号 1 → 公布地址 + 控制端口"
+写进 `<out>/control-topology.txt`（compare：`control-topology-<transport>.txt`；格式同 `fault-topology.sh` 的拓扑文件），每次 `run` 带 `--topology <它>`。
+harness 见到该提供者有控制端口，即使单提供者、卡片没有时间线也建统计通道，窗口起止的服务端统计（GC / io / 背压 / 执行器）经 `GET /stats` 取——
+在 IO 线程上回答、**不经业务执行器**；经 RPC 的 `stats()` 与压测请求排同一个执行器，执行器饱和时会被拒，该端只能记 `unknown`（任务 20 的 E 组）。
+实际通道写进 `run.target.server_stats_channel`。`BENCH_CONTROL_HTTP=off` 时不开端点、不传 `--topology`，统计照旧经 RPC（回退）。
+代价：服务端进程多两个几乎空闲的线程（`bench-http-boss` 与一个 `bench-http-worker`，归入 `netty_io` 组，`by_group` 的 `threads` 因此比以前多 2；
+任务 21 冒烟：c2 服务端 `netty_io` 9.36 µs/请求，经 RPC 取统计时 9.47，可以忽略），压测端 `other` 组多 JDK HttpClient 的 3 ~ 4 个线程（约 0.05 µs/请求）；
+两端线程数因此不能与此前的结果直接比；对比对象（gRPC / Dubbo）的服务端没有这个端点，照旧经各自的统计调用。
 
 `--cards <id,id,...>` 只跑列出的卡（`<profiles>/<id>.yaml`，不加后缀），各卡的 `target.server_executor` 必须一致；
 `target.server_work` / `server_work_mode` / `server_queue_capacity` 同样必须一致，写了就给服务端传 `--work` / `--work-mode` / `--executor-queue`
 （执行器对照卡就是这样跑的：`bash bench/bin/sweep.sh --cards exec-virtual-work2ms-closed64-v1`，fixed / virtual 各起一次服务端）。
 
 目的：找吞吐不再随并发增长的点，以及此时两侧的 CPU——服务端核饱和是服务端上限，`client_bound`（压测端核 > 90%）是发压上限，两侧都没满说明瓶颈在别处。
-任务 11 冒烟的观察：128 并发之后吞吐不再随并发增长、两侧核都只用到六成左右，jstack 看到服务端只有 2 个 worker 事件循环在干活且都接近满载——
-**限制吞吐的是连接数（= 服务端实际在干活的 IO 线程数），不是并发**；把每节点连接数加到 8 之后 8 个 worker 都只用到三分之一左右，瓶颈转到压测端（`client_bound`）。
-所以并发扫描与连接数扫描要一起看，`RpcServerConfig.ioThreads` 配多少都只有"连接数"个线程会被用上。
+任务 11 冒烟（flush 合并之前）的观察：128 并发之后吞吐不再随并发增长、两侧核都只用到六成左右，jstack 看到服务端只有 2 个 worker 事件循环在干活且都接近满载，
+把每节点连接数加到 8 之后吞吐随之上升、瓶颈转到压测端（`client_bound`）。**这是 flush 合并之前的现象。**
+合并（1.0.0 起缺省开）之后同一扫描反过来：每节点 2 / 4 / 8 条连接 = 143.0k / 123.1k / 122.9k req/s——加连接稀释了两端每个事件循环每次唤醒处理的批量，
+每请求读写系统调用与 `netty_io` 每请求 CPU 成倍上升，归因见 [docs/probes/connections-scaling.md](probes/connections-scaling.md)。
+两点不变：并发扫描与连接数扫描要一起看；`RpcServerConfig.ioThreads` 配多少都只有"连接数"个线程会被用上。缺省每节点 2 条连接保留。
 
 ## 故障注入
 
@@ -808,6 +834,7 @@ core 没有为此改动。
 - **闭环吞吐可能受限于压测端**：每次调用在发压虚拟线程与 Netty IO 线程之间各交接一次（RPC 与 HTTP 目标相同），每次调用的固定 CPU 开销
   比 wrk 这类单线程事件循环工具高；压测端核饱和时，闭环卡的吞吐是 harness 的发压上限而不是服务端上限。报告的 CPU 两列与
   `validity.client_bound` 会把这种情况标出来；本机的容量对照见[交叉验证](#交叉验证)的闭环报告。
-- **sweep.sh / compare.sh 经 RPC 取服务端统计**：窗口起止的服务端统计（执行器拒绝、排队等待、上下文切换、GC）由 `BenchService.stats()` 这个 RPC 取回，
-  它与业务请求走同一个业务执行器；执行器饱和时它同样被拒，该端记 `unknown`（任务 20 的 `exec-fixed-work10ms-closed1500-v1`：拒绝数只能取自压测端的错误分类）。
-  `fault-run.sh` 的拓扑已改走 HTTP 控制端点（`--http-port`，IO 线程回答）；sweep.sh / compare.sh 也改走它是待做项。
+- **服务端统计的通道**：`fault-run.sh`、`sweep.sh`、`compare.sh`（rpc 服务端）都经 HTTP 控制端点（`--http-port`，IO 线程回答）取服务端统计；
+  直接用 `bench-run.sh --direct` 而不给 `--topology`、`BENCH_CONTROL_HTTP=off`、或对比对象的服务端时，统计仍经 RPC（`BenchService.stats()` 等）取回，
+  它与业务请求走同一个业务执行器，执行器饱和时同样被拒、该端记 `unknown`（任务 20 的 `exec-fixed-work10ms-closed1500-v1` 就是这样：
+  拒绝数只能取自压测端的错误分类）。

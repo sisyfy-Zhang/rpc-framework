@@ -81,6 +81,7 @@ class ComparisonCardsTest {
 		pairs.add(new String[] { "compare-closed64-rpc-v1", "sweep-c1-closed64-rpc-v1", "1" });
 		pairs.add(new String[] { "compare-closed64-rpc-direct-v1", "sweep-c1-closed64-rpc-direct-v1", "1" });
 		pairs.add(new String[] { "sweep-closed128-rpc-v1", "sweep-c8-closed128-rpc-v1", "8" });
+		pairs.add(new String[] { "sweep-closed128-rpc-direct-v1", "sweep-c8-closed128-rpc-direct-v1", "8" });
 		for (String[] pair : pairs) {
 			List<String> base = keyLines(PROFILES.resolve(pair[0] + ".yaml"));
 			List<String> variant = new ArrayList<>(keyLines(PROFILES.resolve(pair[1] + ".yaml")));
@@ -106,7 +107,9 @@ class ComparisonCardsTest {
 	void directExecutorVariantsDifferOnlyInServerExecutor() throws Exception {
 		List<String[]> pairs = List.of(new String[] { "compare-closed64-rpc-v1", "compare-closed64-rpc-direct-v1" },
 				new String[] { "compare-open10k-rpc-v1", "compare-open10k-rpc-direct-v1" },
-				new String[] { "sweep-c1-closed64-rpc-v1", "sweep-c1-closed64-rpc-direct-v1" });
+				new String[] { "sweep-c1-closed64-rpc-v1", "sweep-c1-closed64-rpc-direct-v1" },
+				new String[] { "sweep-closed128-rpc-v1", "sweep-closed128-rpc-direct-v1" },
+				new String[] { "sweep-c8-closed128-rpc-v1", "sweep-c8-closed128-rpc-direct-v1" });
 		for (String[] pair : pairs) {
 			List<String> base = keyLines(PROFILES.resolve(pair[0] + ".yaml"));
 			List<String> variant = new ArrayList<>(keyLines(PROFILES.resolve(pair[1] + ".yaml")));

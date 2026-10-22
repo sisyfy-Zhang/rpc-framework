@@ -30,6 +30,11 @@ import java.util.Map;
  *       （ForkJoinPool：虚拟线程载体与 commonPool）、{@value #GROUP_TIMERS}（JDK 的 CompletableFuture 延迟调度线程、虚拟线程 unparker）、
  *       {@value #GROUP_HARNESS}（压测端的调度 / 开环工作者线程）、{@value #GROUP_JVM}（GC / JIT / VM 内部线程）、{@value #GROUP_OTHER}
  *       （其余，包括名为 {@code java} 的主线程）。</li>
+ *   <li>{@code by_group.<组>.cpu_ms}：同一次遍历里再读 {@code /proc/self/task/<tid>/stat} 的 {@code utime + stime}（第 14、15 项，
+ *       单位是时钟滴答 {@code USER_HZ}；Linux 对用户态的 ABI 固定为 100，即 10ms 一个滴答，{@link #MS_PER_TICK}），组内求和后取窗口差值，
+ *       每请求值 {@code cpu_us_per_request} = 差值 / 窗口内完成的请求数（微秒）。该端各组之和另记为该端的 {@code cpu_ms} /
+ *       {@code cpu_us_per_request}。与切换计数同一个代价：窗口内退出的线程其 CPU 时间在结束快照里消失。任一线程的 {@code stat} 解析不了时
+ *       整个快照不带 CPU（旧服务端同样没有），该端的 {@code by_group} 不出 CPU 字段。</li>
  * </ul>
  * 读文件的开销：每次快照读 1 + 2 × 线程数个小文件（百个量级），只在窗口起止各一次，在采样虚拟线程上，不在压测路径上。
  */
@@ -38,7 +43,10 @@ final class IoSampler {
 	static final Path PROC_SELF_IO = Path.of("/proc/self/io");
 	static final Path PROC_SELF_TASK = Path.of("/proc/self/task");
 	static final String SOURCE = "/proc/self/io (syscr, syscw) + sum of /proc/self/task/*/status (voluntary / nonvoluntary_ctxt_switches), "
-			+ "grouped by /proc/self/task/*/comm prefix (by_group), steady window";
+			+ "grouped by /proc/self/task/*/comm prefix (by_group; cpu_ms = utime + stime of /proc/self/task/*/stat, USER_HZ = 100), steady window";
+
+	/** {@code /proc/<pid>/task/<tid>/stat} 的 utime / stime 单位是 {@code USER_HZ}，Linux 对用户态固定为 100（{@code getconf CLK_TCK}）。 */
+	static final long MS_PER_TICK = 10;
 
 	static final String GROUP_NETTY_IO = "netty_io";
 	static final String GROUP_BIZ = "biz_pool";
@@ -108,8 +116,17 @@ final class IoSampler {
 		return GROUP_OTHER;
 	}
 
-	/** 一组线程的累计值。 */
-	record GroupCounts(long volCs, long nonvolCs, int threads) {
+	/** 一组线程的累计值；{@code cpuTicks} 是组内各线程 {@code utime + stime} 之和（时钟滴答），-1 = 没有（旧服务端、读不到）。 */
+	record GroupCounts(long volCs, long nonvolCs, int threads, long cpuTicks) {
+
+		/** 不带 CPU 时间（旧服务端、测试）。 */
+		GroupCounts(long volCs, long nonvolCs, int threads) {
+			this(volCs, nonvolCs, threads, -1);
+		}
+
+		boolean hasCpu() {
+			return cpuTicks >= 0;
+		}
 	}
 
 	/**
@@ -141,6 +158,9 @@ final class IoSampler {
 					out.put("io.group." + g + ".vol_cs", String.valueOf(c.volCs()));
 					out.put("io.group." + g + ".nonvol_cs", String.valueOf(c.nonvolCs()));
 					out.put("io.group." + g + ".threads", String.valueOf(c.threads()));
+					if (c.hasCpu()) {
+						out.put("io.group." + g + ".cpu_ticks", String.valueOf(c.cpuTicks()));
+					}
 				}
 			}
 			return out;
@@ -156,8 +176,9 @@ final class IoSampler {
 				for (String g : GROUPS) {
 					String vol = in.get("io.group." + g + ".vol_cs");
 					if (vol != null) {
+						String cpu = in.get("io.group." + g + ".cpu_ticks");
 						groups.put(g, new GroupCounts(Long.parseLong(vol.trim()), Long.parseLong(in.get("io.group." + g + ".nonvol_cs").trim()),
-								Integer.parseInt(in.get("io.group." + g + ".threads").trim())));
+								Integer.parseInt(in.get("io.group." + g + ".threads").trim()), cpu == null ? -1 : Long.parseLong(cpu.trim())));
 					}
 				}
 				return new Snapshot(Long.parseLong(in.get("io.syscr").trim()), Long.parseLong(in.get("io.syscw").trim()),
@@ -183,15 +204,22 @@ final class IoSampler {
 			long nonvol = 0;
 			int threads = 0;
 			Map<String, long[]> byGroup = new LinkedHashMap<>();
+			boolean cpuKnown = true;
 			try (DirectoryStream<Path> tasks = Files.newDirectoryStream(PROC_SELF_TASK)) {
 				for (Path task : tasks) {
 					List<String> status;
 					String comm;
+					String stat;
 					try {
 						status = Files.readAllLines(task.resolve("status"), StandardCharsets.UTF_8);
 						comm = Files.readString(task.resolve("comm"), StandardCharsets.UTF_8).strip();
+						stat = Files.readString(task.resolve("stat"), StandardCharsets.UTF_8);
 					} catch (IOException e) {
 						continue; // 线程在列目录与读文件之间退出了
+					}
+					long ticks = cpuTicks(stat);
+					if (ticks < 0) {
+						cpuKnown = false;
 					}
 					Map<String, Long> f = fields(status, ':');
 					long v = f.getOrDefault("voluntary_ctxt_switches", 0L);
@@ -199,10 +227,11 @@ final class IoSampler {
 					vol += v;
 					nonvol += n;
 					threads++;
-					long[] g = byGroup.computeIfAbsent(group(comm), k -> new long[3]);
+					long[] g = byGroup.computeIfAbsent(group(comm), k -> new long[4]);
 					g[0] += v;
 					g[1] += n;
 					g[2]++;
+					g[3] += Math.max(ticks, 0);
 				}
 			}
 			Long syscr = io.get("syscr");
@@ -211,10 +240,35 @@ final class IoSampler {
 				return null;
 			}
 			Map<String, GroupCounts> groups = new LinkedHashMap<>();
-			byGroup.forEach((g, c) -> groups.put(g, new GroupCounts(c[0], c[1], (int) c[2])));
+			boolean withCpu = cpuKnown;
+			byGroup.forEach((g, c) -> groups.put(g, new GroupCounts(c[0], c[1], (int) c[2], withCpu ? c[3] : -1)));
 			return new Snapshot(syscr, syscw, vol, nonvol, threads, groups);
 		} catch (IOException | RuntimeException e) {
 			return null;
+		}
+	}
+
+	/**
+	 * {@code /proc/<pid>/task/<tid>/stat} 一行里的 {@code utime + stime}（第 14、15 项，时钟滴答）；解析不了时 -1。
+	 * 第 2 项是括号里的线程名，名字本身可能含空格与括号，所以从最后一个 {@code ')'} 之后数：其后第 1 个字段是第 3 项（state）。
+	 */
+	static long cpuTicks(String stat) {
+		if (stat == null) {
+			return -1;
+		}
+		int close = stat.lastIndexOf(')');
+		if (close < 0) {
+			return -1;
+		}
+		String[] rest = stat.substring(close + 1).trim().split("\\s+");
+		// rest[0] = 第 3 项 state，utime = 第 14 项 = rest[11]，stime = 第 15 项 = rest[12]
+		if (rest.length < 13) {
+			return -1;
+		}
+		try {
+			return Long.parseLong(rest[11]) + Long.parseLong(rest[12]);
+		} catch (NumberFormatException e) {
+			return -1;
 		}
 	}
 
@@ -246,19 +300,31 @@ final class IoSampler {
 		out.put("threads", before.threads() + " -> " + after.threads());
 		if (!before.groups().isEmpty() && !after.groups().isEmpty()) {
 			Map<String, Object> byGroup = new LinkedHashMap<>();
+			// 两次快照的每一组都带 CPU 时间才出 cpu_ms（旧服务端、读不到 stat 时整端不出，不出半套）
+			boolean cpu = before.groups().values().stream().allMatch(GroupCounts::hasCpu)
+					&& after.groups().values().stream().allMatch(GroupCounts::hasCpu);
+			long cpuTotalMs = 0;
 			for (String g : GROUPS) {
 				GroupCounts b = before.groups().get(g);
 				GroupCounts a = after.groups().get(g);
 				if (a == null && b == null) {
 					continue;
 				}
-				GroupCounts b0 = b == null ? new GroupCounts(0, 0, 0) : b;
-				GroupCounts a0 = a == null ? new GroupCounts(0, 0, 0) : a;
+				GroupCounts b0 = b == null ? new GroupCounts(0, 0, 0, 0) : b;
+				GroupCounts a0 = a == null ? new GroupCounts(0, 0, 0, 0) : a;
 				Map<String, Object> d = new LinkedHashMap<>();
 				d.put("threads", b0.threads() + " -> " + a0.threads());
 				d.put("vol_cs", a0.volCs() - b0.volCs());
 				d.put("nonvol_cs", a0.nonvolCs() - b0.nonvolCs());
+				if (cpu) {
+					long ms = (a0.cpuTicks() - b0.cpuTicks()) * MS_PER_TICK;
+					d.put("cpu_ms", ms);
+					cpuTotalMs += ms;
+				}
 				byGroup.put(g, d);
+			}
+			if (cpu) {
+				out.put("cpu_ms", cpuTotalMs);
 			}
 			out.put("by_group", byGroup);
 		}
@@ -267,12 +333,16 @@ final class IoSampler {
 
 	/**
 	 * 在一端的差值里加上每请求值：{@code requests} = 窗口内完成的请求数（成功 + 失败）；为 0 时记 null。
-	 * {@code by_group} 的每组同样加上 {@code vol_cs_per_request} / {@code nonvol_cs_per_request} / {@code cs_per_request}（二者之和）。
+	 * {@code by_group} 的每组同样加上 {@code vol_cs_per_request} / {@code nonvol_cs_per_request} / {@code cs_per_request}（二者之和），
+	 * 有 {@code cpu_ms} 时（该端与每组）再加 {@code cpu_us_per_request}（微秒）。
 	 */
 	static void perRequest(Map<String, Object> side, long requests) {
 		for (String key : List.of("syscr", "syscw", "vol_cs", "nonvol_cs")) {
 			Object v = side.get(key);
 			side.put(key + "_per_request", perRequest(v, requests));
+		}
+		if (side.get("cpu_ms") instanceof Number ms) {
+			side.put("cpu_us_per_request", perRequest(ms.doubleValue() * 1000, requests));
 		}
 		if (side.get("by_group") instanceof Map<?, ?> byGroup) {
 			Map<String, Object> out = new LinkedHashMap<>();
@@ -286,6 +356,9 @@ final class IoSampler {
 					copy.put("nonvol_cs_per_request", perRequest(nonvol, requests));
 					copy.put("cs_per_request", vol instanceof Number a && nonvol instanceof Number b
 							? perRequest(a.longValue() + b.longValue(), requests) : null);
+					if (copy.get("cpu_ms") instanceof Number ms) {
+						copy.put("cpu_us_per_request", perRequest(ms.doubleValue() * 1000, requests));
+					}
 					out.put(String.valueOf(g), copy);
 				} else {
 					out.put(String.valueOf(g), d);
@@ -332,14 +405,16 @@ final class IoSampler {
 	}
 
 	/**
-	 * Markdown 小表：一个轮次两端按线程组的每请求上下文切换（自愿 + 非自愿，括号内为自愿 / 非自愿）与窗口末的存活线程数。
-	 * 没有分组的一端整列记 —。
+	 * Markdown 小表：一个轮次两端按线程组的每请求上下文切换（自愿 + 非自愿，括号内为自愿 / 非自愿）、每请求 CPU 时间（微秒，
+	 * {@code cpu_us_per_request}）与窗口起止的存活线程数。没有分组的一端整列记 —，没有 CPU 时间的一端（旧服务端）CPU 列记 —。
 	 */
 	static void groupTable(StringBuilder md, Map<?, ?> round) {
-		md.append("| 线程组 | 客户端 线程数 | 客户端 切换/请求（自愿 / 非自愿） | 服务端 线程数 | 服务端 切换/请求（自愿 / 非自愿） |\n")
-				.append("|---|---|---|---|---|\n");
+		md.append("| 线程组 | 客户端 线程数 | 客户端 切换/请求（自愿 / 非自愿） | 客户端 CPU µs/请求 | 服务端 线程数 | 服务端 切换/请求（自愿 / 非自愿） | 服务端 CPU µs/请求 |\n")
+				.append("|---|---|---|---|---|---|---|\n");
 		double[] totals = new double[2];
 		boolean[] any = new boolean[2];
+		double[] cpuTotals = new double[2];
+		boolean[] anyCpu = new boolean[2];
 		for (String g : GROUPS) {
 			if (groupField(round, "client", g, "vol_cs") == null && groupField(round, "server", g, "vol_cs") == null) {
 				continue;
@@ -359,11 +434,23 @@ final class IoSampler {
 					any[i] = true;
 					md.append(" | ").append(fmt(cs)).append("（").append(fmt(vol)).append(" / ").append(fmt(nonvol)).append("）");
 				}
+				if (groupField(round, side, g, "cpu_us_per_request") instanceof Number cpu) {
+					cpuTotals[i] += cpu.doubleValue();
+					anyCpu[i] = true;
+					md.append(" | ").append(fmt2(cpu));
+				} else {
+					md.append(" | —");
+				}
 				i++;
 			}
 			md.append(" |\n");
 		}
-		md.append("| 合计 | | ").append(any[0] ? fmt(totals[0]) : "—").append(" | | ").append(any[1] ? fmt(totals[1]) : "—").append(" |\n");
+		md.append("| 合计 | | ").append(any[0] ? fmt(totals[0]) : "—").append(" | ").append(anyCpu[0] ? fmt2(cpuTotals[0]) : "—")
+				.append(" | | ").append(any[1] ? fmt(totals[1]) : "—").append(" | ").append(anyCpu[1] ? fmt2(cpuTotals[1]) : "—").append(" |\n");
+	}
+
+	private static String fmt2(Object value) {
+		return value instanceof Number n ? String.format(Locale.ROOT, "%.2f", n.doubleValue()) : "—";
 	}
 
 	private static String fmt(Object value) {
