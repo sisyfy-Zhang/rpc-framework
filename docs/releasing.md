@@ -132,7 +132,7 @@ gpg --batch --yes --delete-secret-and-public-key <FINGERPRINT>
 把上传地址指向本机一个没人监听的端口，并跳过 install（免得把测试签名的 1.0.0 装进本地仓库）——这条命令与 release.yml 的 deploy 步骤逐字相同，
 只多了假凭据、测试密钥与上传地址。**还要用与 CI 相同的 Maven 版本**：CI（ci.yml / release.yml）用 `./mvnw`，版本由 `.mvn/wrapper/maven-wrapper.properties` 固定为 3.9.12，
 本地演练同样用 `./mvnw`。bundle 的内容随 Maven 与 central-publishing 的版本组合而变：此前 CI 用 runner 镜像自带的 Maven，
-ubuntu-24.04 镜像 20261018 升到 3.10.0（resolver 2）后 bundle 混进了本地仓库跟踪文件（pitfalls 第 37 条）。
+ubuntu-24.04 镜像 20261018 升到 3.10.0（resolver 2）后 bundle 混进了本地仓库跟踪文件。
 演练后核对 bundle 里只有 `io/github/sisyfy-zhang/<artifactId>/<版本>/` 下的文件，没有 `maven-metadata-*.xml` 与 `_remote.repositories`：
 
 ```bash

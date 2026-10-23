@@ -105,7 +105,7 @@ final class HttpCallTarget implements CallTarget {
 	private final byte[] payload;
 	/**
 	 * 请求体：包装 {@link #payload} 的堆缓冲区，构造时建一次，每次请求用 {@code retainedDuplicate()}（独立读写指针，
-	 * 编码器写完释放的是这份复制）。调用方是虚拟线程：这里不碰 Netty 的池化分配器（docs/pitfalls.md 第 32 条），
+	 * 编码器写完释放的是这份复制）。调用方是虚拟线程：这里不碰 Netty 的池化分配器，
 	 * HTTP 头的缓冲区由编码器在事件循环上分配。
 	 */
 	private final ByteBuf payloadContent;

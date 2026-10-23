@@ -38,8 +38,8 @@ public @interface RpcReference {
 	/**
 	 * 注入时等待提供者出现的上限（毫秒），默认 0 = 不等待。大于 0 时注入（即 {@code RpcClient.reference}）阻塞到该服务的
 	 * 提供者视图非空，超时以 {@code RpcException} 让 bean 创建失败——应用宁可起不来，也不要带着"第一批调用必然
-	 * No available provider"的引用对外服务。注意它会让容器 refresh 等待这么久；registered ≠ discovered 的背景见
-	 * docs/pitfalls.md 第 29 条。
+	 * No available provider"的引用对外服务。注意它会让容器 refresh 等待这么久（背景：registered ≠ discovered，
+	 * 提供者注册完成不等于消费者已经看到它）。
 	 */
 	long awaitProvidersMs() default 0;
 }

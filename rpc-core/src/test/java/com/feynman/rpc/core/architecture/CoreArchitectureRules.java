@@ -77,7 +77,7 @@ final class CoreArchitectureRules {
 			});
 
 	/**
-	 * 调用方线程与服务端业务线程不碰池化分配器（docs/pitfalls.md 第 32 条）：虚拟线程没有分配器的线程缓存、在 PoolArena
+	 * 调用方线程与服务端业务线程不碰池化分配器：虚拟线程没有分配器的线程缓存、在 PoolArena
 	 * 上竞争锁，{@code PoolArena.reallocate} 还会在 synchronized 内取锁、钉住载体线程。请求与回包都只在这些线程上序列化，
 	 * 帧缓冲区由编码器在事件循环上分配。
 	 */
@@ -85,7 +85,7 @@ final class CoreArchitectureRules {
 		return noClasses().that(callerSide)
 				.should().callMethodWhere(TOUCHES_NETTY_ALLOCATOR)
 				.because("caller and business threads (often virtual threads) must not allocate from Netty's pooled allocator; "
-						+ "the encoder allocates the frame on the event loop (see OutboundBody, docs/pitfalls.md #32)");
+						+ "the encoder allocates the frame on the event loop (see OutboundBody)");
 	}
 
 	private CoreArchitectureRules() {

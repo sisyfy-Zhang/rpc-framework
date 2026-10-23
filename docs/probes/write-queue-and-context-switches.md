@@ -3,7 +3,7 @@
 **结论：每连接写队列在 flush 合并之上没有收益、反而变慢（闭环 2 连接 −5.6% / −10.6%、1 连接 −11.8% / −6.8%，开环 p99 回退），已回退；
 任务 14 之后每请求剩下的约 0.25 次上下文切换，主体是客户端虚拟线程的唤醒（约 0.22）与服务端业务池的接活（约 0.19），不在写出路径上。**
 
-回答阶段 2a 调研（[transport-path-comparison.md](../research/transport-path-comparison.md)）候选 #2——每连接写队列（T3-b，gRPC `WriteQueue` /
+回答阶段 2a 传输路径调研候选 #2——每连接写队列（T3-b，gRPC `WriteQueue` /
 Dubbo `BatchExecutorQueue` 的共同设计）——在 flush 合并（任务 14，[flush-and-executor.md](flush-and-executor.md)）之上还值多少，
 并回答"剩下的上下文切换是谁的"。数据来自 `bench/bin/sweep.sh`，原始 JSON / Markdown 在 WSL 的 `~/t15/out/formal/`（不入库）；
 表格由那些 JSON 机械整理（每份结果取正式轮），数字未改动。

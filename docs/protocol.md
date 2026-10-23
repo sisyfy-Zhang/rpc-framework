@@ -170,7 +170,7 @@ attachments 格式错误或超限**不关连接**：帧边界由头部长度字�
 | 每次发送时刷新 | 每一次实际发送（含 failover 重试）都按那一刻的剩余时间重写 `rpc.timeout`；`rpc.deadline` 不刷新 |
 | 取整 | 剩余纳秒向上取整到毫秒，最小为 1（未过期的调用不会因取整被服务端判死） |
 | 预算耗尽 | 剩余 ≤ 0 时不再发送，直接以 `RpcDeadlineExceededException` 结束 |
-| 同步等待的第二道上界 | 超时由在途表的定时器给出；同步代理方法另外最多只等"deadline 剩余时间 + `syncWaitGrace`"（`rpc.client.sync-wait-grace`，缺省 1s），定时器没按时触发时也抛 `RpcDeadlineExceededException`（消息含 "deadline timer did not fire within grace"）并让该请求失败。正常情况下定时器总是先到，grace 不改变超时语义；异步方法（返回 `CompletableFuture`）不受它约束，调用方自带 `orTimeout`。见 pitfalls 第 34 条 |
+| 同步等待的第二道上界 | 超时由在途表的定时器给出；同步代理方法另外最多只等"deadline 剩余时间 + `syncWaitGrace`"（`rpc.client.sync-wait-grace`，缺省 1s），定时器没按时触发时也抛 `RpcDeadlineExceededException`（消息含 "deadline timer did not fire within grace"）并让该请求失败。正常情况下定时器总是先到，grace 不改变超时语义；异步方法（返回 `CompletableFuture`）不受它约束，调用方自带 `orTimeout`。 |
 
 **服务端**
 
@@ -481,7 +481,7 @@ serializer 字节是各实现的稳定标识，一旦分配不再更改。
 | 序列化返回值时序列化器抛出 `Error`（对象图过深的 `StackOverflowError` 等；message 以 `failed to serialize result:` 开头，含 Error 类名） | SERIALIZATION_ERROR |
 | 组装回包本身失败（例如异常的 `getMessage` 抛出；message 以 `failed to build reply:` 开头，只含类名） | SERVER_ERROR |
 
-回包的 body 由服务端业务线程只备好字节（返回值的序列化结果 / 错误信封的字段），帧缓冲区由编码器在连接的 IO 线程上按确切长度一次分配写出；这不改变线上格式，只决定"谁分配缓冲区"（见 docs/pitfalls.md 第 32 条）。
+回包的 body 由服务端业务线程只备好字节（返回值的序列化结果 / 错误信封的字段），帧缓冲区由编码器在连接的 IO 线程上按确切长度一次分配写出；这不改变线上格式，只决定"谁分配缓冲区"。
 
 回程 attachments 非法时，服务端丢弃原结果（包括 OK 的返回值），改回不带 attachments 的 `SERVER_ERROR`：业务方法可能已经执行，调用方却拿不到返回值。因此 Filter 写回程 attachments 时必须保证合法（只用非 null 字符串、单项 ≤ 65535 字节、段总长 ≤ 64 KiB）。
 

@@ -1,5 +1,5 @@
 # 阶段 0 的 CI：每次 push / PR 跑全量构建与三项专门检查。
-# 只做相对正确性检查，不产出任何性能数字（压测数字只来自固定本机，见 README 路线图）。
+# 只做相对正确性检查，不产出任何性能数字（压测数字只来自固定压测机）。
 name: ci
 
 on:
@@ -19,7 +19,7 @@ env:
   # -B 非交互、-ntp 关掉下载进度日志（不用 MAVEN_ARGS 这个名字：Maven 3.9 会自动读取它，显式再传一遍会重复）
   MVN_FLAGS: -B -ntp
 # 所有构建都走 ./mvnw：Maven 版本由 .mvn/wrapper/maven-wrapper.properties 固定（3.9.12，与本机 / WSL 压测机一致），
-# 不随 runner 镜像升级漂移（镜像 20261018 把 Maven 换成 3.10 / resolver 2，见 pitfalls 第 37 条）
+# 不随 runner 镜像升级漂移（镜像 20261018 把 Maven 换成 3.10 / resolver 2）
 # 所有 actions 按 commit SHA 固定（行尾注释是对应 tag；OpenSSF Scorecard 的 Pinned-Dependencies 检查）。
 # 升级时用 gh api repos/<owner>/<repo>/git/ref/tags/<tag> 查新 SHA（注解 tag 再解一层到 commit），ci / release / codeql / scorecard 四个文件一起改。
 

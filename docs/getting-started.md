@@ -4,11 +4,11 @@
 本文所有 Java 与 YAML 代码都**原样取自 `rpc-examples` 模块**（集成测试 `DocsSnippetsTest` 会逐字核对，`ExamplesEndToEndTest`
 会把这两个应用真正跑一遍），所以照抄就能工作。
 
-> 不用 Spring？看 README 的[纯 Java 快速开始](../README.md#1-纯-java)，同样的接口，`RpcServer.builder()` / `RpcClient.builder()` 各十几行。
+> 不用 Spring？看第 10 节[纯 Java](#10-不用-spring纯-java)，同样的接口，`RpcServer.builder()` / `RpcClient.builder()` 各十几行。
 
 ## 目录
 
-1. [准备：JDK、构建本仓库](#1-准备)
+1. [准备：JDK、构建本仓库](#1-准备)（[1.1 模块一览](#11-模块一览)）
 2. [新建空白 Boot 4 工程并加依赖](#2-新建空白-boot-4-工程并加依赖)
 3. [起一个 ZooKeeper](#3-起一个-zookeeper)
 4. [定义接口与 DTO（以及要遵守的约束）](#4-定义接口与-dto)
@@ -17,6 +17,8 @@
 7. [验证调用](#7-验证调用)（[7.1 指标](#71-指标)）
 8. [上线前再看一眼](#8-上线前再看一眼)
 9. [常见错误对照表](#9-常见错误对照表)
+10. [不用 Spring：纯 Java](#10-不用-spring纯-java)
+11. [已知限制](#11-已知限制)
 
 ## 1. 准备
 
@@ -31,6 +33,27 @@ git clone https://github.com/sisyfy-Zhang/rpc-framework.git
 cd rpc-framework
 mvn install -DskipTests
 ```
+
+### 1.1 模块一览
+
+发布到 Central 的模块都在 `rpc-bom` 里；后五行是仓库内部模块，不发布。
+
+| 模块 | 作用 | 你需要依赖它吗 |
+|---|---|---|
+| `rpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
+| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本，只管本框架模块、不覆盖第三方版本（用法见[第 2 节](#2-新建空白-boot-4-工程并加依赖)） | 推荐 |
+| `rpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
+| `rpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
+| `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
+| `rpc-serialize-fastjson2` | fastjson2 序列化器（SPI 名 `fastjson2`），可读、便于调试 | 至少一个 |
+| `rpc-spring-boot-starter` | Spring Boot 4 自动配置 | Boot 应用 |
+| `rpc-metrics-micrometer` | Micrometer 指标：客户端 / 服务端调用 Timer（service / method / status）、在途与连接数 Gauge、可内嵌的 Prometheus `/metrics` 端点；不依赖 Spring | 要指标时 |
+| `rpc-registry-tck` | Registry 契约测试（14 条），第三方注册中心实现可直接继承 | 实现注册中心时 |
+| `rpc-examples` | 可运行示例：Boot provider / consumer、纯 Java provider / consumer、本机试用的嵌入式 ZooKeeper | 参考 |
+| `rpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
+| `rpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
+| `rpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
+| `rpc-bench-compare-grpc` / `rpc-bench-compare-dubbo` | 对比对象：同一契约的 gRPC（grpc-java）与 Dubbo 3（triple）服务端和 harness 的 `CallTarget` 实现，见 [docs/benchmarking.md](benchmarking.md#对比对象grpc--dubbo) | — |
 
 ## 2. 新建空白 Boot 4 工程并加依赖
 
@@ -184,7 +207,7 @@ package com.feynman.rpc.examples.api;
 
 /**
  * 示例 DTO。经序列化器传输的类型用普通类（无参构造 + 可变字段）而不是 record：
- * Protostuff 1.8 无法还原 record（见 docs/pitfalls.md 第 3 条）。
+ * Protostuff 1.8 无法还原 record。
  */
 public class User {
 
@@ -628,15 +651,14 @@ logging:
 在服务端业务里发起的下游调用自动取上游剩余时间与自身超时的较小者）、`awaitProvidersMs`（缺省 0，见下一小节）。
 
 超时由每个请求的 deadline 定时器给出。同步方法另有第二道上界 `rpc.client.sync-wait-grace`（缺省 1s）：调用方线程最多等
-"deadline 剩余时间 + grace"，定时器没有按时触发（如进程提交内存耗尽，见 pitfalls 第 34 条）时也会抛 `RpcDeadlineExceededException`
+"deadline 剩余时间 + grace"，定时器没有按时触发（如进程提交内存耗尽）时也会抛 `RpcDeadlineExceededException`
 （消息含 `deadline timer did not fire within grace`），不会无限挂住。返回 `CompletableFuture` 的异步方法不受它约束，调用方应自带
 `orTimeout`。
 
 ### 6.1 启动时等待提供者出现（awaitProvidersMs）
 
 provider 的"注册完成"不等于 consumer 的"已经看到它"：consumer 若比 provider 先启动、先订阅，新节点要靠注册中心推送才进入
-它的提供者列表，推送可能晚于启动后的第一次调用，那次调用就以 `No available provider` 失败（背景见
-[踩坑档案第 29 条](pitfalls.md#29-registered--discovered提供者注册完成不等于消费者已经看到它)）。缺省行为不变：注入立即完成，
+它的提供者列表，推送可能晚于启动后的第一次调用，那次调用就以 `No available provider` 失败。缺省行为不变：注入立即完成，
 没有提供者的调用快速失败，由调用方自己决定重试与降级。
 
 需要"启动完成即可用"时，给引用加上等待上限：
@@ -934,3 +956,118 @@ management:
 | `RpcSerializationException: Request frame too large ...` 或 `SERIALIZATION_ERROR from server ...: result too large ...` | 单次请求 / 返回值编码后整帧超过 8 MiB（协议上限）；请求不会发出、也不会重试 | 分页或分块传输；大文件走对象存储，只传引用 |
 | 异常消息里有 `can't get field offset on a record class` | DTO 是 record，且协商到了 Protostuff | 改成普通类（见第 4 节约束） |
 | `context.close()` / SIGTERM 后进程很久才退出，日志 `still in flight after shutdownTimeout` | 有业务方法超过 `shutdown-timeout` 仍未完成，被中断 | 调大 `rpc.server.shutdown-timeout`（同时调大容器的停机等待上限），或缩短业务耗时 |
+
+## 10. 不用 Spring：纯 Java
+
+依赖把第 2 节的 `rpc-spring-boot-starter` 换成 `rpc-core`（版本同样由 `rpc-bom` 管理），注册中心与序列化模块不变。
+
+接口与 DTO 放在双方共享的 API 包里（DTO 用普通类，**不要用 record**，见[第 4 节](#4-定义接口与-dto)与[第 11 节](#protostuff不支持-record字段演进需要纪律)）。下面两段代码就是
+`rpc-examples` 的 [`PlainProvider`](../rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainProvider.java) 与
+[`PlainConsumer`](../rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainConsumer.java)，由集成测试 `PlainJavaExamplesTest` 跑通。
+其中的接口 `InventoryService`、实现 `InventoryServiceImpl`、DTO `User` 与业务异常 `InsufficientStockException` 的完整代码见
+[第 4、5 节](#4-定义接口与-dto)。
+
+服务端：
+
+```java
+	public static RpcServer start(String zookeeper, String host, int port) {
+		RpcServer server = RpcServer.builder()
+				.port(port)
+				.host(host)                                    // 注册给消费端的地址；null 表示自动探测本机地址
+				.registry(RegistryConfig.zookeeper(zookeeper))
+				.serializer("protobuf")
+				.shutdownTimeout(Duration.ofSeconds(10))       // 停机时等在途请求的上限
+				.build();
+		server.export(InventoryService.class, new InventoryServiceImpl());
+		server.start();                                    // 绑定端口后立即返回，注册在后台进行
+		return server;
+	}
+```
+
+```java
+		RpcServer server = start(zookeeper, null, port);
+		Runtime.getRuntime().addShutdownHook(new Thread(server::close, "plain-provider-shutdown")); // Ctrl+C / SIGTERM → 优雅下线
+		server.registered().get(30, TimeUnit.SECONDS);    // 需要"已可被发现"时再等（例如 readiness）
+```
+
+消费端：
+
+```java
+	public static RpcClient connect(String zookeeper) {
+		return RpcClient.builder()
+				.registry(RegistryConfig.zookeeper(zookeeper))
+				.serializer("protobuf")
+				.loadBalance("p2c")
+				.build();
+	}
+
+	/** 对 {@link InventoryService} 发起一组示例调用，返回每一步的结果描述。 */
+	public static List<String> demo(RpcClient client) {
+		InventoryService inventory = client.reference(InventoryService.class,
+				ReferenceOptions.defaults().timeout(Duration.ofSeconds(3)));
+		int left = inventory.reserve(2001L, 4, "plain-1");          // 多参数：long + Integer + String
+		List<User> buyers = inventory.buyers(2001L);                // 泛型返回：元素就是 User
+		String rejected;
+		try {
+			inventory.reserve(2001L, 100, "plain-2");
+			rejected = "unexpected success";
+		} catch (InsufficientStockException e) {                      // 业务异常按类型还原
+			rejected = "InsufficientStockException: " + e.getMessage();
+		}
+		return List.of("left=" + left, "buyers=" + buyers, rejected);
+	}
+```
+
+运行这两个示例（与 Boot 版本可同时运行，纯 Java provider 用 9100 端口）见 [rpc-examples/README.md「运行」](../rpc-examples/README.md#运行)。
+
+## 11. 已知限制
+
+使用前请确认这些限制对你的场景可以接受。性能数字的口径另见 README「[性能与证据](../README.md#性能与证据)」。
+
+### Protostuff：不支持 record，字段演进需要纪律
+
+**不支持 `record` 作为业务 DTO**（参数、返回值、它们的字段）：1.8.0 的 Unsafe 与反射两种模式都无法还原 record。用普通类（无参构造 + 可变字段）；fastjson2 无此限制。
+
+**字段演进需要纪律**：要么全部字段加 `@Tag`，要么只在末尾追加字段；在中间插入字段会静默错位。声明为具体非 final 父类的字段会丢失子类型。
+
+### Nacos 实现没有在真实 Nacos 上验证过
+
+它通过了与 ZooKeeper 相同的契约测试代码，但这些测试需要 Docker，在开发机上一直是跳过状态（CI 的 Linux runner 会实跑）。ZooKeeper 是主实现。
+
+### Windows 上没有真实 SIGTERM
+
+`Process.destroy()` 在 Windows 上是强杀，不触发 JVM 关闭钩子；优雅停机在 Windows 上只能通过 `context.close()` / `server.close()` 验证，真实信号用例只在 Linux 上运行。
+
+### ZooKeeper 不可达时，下线节点会残留到会话超时
+
+进程退出但无法连上 ZK 摘注册时，临时节点要等服务端判定会话过期（缺省请求 30s，实际值取决于 ZK 的 tickTime 协商）才消失，期间消费端可能仍选到它（会以连接失败的形式出现）。
+
+### 连接重置后，retries > 0 可能重发已经执行过的请求
+
+请求写出后连接断开，客户端无法知道服务端是否已执行，会按传输失败处理并重试。只对幂等方法设置 `retries`，或在业务侧用 `rpc.idempotency-key` attachment 自行去重（框架不内置去重）。
+
+### 返回 CompletableFuture 的方法，用户回调在 Netty IO 线程上执行
+
+在 `thenApply` / `whenComplete` 里做阻塞操作会卡住该连接上的所有请求；需要阻塞时用 `thenApplyAsync(fn, yourExecutor)`。
+
+### 离群摘除只按失败、按时间放回
+
+离群摘除在 1.0.0 之后加入 main（缺省开）。进程存活但不回包、被 kill 但注册中心还没摘时，坏节点在连续 5 个坏结果（或 10 秒内过半失败）后被摘，摘除期间不再分到流量；
+但它**不做半开探测与主动健康检查**——到期直接放回，若节点仍坏，放回后的前几个请求会再失败一次才再被摘（时长按次数倍增到 60s）；**不按延迟摘除**（慢节点交给 `p2c`）；
+只有一个提供者的服务永远不摘（最多摘一半、至少留 1 个）；没有服务级熔断。实验见 [docs/probes/outlier-detection.md](probes/outlier-detection.md)。
+
+### 固定池过载时可能"拥塞崩溃"
+
+执行器只按队列长度拒绝，不看排队等待。若"排队上限 × 业务时长 / 线程数 ≥ 调用超时"，过载时挤进队列的请求轮到执行时调用方已经超时，
+服务端满负荷却几乎没有成功（实测业务 10ms、缺省 10 线程 + 队列 1000、超时 1s、闭环 1500 并发：每秒约 8.4 万次拒绝，成功率约 0）。阻塞型业务按
+"线程数 ≥ 阻塞时长 × 峰值 QPS、排队等待远小于超时"配置，或换 virtual；排队等待感知的准入 / 自适应限流在后续计划里。见 [docs/probes/executor-blocking.md](probes/executor-blocking.md)。
+
+### 服务端 Filter 运行在业务线程上
+
+IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
+
+### 尚未实现：链路追踪、压缩、客户端单向调用
+
+**还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在后续计划里。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](observability.md)）。性能数字只来自一台笔记本的同机 loopback，见 README「[性能与证据](../README.md#性能与证据)」的"不可外推"。
+
+**压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。

@@ -12,7 +12,7 @@ import io.netty.buffer.PooledByteBufAllocator;
 /**
  * 测试用分配器：委托给池化分配器，记录每次分配所在的线程；虚拟线程、或名字不以 {@code allowedThreadPrefix} 开头的线程
  * 记为违规（附分配处的调用栈）。客户端测试传 {@code rpc-client-io}，服务端测试传 {@code rpc-server-worker}——
- * 证明池化分配只发生在事件循环上（docs/pitfalls.md 第 32 条）。
+ * 证明池化分配只发生在事件循环上。
  */
 public final class ThreadRecordingAllocator implements ByteBufAllocator {
 	private final ByteBufAllocator delegate = PooledByteBufAllocator.DEFAULT;

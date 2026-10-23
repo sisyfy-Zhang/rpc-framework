@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@code ReferenceOptions.awaitProviders}（D-015）在真实 ZooKeeper 上：消费者先订阅（目录为空、reference 阻塞），
- * 提供者随后注册，reference 由 watch 推送唤醒返回，返回后第一次调用即成功——这正是 pitfalls 第 29 条里
+ * 提供者随后注册，reference 由 watch 推送唤醒返回，返回后第一次调用即成功——这正是
  * DeadlinePropagationTest 预热失败的场景（registered ≠ discovered）。
  */
 class AwaitProvidersTest {

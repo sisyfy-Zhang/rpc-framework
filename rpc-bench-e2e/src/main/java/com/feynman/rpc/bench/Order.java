@@ -7,7 +7,7 @@ import java.util.Objects;
 
 /**
  * {@code payload.kind = order} 的 fixture：8 个字段，含 {@code List<String>} 与两个 java.time 类型。
- * 普通类（无参构造 + 可变字段）而不是 record：Protostuff 1.8 无法还原 record（docs/pitfalls.md 第 3 条）。
+ * 普通类（无参构造 + 可变字段）而不是 record：Protostuff 1.8 无法还原 record。
  */
 public class Order {
 

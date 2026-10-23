@@ -29,7 +29,7 @@ import io.netty.buffer.ByteBufUtil;
  *
  * <p>出站有两种写法，线上字节相同：{@code write*} 直接写进调用方给的缓冲区；{@link #request} / {@link #value} /
  * {@link #error} 只备好字节、算出确切长度，返回不持缓冲区的 {@link OutboundBody}，由编码器在事件循环上写入——
- * 框架自己的出站路径（客户端请求、服务端回包）都用后者，业务线程 / 调用方线程不碰池化分配器（docs/pitfalls.md 第 32 条）。
+ * 框架自己的出站路径（客户端请求、服务端回包）都用后者，业务线程 / 调用方线程不碰池化分配器。
  *
  * <p>解码函数读取 {@code in} 的全部可读字节并要求恰好用完；返回的参数 / 返回值是 {@code in} 上的 slice
  * （不 retain、不拷贝），生命周期跟随 {@code in}。任何越界、多余字节、非法 present 标志都抛 {@link ProtocolException}。

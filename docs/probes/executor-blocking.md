@@ -19,7 +19,7 @@
 - **JDK 21 钉住**：`synchronized` 内 `Object.wait` → 调度器**补偿**，载体线程从 5 扩到 **256**（服务端线程 31 → 281），吞吐 23.0k 与 park 持平，代价是每请求 CPU
   4.4×（146 vs 33 µs）、业务线程组上下文切换 8.7×；`synchronized` 内 park → **钉住且不补偿**，载体保持 5 个，吞吐 **464 ~ 480 req/s**（= 5 / 10.4ms），
   排队等待 p50 约 0.5s、每轮 275 ~ 999 个超时。
-- **测量陷阱**：锁对象若是方法内 new、从不外泄，C2 会把 synchronized 整个消除（lock elision），JIT 之后钉住凭空消失（第 6 节，[pitfalls 38](../pitfalls.md)）。
+- **测量陷阱**：锁对象若是方法内 new、从不外泄，C2 会把 synchronized 整个消除（lock elision），JIT 之后钉住凭空消失（第 6 节）。
 
 ## 设置
 
@@ -123,7 +123,7 @@ virtual 同负载 93.6k req/s、0 错误（1500 / 15.3ms ≈ 98k，接近压测�
 692、1621、**22 046**——前 9 秒是钉住的约 480，C2 编译 `work()` 之后跳到 22k。逃逸分析认定局部 new、从不外泄的锁对象不可能被别的线程同步，把
 `monitorenter / monitorexit` 整个消除（`-XX:+EliminateLocks` 缺省开），JIT 之后测的是"没有 synchronized"。Windows 上 3 秒的小探针来不及触发 C2，所以没暴露。
 修法：每次新建的锁对象写进一个 volatile 静态字段（全局逃逸），仍是每请求一把锁、不引入锁竞争（`BenchServiceImpl.escapedLock`）；修复后全程稳定在 470 左右。
-`monitor` 不受影响（对象作为接收者传进 native 的 `wait`，已经逃逸）。教训见 [pitfalls 38](../pitfalls.md)。
+`monitor` 不受影响（对象作为接收者传进 native 的 `wait`，已经逃逸）。
 
 ## 7. 判定逐条
 

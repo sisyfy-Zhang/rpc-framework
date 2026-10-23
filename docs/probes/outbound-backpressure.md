@@ -1,6 +1,6 @@
 # 出站背压（任务 16，阶段 2b 第三项，缺陷 F1）
 
-回答两件事：阶段 2a 调研（[transport-path-comparison.md](../research/transport-path-comparison.md)）的缺陷 F1——两端都不检查
+回答两件事：阶段 2a 传输路径调研的缺陷 F1——两端都不检查
 `Channel.isWritable()`，一个只发请求不读响应的客户端能让服务端回包在 `ChannelOutboundBuffer`（直接内存）里无界堆积——修好之后
 积压被封顶到多少；以及缺省开启后正常负载是否变慢。这是正确性 / 健壮性修复，不是吞吐优化。**本文只给机制与数据，缺省水位线由主模型裁定。**
 
@@ -17,7 +17,7 @@
   可写且是自己停的 → `setAutoRead(true)`。停读之后不再读这条连接的新请求，已在途的照常完成，积压被"在途数 × 回包帧"封顶；
   对端读走回包、待写字节降到低水位以下时恢复读，暂停期间对端写来的请求留在内核接收缓冲区里，恢复后照常读出。
   - 为什么按当前状态对账而不是按事件方向切换：FlushConsolidationHandler 收到"变为不可写"时先冲刷它推迟的 flush，套接字一次收下时
-    这次冲刷**嵌套**触发"恢复可写"，先于外层的"不可写"到达下游（[pitfalls 第 35 条](../pitfalls.md)）。
+    这次冲刷**嵌套**触发"恢复可写"，先于外层的"不可写"到达下游。
   - 为什么是单独的 handler：背压关（A/B 对照）时它根本不在 pipeline 里；它只覆盖 `channelWritabilityChanged`，读事件
     （`ChannelInboundHandlerAdapter` 的方法带 `@Skip`）根本不经过它，正常负载下的成本是零；可以用 EmbeddedChannel 单独测。
 - **硬上限**（兜底，`outboundHardLimit`，缺省 high × 16 = 1MiB，0 = 关闭，只在背压开时生效）：ServerHandler 分发 REQUEST 之前读一次

@@ -1,6 +1,6 @@
 # flush 合并与 direct 执行器对照实验（任务 14，阶段 2b 第一项）
 
-回答阶段 2a 调研（[transport-path-comparison.md](../research/transport-path-comparison.md)）排在前面的两个候选项到底值多少：
+回答阶段 2a 传输路径调研排在前面的两个候选项到底值多少：
 候选 #1 `FlushConsolidationHandler`（T3-a）与候选 #3 服务端 `ExecutorConfig.direct()`（T2-a），以及本框架真实的单连接上限。
 数据来自 `bench/bin/sweep.sh` / `bench/bin/compare.sh`，每组的原始 JSON / Markdown 在 WSL 的 `~/t14/out/formal/`（不入库）；
 本文的表格由那些 JSON 机械整理（`extract.py`：每份结果取正式轮），数字未改动。**本文只给数据与建议，缺省值由主模型裁定。**

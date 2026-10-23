@@ -94,17 +94,16 @@ gRPC / Dubbo 单连接开环卡的各轮 p99 从几毫秒到几十毫秒，只�
 
 ## 3. 差在哪
 
-调研与探针的完整论证见 [research/transport-path-comparison.md](research/transport-path-comparison.md)（只读调研，推断）与 [probes/](probes/) 下各文。
+探针的完整论证见 [probes/](probes/) 下各文。
 
 - **服务端派发：gRPC / Dubbo 缺省执行器的 `SynchronousQueue` 交接。** gRPC 缺省执行器是进程共享的缓存线程池，Dubbo 是 200 线程的 fixed 池、
-  队列缺省 0——两者都是 `SynchronousQueue`："只有某个空闲线程正在 poll 时 offer 才成功"，每个请求都要找到并唤醒一个线程
-  （[调研 T2](research/transport-path-comparison.md#t2-服务端派发)）。本框架的固定池用 `ArrayBlockingQueue`（容量 1000），生产者不等消费者就位。
+  队列缺省 0——两者都是 `SynchronousQueue`："只有某个空闲线程正在 poll 时 offer 才成功"，每个请求都要找到并唤醒一个线程。本框架的固定池用 `ArrayBlockingQueue`（容量 1000），生产者不等消费者就位。
   在业务几乎为零的 1KB 回显上，派发交接本身就是主成本，这是开箱即用 0.14× 的主要来源之一（推断）；另一来源是缺省连接数（2 vs 1）。
 - **flush 合并。** 两端 pipeline 首位的 `FlushConsolidationHandler`（缺省开）把每请求一次 flush 合成按批一次：本批闭环 64 两端每请求 `write`
   系统调用 0.19 / 0.16（gRPC 客户端 1.38），见 [compare.md](../bench/reports/20261022-d23e39d/compare/compare.md)。同一构建 on / off 的 A/B：
   闭环吞吐 2 连接 +20%、1 连接 +44%，开环无回退（探针口径，[flush-and-executor.md](probes/flush-and-executor.md)）。
 - **池化分配原则：调用方线程不碰 Netty 池化分配器。** 虚拟线程没有 `PoolThreadCache`，直接争 arena 锁、扩容时钉住载体线程，
-  万级并发下整个客户端卡死（[pitfalls 第 32 条](pitfalls.md)）；所以调用方 / 业务线程只序列化成 `byte[]`，帧缓冲区由事件循环分配。
+  万级并发下整个客户端卡死；所以调用方 / 业务线程只序列化成 `byte[]`，帧缓冲区由事件循环分配。
   代价是比 gRPC `MessageFramer`"在应用线程直接写 ByteBuf"多一次 1KB 拷贝，这份代价没有单独测。
 - **出站背压零成本。** 服务端不可写时停读、客户端优先可写连接、两端硬上限，缺省开；正常负载下相对关闭为 −1.5% ~ +1.3%（门槛 −2%），
   "只发不读"的客户端下服务端积压从 22.8MB 降到 0.16 ~ 0.35MB（探针口径，[outbound-backpressure.md](probes/outbound-backpressure.md)）；
@@ -112,7 +111,7 @@ gRPC / Dubbo 单连接开环卡的各轮 p99 从几毫秒到几十毫秒，只�
 
 ### 对我们不利的事实
 
-- **direct 对 direct，差距小得多。** gRPC 缺省执行器与 `directExecutor()` 之间差 4.4 倍（[调研 0.3 节](research/transport-path-comparison.md#03-已知数字输入非本文测量)的输入：单 channel 14.7k vs 65k）；
+- **direct 对 direct，差距小得多。** gRPC 缺省执行器与 `directExecutor()` 之间差 4.4 倍（外部已知数字，非本项目测量：单 channel 14.7k vs 65k）；
   "业务都在 IO 线程上"的同类对照下，本框架 direct 2 连接 144k vs gRPC direct 2 个 channel 75 ~ 82k，开环 p99 本框架 **fixed** 0.71 ~ 0.88ms
   与 gRPC direct c2 0.71 ~ 0.80ms 在同一区间（探针口径，[flush-and-executor.md E2](probes/flush-and-executor.md#e2-执行器rpc-fixed--rpc-direct--grpc-direct)，gRPC direct 未进本批归档）。
   即开箱即用 0.14× 的差距里，大头是执行器模型与缺省连接数，不是"我们的编解码更快"。序列化包装的差异也没有剥离（[benchmarking.md](benchmarking.md#对等性线程执行器连接序列化)）。

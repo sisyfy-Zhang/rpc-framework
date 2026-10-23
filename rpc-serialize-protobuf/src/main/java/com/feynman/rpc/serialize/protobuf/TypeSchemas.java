@@ -51,8 +51,8 @@ import io.protostuff.runtime.RuntimeSchema;
  *       读取时按名加载受 {@link io.protostuff.runtime.AllowlistIdStrategy} 白名单约束</td></tr>
  * </table>
  *
- * <p>为什么不对集合运行时类调 {@code RuntimeSchema.getSchema}：那会把集合当 POJO，只编码 size，并永久污染策略
- * （docs/pitfalls.md 第 2 条）；集合必须由声明类型驱动走集合 schema。{@link #pojo} 与策略里各有一道守卫。
+ * <p>为什么不对集合运行时类调 {@code RuntimeSchema.getSchema}：那会把集合当 POJO，只编码 size，并永久污染策略；
+ * 集合必须由声明类型驱动走集合 schema。{@link #pojo} 与策略里各有一道守卫。
  *
  * <p>空对象：根为消息形态且收到 0 字节时返回 {@code schema.newMessage()}（全 null 字段的 POJO 编码就是 0 字节，
  * 空集合同理），不返回 null——null 由信封的 present 标志表达。

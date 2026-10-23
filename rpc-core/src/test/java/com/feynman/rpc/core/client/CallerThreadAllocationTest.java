@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 调用方线程不碰池化分配器（docs/pitfalls.md 第 32 条）：请求只在调用方线程上序列化，帧缓冲区由编码器在事件循环上分配；
+ * 调用方线程不碰池化分配器：请求只在调用方线程上序列化，帧缓冲区由编码器在事件循环上分配；
  * 发送路径上任何 Throwable 都让请求立即失败，不泄漏缓冲区、不挂到超时。
  *
  * <p>直接驱动 {@link NettyClient}（真实 socket、真实 RpcServer），给连接注入一个记录"在哪个线程上分配"的分配器。

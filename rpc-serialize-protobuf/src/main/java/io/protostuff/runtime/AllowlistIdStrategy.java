@@ -40,7 +40,7 @@ import java.util.function.Predicate;
  *       {@link ClassNotAllowedException}（带类名）。没有白名单时，任何能被线上字节点名的类都会被加载并实例化。</li>
  *   <li><b>集合守卫</b>：{@link #getSchemaWrapper(Class, boolean)} 拒绝为 {@link Collection} / {@link Map} 的实现类
  *       创建 POJO schema（{@link IllegalArgumentException}）。对 JDK 集合类调 {@code RuntimeSchema.getSchema} 会静默
- *       损坏数据并永久污染该策略（docs/pitfalls.md 第 2 条），这里让它在第一次发生时就失败。</li>
+ *       损坏数据并永久污染该策略，这里让它在第一次发生时就失败。</li>
  * </ol>
  * 每个 ProtobufSerializer 实例持有自己的策略，不再碰全局 {@code RuntimeEnv.ID_STRATEGY}。
  */
@@ -256,7 +256,7 @@ public final class AllowlistIdStrategy extends IdStrategy
             if (Collection.class.isAssignableFrom(typeClass) || Map.class.isAssignableFrom(typeClass))
             {
                 // 守卫：集合 / Map 的数据在 transient 字段里，当 POJO 处理只会编码 size / threshold，
-                // 并让本策略之后所有 Object 位置的同类集合一起损坏（docs/pitfalls.md 第 2 条）
+                // 并让本策略之后所有 Object 位置的同类集合一起损坏
                 throw new IllegalArgumentException("refusing to build a POJO (RuntimeSchema) schema for collection/map type "
                         + typeClass.getName() + "; declare it as a Collection/Map type so a collection schema is used");
             }

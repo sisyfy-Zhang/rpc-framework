@@ -14,8 +14,8 @@ import java.time.Duration;
  *
  * <p>{@code awaitProviders} 默认 null（不等待）：设置后 {@code RpcClient.reference()} 阻塞到该服务的提供者视图非空，
  * 最多等这么久，超时抛 {@code RpcException}。为什么需要它：registered ≠ discovered——提供者注册完成只表示节点已写入
- * 注册中心，消费者若在那之前就已订阅，要靠注册中心的推送才能看到它，推送可能晚于紧随其后的第一次调用
- * （docs/pitfalls.md 第 29 条）。不设置时 reference 照旧立即返回，没有提供者的调用以 "No available provider" 快速失败。
+ * 注册中心，消费者若在那之前就已订阅，要靠注册中心的推送才能看到它，推送可能晚于紧随其后的第一次调用。
+ * 不设置时 reference 照旧立即返回，没有提供者的调用以 "No available provider" 快速失败。
  * 传 {@link Duration#ZERO} 等同于不等待（规范化为 null）。
  */
 public record ReferenceOptions(String version, String group, Duration timeout, int retries, boolean inheritDeadline,

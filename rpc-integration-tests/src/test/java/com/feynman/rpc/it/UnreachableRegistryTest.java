@@ -47,7 +47,7 @@ class UnreachableRegistryTest {
 	 * {@code zkServer.removeCnxn} 处 NPE（{@code zkDb} 为 null），{@code closeSock()} 没执行到——服务端不回包也不关套接字，
 	 * 客户端的握手被吊到 ZK 客户端连接超时（sessionTimeout 30s / 1 台主机 = 30s）才断开重连。CI paranoid 作业的那次失败正是这样
 	 * （日志里 ZK 出现时的 NPE、之后 15s 内消费端没有 CONNECTED）；探针 ZookeeperLateBackendProbeTest 复现为 ZK 出现后 30.3s 才补推。
-	 * 30s + 重连退避（≤1s）+ 推送合并 + 余量 → 45s。docs/pitfalls.md 第 33 条。
+	 * 30s + 重连退避（≤1s）+ 推送合并 + 余量 → 45s。
 	 */
 	static final long CATCH_UP_BOUND_SECONDS = 45;
 

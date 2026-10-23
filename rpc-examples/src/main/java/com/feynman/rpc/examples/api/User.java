@@ -2,7 +2,7 @@ package com.feynman.rpc.examples.api;
 
 /**
  * 示例 DTO。经序列化器传输的类型用普通类（无参构造 + 可变字段）而不是 record：
- * Protostuff 1.8 无法还原 record（见 docs/pitfalls.md 第 3 条）。
+ * Protostuff 1.8 无法还原 record。
  */
 public class User {
 

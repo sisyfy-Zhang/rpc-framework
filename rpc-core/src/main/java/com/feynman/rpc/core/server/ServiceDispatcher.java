@@ -72,7 +72,7 @@ import io.netty.buffer.ByteBufUtil;
  *
  * <p><b>回包不在业务线程上分配缓冲区</b>：业务线程（可能是虚拟线程，见 {@code ExecutorConfig.virtualThreads}）只把
  * 返回值序列化成 byte[]、把错误信封的字段备好，回包携带 {@link OutboundBody}，由编码器在连接的事件循环上按确切长度
- * 一次分配整帧（docs/pitfalls.md 第 32 条）。这里因此也没有"已分配、还没交给 Netty"的缓冲区，Error 路径不会泄漏。
+ * 一次分配整帧。这里因此也没有"已分配、还没交给 Netty"的缓冲区，Error 路径不会泄漏。
  *
  * <p><b>服务端异步到底</b>：业务方法返回 {@link CompletionStage}（含 CompletableFuture）时不在业务线程上等待：
  * 业务线程在方法返回时立即释放去处理下一个请求，future 完成时在<b>完成它的那个线程</b>上序列化结果并写回响应；

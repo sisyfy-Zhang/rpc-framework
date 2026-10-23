@@ -1,215 +1,97 @@
 # rpc-framework
 
-一个可以被真实项目依赖的 Java RPC 库：Netty 传输 + 自研二进制协议 + ZooKeeper / Nacos 服务发现 + Spring Boot starter。
-核心是纯 Java（不依赖任何容器），同一个 JVM 里可以 new 出多个客户端与服务端；Spring Boot 只是在它外面包了一层。
+[![CI](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/ci.yml) [![CodeQL](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/codeql.yml/badge.svg)](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/codeql.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sisyfy-Zhang/rpc-framework/badge)](https://scorecard.dev/viewer/?uri=github.com/sisyfy-Zhang/rpc-framework) [![codecov](https://codecov.io/gh/sisyfy-Zhang/rpc-framework/graph/badge.svg)](https://codecov.io/gh/sisyfy-Zhang/rpc-framework) [![Maven Central](https://img.shields.io/maven-central/v/io.github.sisyfy-zhang/rpc-core)](https://central.sonatype.com/artifact/io.github.sisyfy-zhang/rpc-core) [![javadoc](https://javadoc.io/badge2/io.github.sisyfy-zhang/rpc-core/1.0.0/javadoc.svg)](https://javadoc.io/doc/io.github.sisyfy-zhang/rpc-core) [![License](https://img.shields.io/github/license/sisyfy-Zhang/rpc-framework)](LICENSE) ![JDK 21+](https://img.shields.io/badge/JDK-21%2B-blue)
 
-> 当前状态：**阶段 0 ~ 3 已完成**（可用性修复、证据基础设施、实测数据、发布就绪），`1.0.0` 已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)（见[快速开始](#快速开始)）。
-> 压测数字与对比见[测试与证据](#测试与证据)与 [docs/comparison.md](docs/comparison.md)；还没有链路追踪（见[路线图](#路线图)），调用指标见 [docs/observability.md](docs/observability.md)。使用前请先读[已知边界](#已知边界)。
+可被真实项目依赖的 Java RPC 库：Netty 传输、自研二进制协议 v2、ZooKeeper / Nacos 服务发现、Spring Boot 4 starter；性能数字与故障注入都有归档的实测证据。
 
-## 目录
+简体中文 | [English](README.en.md)
 
-- [特性](#特性)
-- [架构](#架构)
-- [模块](#模块)
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)：纯 Java · Spring Boot starter · 运行 rpc-examples
-- [配置项](#配置项)
-- [设计要点](#设计要点)
-- [已知边界](#已知边界)
-- [测试与证据](#测试与证据)
-- [路线图](#路线图)
-- [文档](#文档) · [许可证](#许可证)
-
-## 特性
-
-只列已经实现并有测试覆盖的能力：
-
-- **纯 Java 核心**：`RpcServer` / `RpcClient` 是可以 new、start、close 的实例，配置是不可变对象；无全局可变状态，同 JVM 多实例互不干扰。
-- **协议 v2**：23 字节定长头 + 框架自编码的 attachments 段与请求 / 响应信封（[规格](docs/protocol.md)）。
-- **方法模型**：多参数、重载（按参数签名分发）、泛型参数与返回值（`List<User>`、`Map<K,V>`、`CompletableFuture<List<T>>`）。
-- **服务模型**：`interface + version + group`，同一接口可按版本 / 分组暴露多份。
-- **序列化**：Protostuff（缺省；按方法声明的泛型类型构造 schema、多态位置的类名白名单、`java.time` 按 ISO 文本编码）与 fastjson2；建连时双方协商。
-- **注册中心**：ZooKeeper（会话过期后自动重建临时节点、订阅推送合并去重、注册中心不可达时后台重试）与 Nacos；两者跑同一套契约测试（TCK）。
-- **消费端推空保护**：注册中心推送空列表时保留旧地址并告警。
-- **负载均衡**：`roundrobin`、`p2c`（两个随机候选取在途数少者）。**容错**：`failfast`、`failover`、`failback`。
-- **离群摘除**（缺省开）：按提供者统计最近 10 秒的坏结果（超时、`DEADLINE_EXCEEDED`、传输失败、`SERVER_OVERLOADED`；业务异常不算），连续 5 个或占比 ≥ 50%（至少 20 次尝试）时把它从负载均衡候选里摘掉 10s × 被摘次数（上限 60s），到期自动放回；最多摘一半提供者。
-- **Filter 链**：客户端 / 服务端同一个 `Filter` 接口，按 `order()` 稳定排序；**attachments** 经 `RpcContext` 设置，按调用消费即清。
-- **deadline**：超时是一次调用（含所有重试）的总预算，以剩余毫秒传给服务端；排队中已过期的请求不执行、回 `DEADLINE_EXCEEDED`；服务端业务里发起的下游调用自动继承剩余预算。
-- **异常**：业务异常跨进程按原类型还原（类名白名单），不认识的类降级为 `RpcRemoteException` 并保留原类名与消息；方法声明的受检异常原样抛出；远端堆栈默认截断到 8KB。
-- **服务端异步到底**：业务方法返回 `CompletableFuture` 时不阻塞业务线程；执行器可选固定线程池（有界队列）或虚拟线程（并发上限），满载时回 `SERVER_OVERLOADED`（业务未执行，调用方可安全换节点）。
-- **优雅停机**：服务端 摘注册 → 宽限期 → 拒新请求 → 等在途 → 关端口；客户端 拒新调用 → 等在途；提供者下线后，消费端对它的连接排空在途后再关闭。
-- **Spring Boot 4 starter**：`@RpcService` / `@RpcReference`、`rpc.*` 配置（带 IDE 提示元数据）、Filter bean 自动接入、`RpcClientCustomizer` / `RpcServerCustomizer`、`SmartLifecycle` 非阻塞启动与异步停机、可选的 Actuator 健康指示器。
+> `1.0.0` 已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)；main 上是下一版本（含离群摘除）。
+> 核心是纯 Java，不依赖任何容器，Spring Boot 只是外面的一层。
 
 ## 架构
 
-```
-                 ┌──────────────────────── 你的应用 ────────────────────────┐
-                 │  @RpcReference 字段 / client.reference(Itf.class)        │
-                 └───────────────┬─────────────────────────────────────────┘
-                                 │ 动态代理（同步方法 = 在 future 上等待）
- 消费端 RpcClient ┌──────────────▼──────────────────────────────────────────┐
-                 │ Filter 链（内置 Deadline + 你的 ClientFilter，按 order）  │
-                 │ Cluster（failfast/failover/failback，只重试传输失败）     │
-                 │ LoadBalance（roundrobin/p2c） ← 服务目录 ← Registry 订阅   │
-                 │ 连接池（每节点 N 条，下线节点排空后关闭）· 在途表 · 协商    │
-                 └──────────────┬──────────────────────────────────────────┘
-                                │ TCP · 协议 v2：头 | attachments | 信封(参数逐个序列化)
- 服务端 RpcServer ┌──────────────▼──────────────────────────────────────────┐
-                 │ IO 线程：解帧、解 attachments、停机 / 过载闸门（不碰 body） │
-                 │ 业务执行器（固定池 + 有界队列 / 虚拟线程 + 信号量）         │
-                 │ Filter 链（内置 Deadline 检查 + 你的 ServerFilter）        │
-                 │ 方法表（method + paramSig）→ 按声明类型惰性反序列化参数 → 反射调用 │
-                 │ 返回 future 时在完成线程上回包（不 join）                   │
-                 └──────────────┬──────────────────────────────────────────┘
-                                │ register / unregister（bind 成功后，后台重试）
-                         ┌──────▼──────┐
-                         │  ZooKeeper  │  /rpc/{interface:version:group}/providers/{host:port}
-                         │  或 Nacos    │
-                         └─────────────┘
- 四个 SPI（META-INF/rpc/<接口全名>）：RegistryFactory · Serializer · LoadBalance · Cluster
-```
+![架构：调用方 → 消费端 Filter 链 / Cluster / 负载均衡与离群摘除 / 连接池 → 协议 v2 → 服务端 IO 线程 / 业务执行器 / Filter 链 / 服务实现；旁路注册中心与指标](docs/images/architecture.svg)
 
-## 模块
+调用经动态代理进入消费端 `RpcClient`：Filter 链（内置 deadline）→ Cluster 容错（只重试传输失败）→ 负载均衡与离群摘除 → 每节点 N 条连接的连接池。
+服务端 IO 线程只解帧头与 attachments、做停机 / 过载闸门，业务在独立执行器上按声明类型惰性反序列化参数并调用，返回 `CompletableFuture` 时在完成线程上回包。
+线上格式是协议 v2：23 字节定长头 + 框架自编码的 attachments 与请求 / 响应信封，参数逐个序列化（[规格](docs/protocol.md)）；服务端绑定端口后向 ZooKeeper 或 Nacos 注册，消费端订阅推送维护服务目录。
+注册中心、序列化、负载均衡、容错是四个 SPI（`META-INF/rpc/<接口全名>`），实例由每个 client / server 各自创建并持有。
 
-| 模块 | 作用 | 你需要依赖它吗 |
-|---|---|---|
-| `rpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
-| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本，只管本框架模块、不覆盖第三方版本（用法见[快速开始](#快速开始)） | 推荐 |
-| `rpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
-| `rpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
-| `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
-| `rpc-serialize-fastjson2` | fastjson2 序列化器（SPI 名 `fastjson2`），可读、便于调试 | 至少一个 |
-| `rpc-spring-boot-starter` | Spring Boot 4 自动配置 | Boot 应用 |
-| `rpc-metrics-micrometer` | Micrometer 指标：客户端 / 服务端调用 Timer（service / method / status）、在途与连接数 Gauge、可内嵌的 Prometheus `/metrics` 端点；不依赖 Spring | 要指标时 |
-| `rpc-registry-tck` | Registry 契约测试（14 条），第三方注册中心实现可直接继承 | 实现注册中心时 |
-| `rpc-examples` | 可运行示例：Boot provider / consumer、纯 Java provider / consumer、本机试用的嵌入式 ZooKeeper | 参考 |
-| `rpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
-| `rpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
-| `rpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
-| `rpc-bench-compare-grpc` / `rpc-bench-compare-dubbo` | 对比对象：同一契约的 gRPC（grpc-java）与 Dubbo 3（triple）服务端和 harness 的 `CallTarget` 实现，见 [docs/benchmarking.md](docs/benchmarking.md#对比对象grpc--dubbo) | — |
+## 特性
 
-## 环境要求
+**协议与方法模型**
 
-- **JDK 21**（编译目标 21；CI 另跑一个 JDK 25 的可选任务）。
-- Maven 3.9+。
-- 运行示例需要一个 ZooKeeper：真实 ZooKeeper、`docker run`，或示例自带的嵌入式 ZooKeeper（无需安装任何东西）。
-- 构建与测试**不需要** Docker 和本机中间件：ZooKeeper 测试用进程内 TestingServer；Nacos 测试在没有 Docker 时自动跳过。
+- 纯 Java 核心：`RpcServer` / `RpcClient` 是可以 new、start、close 的实例，配置不可变、无全局可变状态，同 JVM 多实例互不干扰
+- 协议 v2：IO 线程只读头与 attachments 就能拒绝请求，换序列化器不改线上格式（[protocol.md](docs/protocol.md)）
+- 方法模型：多参数、重载（按参数签名分发）、泛型参数与返回值（`List<User>`、`Map<K,V>`、`CompletableFuture<List<T>>`），`interface + version + group` 多版本 / 分组暴露
+- 序列化：Protostuff（缺省，按声明类型构造 schema + 多态位置类名白名单）与 fastjson2，建连时协商
+- 异常：业务异常按原类型跨进程还原（类名白名单），受检异常原样抛出，远端堆栈缺省截断到 8KB（[protocol.md](docs/protocol.md#10-异常还原规则)）
+
+**服务发现与容错**
+
+- 注册中心：ZooKeeper（会话过期重建、推送合并去重、不可达时后台重试）与 Nacos，同跑 14 条契约测试（TCK）；消费端推空保护
+- 负载均衡 `roundrobin` / `p2c`，容错 `failfast` / `failover` / `failback`；只重试传输失败，缺省 `retries = 0`
+- deadline：超时是整次调用（含重试）的预算，以剩余毫秒传给服务端，排队中过期的请求不执行，下游调用自动继承
+- 离群摘除（main，缺省开）：按节点统计超时 / 传输失败 / 过载拒绝，摘除 10s × 次数（上限 60s），最多摘一半（[A/B 探针](docs/probes/outlier-detection.md)）
+- 优雅停机：摘注册 → 宽限期 → 拒新请求 → 等在途 → 关端口；下线节点的连接排空在途后再关
+
+**性能与背压**
+
+- 服务端异步到底：执行器 `fixed`（有界队列，缺省）/ `virtual`（并发上限）/ `direct`（opt-in），满载回 `SERVER_OVERLOADED`、业务未执行（[何时选 virtual](docs/probes/executor-blocking.md)）
+- flush 合并（Netty `FlushConsolidationHandler`）与出站背压（连接不可写时暂停读、超硬上限拒绝）（[flush 探针](docs/probes/flush-and-executor.md) · [背压探针](docs/probes/outbound-backpressure.md)）
+- 调用方与业务线程只序列化成 `byte[]`，ByteBuf 只在事件循环上按确切长度一次分配
+
+**可观测与运维**
+
+- Filter 链：客户端 / 服务端同一个 `Filter` 接口，按 `order()` 稳定排序；attachments 经 `RpcContext` 设置，W3C `traceparent` 等键已预留
+- Micrometer 指标（`rpc-metrics-micrometer`，不依赖 Spring）：调用 Timer、在途与连接数 Gauge、离群摘除计数，可内嵌 Prometheus `/metrics`，附 Grafana 面板（[observability.md](docs/observability.md)）
+- 每个配置项都有缺省值，Boot 属性与纯 Java builder 一一对应（[configuration.md](docs/configuration.md)）
+
+**Spring Boot**
+
+- Boot 4 starter：`@RpcService` / `@RpcReference`、`rpc.*` 配置（带 IDE 提示元数据）、Filter bean 自动接入、Customizer、`SmartLifecycle` 非阻塞启动与异步停机、可选 Actuator 健康指示器（[getting-started.md](docs/getting-started.md)）
 
 ## 快速开始
 
-依赖坐标：groupId 为 `io.github.sisyfy-zhang`，版本 `1.0.0`，已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，按下面的坐标直接依赖即可。
-注意 **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证），
-代码里 import 的包仍是 `com.feynman.rpc.*`。
-
-推荐先导入 BOM（`rpc-bom`），各模块就不用逐个写版本：
+坐标 `io.github.sisyfy-zhang`，版本 `1.0.0`（Maven Central）；代码里 import 的包是 `com.feynman.rpc.*`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证，所以 groupId 与包名不同）。
+先导入 BOM，各模块不用逐个写版本：
 
 ```xml
-<dependencyManagement>
-  <dependencies>
-    <dependency>
-      <groupId>io.github.sisyfy-zhang</groupId>
-      <artifactId>rpc-bom</artifactId>
-      <version>1.0.0</version>
-      <type>pom</type>
-      <scope>import</scope>
-    </dependency>
-  </dependencies>
-</dependencyManagement>
-
+<dependencyManagement><dependencies><dependency>
+  <groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-bom</artifactId>
+  <version>1.0.0</version><type>pom</type><scope>import</scope>
+</dependency></dependencies></dependencyManagement>
 <dependencies>
-  <dependency>
-    <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-spring-boot-starter</artifactId>   <!-- 纯 Java 用 rpc-core -->
-  </dependency>
-  <dependency>
-    <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-registry-zookeeper</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-serialize-protobuf</artifactId>
-  </dependency>
-  <dependency>
-    <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-serialize-fastjson2</artifactId>   <!-- 可选：第二种序列化，建连时与对端协商 -->
-  </dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-spring-boot-starter</artifactId></dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-zookeeper</artifactId></dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-serialize-protobuf</artifactId></dependency>
 </dependencies>
 ```
 
-BOM 只管本框架自己的模块版本，不覆盖你工程里 Netty、Spring 等第三方依赖的版本。不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
+纯 Java 把 starter 换成 `rpc-core`；可再加 `rpc-serialize-fastjson2`，建连时与对端协商序列化方式。
+BOM 只管本框架模块的版本，不覆盖 Netty、Spring 等第三方版本；不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
+想用 main 上的最新代码时，在仓库根目录 `./mvnw install -DskipTests` 装到本地仓库，并把版本换成根 `pom.xml` 的 `<version>`。
 
-已发布的版本见 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)。只有想用 main 上的最新代码时，才需要在仓库根目录 `mvn install -DskipTests`
-装到本地仓库，把上面的版本换成根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
-
-### 1. 纯 Java
-
-接口与 DTO 放在双方共享的 API 包里（DTO 用普通类，**不要用 record**，见[已知边界](#已知边界)）。下面两段代码就是
-`rpc-examples` 的 [`PlainProvider`](rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainProvider.java) 与
-[`PlainConsumer`](rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainConsumer.java)，由集成测试 `PlainJavaExamplesTest` 跑通。
-其中的接口 `InventoryService`、实现 `InventoryServiceImpl`、DTO `User` 与业务异常 `InsufficientStockException` 的完整代码见
-[docs/getting-started.md 第 4、5 节](docs/getting-started.md#4-定义接口与-dto)。
-
-服务端：
+**接口**放在双方共享的 API 包里；DTO 用普通类，不要用 `record`（Protostuff 不支持）：
 
 ```java
-	public static RpcServer start(String zookeeper, String host, int port) {
-		RpcServer server = RpcServer.builder()
-				.port(port)
-				.host(host)                                    // 注册给消费端的地址；null 表示自动探测本机地址
-				.registry(RegistryConfig.zookeeper(zookeeper))
-				.serializer("protobuf")
-				.shutdownTimeout(Duration.ofSeconds(10))       // 停机时等在途请求的上限
-				.build();
-		server.export(InventoryService.class, new InventoryServiceImpl());
-		server.start();                                    // 绑定端口后立即返回，注册在后台进行
-		return server;
-	}
+public interface UserFacade {
+
+	User saveUser(User user);
+
+	void saveUsers(List<User> users);
+}
 ```
 
-```java
-		RpcServer server = start(zookeeper, null, port);
-		Runtime.getRuntime().addShutdownHook(new Thread(server::close, "plain-provider-shutdown")); // Ctrl+C / SIGTERM → 优雅下线
-		server.registered().get(30, TimeUnit.SECONDS);    // 需要"已可被发现"时再等（例如 readiness）
-```
-
-消费端：
-
-```java
-	public static RpcClient connect(String zookeeper) {
-		return RpcClient.builder()
-				.registry(RegistryConfig.zookeeper(zookeeper))
-				.serializer("protobuf")
-				.loadBalance("p2c")
-				.build();
-	}
-
-	/** 对 {@link InventoryService} 发起一组示例调用，返回每一步的结果描述。 */
-	public static List<String> demo(RpcClient client) {
-		InventoryService inventory = client.reference(InventoryService.class,
-				ReferenceOptions.defaults().timeout(Duration.ofSeconds(3)));
-		int left = inventory.reserve(2001L, 4, "plain-1");          // 多参数：long + Integer + String
-		List<User> buyers = inventory.buyers(2001L);                // 泛型返回：元素就是 User
-		String rejected;
-		try {
-			inventory.reserve(2001L, 100, "plain-2");
-			rejected = "unexpected success";
-		} catch (InsufficientStockException e) {                      // 业务异常按类型还原
-			rejected = "InsufficientStockException: " + e.getMessage();
-		}
-		return List.of("left=" + left, "buyers=" + buyers, rejected);
-	}
-```
-
-`RpcClient` 用完 `close()`（或 try-with-resources）：它会等在途调用完成（上限 `shutdownTimeout`），再关连接、注销订阅、关 IO 线程。
-
-### 2. Spring Boot starter
-
-提供方标 `@RpcService`（它元注解了 `@Component`），消费方在字段上标 `@RpcReference`：
+**提供者**：实现类标 `@RpcService`（它元注解了 `@Component`），像普通 bean 一样注入依赖、实现方法：
 
 ```java
 @RpcService
 public class UserFacadeImpl implements UserFacade {
 ```
+
+**消费者**：字段上标 `@RpcReference`，像本地接口一样调用：
 
 ```java
 @Component
@@ -224,254 +106,54 @@ public class UserGateway {
 }
 ```
 
-```yaml
-rpc:
-  registry:
-    type: zookeeper
-    address: localhost:2181
-  # 首选序列化方式；classpath 上同时有 fastjson2，建连时与对端协商
-  serializer: protobuf
-  server:
-    port: 9000
-    weight: 1
-    # 优雅停机等待在途请求的上限（摘注册之后、关端口之前）
-    shutdown-timeout: 10s
-    # 摘注册后继续服务的宽限期，让注册中心把下线推送到消费端再开始拒绝新请求（生产建议 1s）
-    deregister-grace: 1s
-```
+注册中心缺省是 `localhost:2181` 的 ZooKeeper，改用 `rpc.registry.type` / `rpc.registry.address`（[全部配置项](docs/configuration.md)）。容器里有 `@RpcService` 才会绑定端口；
+`SpringApplication.run()` 不会被 RPC 阻塞；`SIGTERM` / `context.close()` 走完整的优雅下线。以上代码逐字取自 [`rpc-examples`](rpc-examples/README.md)（`DocsSnippetsTest` 核对）。
 
-容器里有 `@RpcService` 才会绑定端口；`SpringApplication.run()` 不会被 RPC 阻塞；`SIGTERM` / `context.close()` 走完整的优雅下线。
-从空白 Boot 4 工程开始的完整步骤见 **[docs/getting-started.md](docs/getting-started.md)**。
+- 从空白 Boot 4 工程开始的完整步骤、模块一览与常见错误：[docs/getting-started.md](docs/getting-started.md)
+- 不用 Spring（`RpcServer.builder()` / `RpcClient.builder()` 各十几行）：[getting-started 第 10 节](docs/getting-started.md#10-不用-spring纯-java)
+- 直接运行示例（含嵌入式 ZooKeeper，无需安装）：[rpc-examples/README.md](rpc-examples/README.md#运行)
 
-### 3. 运行 rpc-examples
+## 性能与证据
 
-`rpc-examples` 有两套可运行示例（Boot 与纯 Java），默认连 `localhost:2181`。完整说明见 [rpc-examples/README.md](rpc-examples/README.md)，最短路径：
+数字只由压测流水线产生；三张图由 [`bench/bin/charts.py`](bench/bin/charts.py) 从归档 JSON 生成，图上每个数字的来源文件见 [docs/images/](docs/images/README.md)。
 
-```bash
-mvn install -DskipTests
-cd rpc-examples
-mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
-CP="target/classes:$(cat target/classpath.txt)"          # Windows PowerShell 见 rpc-examples/README.md
+![闭环 64 并发吞吐：本框架 fixed / direct，gRPC-Java 与 Dubbo triple 开箱即用 / 2 连接](docs/images/throughput-closed64.svg)
 
-java -cp "$CP" com.feynman.rpc.examples.EmbeddedZooKeeper                  # 终端 1：本机 ZooKeeper（或 docker run -d -p 2181:2181 zookeeper:3.9）
-java -cp "$CP" com.feynman.rpc.examples.provider.ProviderApplication       # 终端 2：Boot provider
-java -cp "$CP" com.feynman.rpc.examples.consumer.ConsumerApplication       # 终端 3：Boot consumer，调用一次后退出
-```
+闭环 64 并发：本框架 fixed（缺省）101,943.2 req/s；gRPC-Java / Dubbo triple 开箱即用 14,386.4 / 14,401.8，2 连接 35,516.3 / 25,963.1；direct（opt-in）142,671.6（[数据表](docs/images/throughput-closed64.md) · [差在哪](docs/comparison.md#3-差在哪)）。
 
-## 配置项
+<sub>测试条件：同机 WSL2 loopback · AMD Ryzen 5 4600H · 服务端 cpu 0-4 / 压测端 cpu 5-9 · 1KB 回显 · 直连 · 每卡 3 轮 × 60s 取正式轮 · 归档 d23e39d（git_dirty = false）· 同机 loopback 数字不可外推</sub>
 
-Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core 的缺省值（缺省值只在 core 定义一份）。
+![开环 10,000 req/s 的 p50 与 p99（对数轴），灰带为三轮 p99 极差](docs/images/tail-latency-open10k.svg)
 
-**通用**
+开环 10,000 req/s（延迟从计划发出时刻算）：fixed p99 0.798ms；gRPC / Dubbo 开箱即用 p99 20.955 / 22.233ms 且三轮波动大，2 连接 1.338 / 4.235ms；direct 0.530ms（[数据表](docs/images/tail-latency-open10k.md)）。
 
-| 属性 | builder | 缺省 | 说明 |
-|---|---|---|---|
-| `rpc.registry.type` | `registry(RegistryConfig)` | `zookeeper` | 注册中心 SPI 名：`zookeeper` / `nacos` |
-| `rpc.registry.address` | 同上 | `localhost:2181` | 注册中心地址 |
-| `rpc.registry.properties.*` | `RegistryConfig.withProperty(k, v)` | — | 实现相关：ZK 的 `session-timeout-ms`（30000）、`connection-timeout-ms`（5000）、`connect-wait-ms`（1000）、`push-merge-ms`（50）；Nacos 的 `namespace`、`username`、`password`、`connect-wait-ms`（3000） |
-| `rpc.serializer` | `serializer(String)` | `protobuf`（SPI 缺省名） | 客户端首选 / 服务端兜底的序列化方式；缺省值需要 `rpc-serialize-protobuf` 在 classpath 上，只带 fastjson2 时设为 `fastjson2` |
-| `rpc.serializer-options.*` | `serializerOption(k, v)` | — | 交给序列化器，如 `protobuf.allowed-packages: "com.acme.api.,com.acme.dto."`（多态位置按名加载的包白名单） |
+<sub>测试条件：同机 WSL2 loopback · AMD Ryzen 5 4600H · 服务端 cpu 0-4 / 压测端 cpu 5-9 · 1KB 回显 · 直连 · 每卡 3 轮 × 60s 取正式轮 · 归档 d23e39d（git_dirty = false）· 同机 loopback 数字不可外推</sub>
 
-**客户端 `rpc.client.*`**（`RpcClient.builder()`）
+![离群摘除开 / 关：kill -9 与连接静默挂起下的窗口错误数与恢复时间](docs/images/fault-recovery.svg)
 
-| 属性 | builder | 缺省 | 说明 |
-|---|---|---|---|
-| `load-balance` | `loadBalance` | `roundrobin` | `roundrobin` / `p2c` |
-| `cluster` | `cluster` | `failfast` | `failfast` / `failover` / `failback`；只在引用声明了 `retries > 0` 时重试 |
-| `connections-per-node` | `connectionsPerNode` | 2 | 到每个提供者的连接数 |
-| `default-timeout` | `defaultTimeout` | 20s | 一次调用（含重试）的总预算；`@RpcReference(timeout=)` / `ReferenceOptions.timeout` 覆盖 |
-| `empty-protection` | `emptyProtection` | true | 推空保护 |
-| `shutdown-timeout` | `shutdownTimeout` | 10s | close 时等在途调用的上限 |
-| `exception-allowlist` | `exceptionAllowlist(String...)` | — | 追加允许按类名还原的异常包前缀 |
-| `io-threads` | `ioThreads` | 0 | IO 事件循环线程数；0 = Netty 缺省（2 × 可用核数），只影响本客户端 |
-| `sync-wait-grace` | `syncWaitGrace` | 1s | 同步调用等待的第二道上界：最多等 deadline 剩余时间 + 该值，定时器没按时触发时也不会无限挂住（docs/pitfalls.md 第 34 条）；异步方法不受约束 |
-| `flush-consolidation` | `flushConsolidation` | true | 连接 pipeline 首位加 Netty 的 `FlushConsolidationHandler`（合并 flush，不改协议字节、不加定时器）；关掉只用于对照实验 |
-| `write-buffer-low` / `write-buffer-high` | `writeBufferWaterMark(low, high)` | 32KB / 64KB | 每条连接的写缓冲水位线（Netty `WRITE_BUFFER_WATER_MARK`，缺省即 Netty 缺省；支持 `64KB` 写法，纯数字按字节）。待写字节超过 high 时连接不可写，同一节点有多条连接时优先选可写的 |
-| `outbound-hard-limit` | `outboundHardLimit` | high × 16 | 一条连接不可写且待写字节超过它时，新请求不写出、以"未发出"的传输失败结束（failover 且 `retries > 0` 时换节点）；0 = 关闭 |
-| `outlier-detection.enabled` | `outlierDetection(OutlierDetectionConfig)` | true | 离群摘除开关（`OutlierDetectionConfig.disabled()` 关闭）。坏结果 = 本地超时、`DEADLINE_EXCEEDED`、传输失败（含"未发出"）、`SERVER_OVERLOADED`；业务异常与其它服务端错误不算 |
-| `outlier-detection.min-requests` / `failure-ratio` | 同上（`OutlierDetectionConfig.builder()`） | 20 / 0.5 | 比例条件：最近 10 秒（10 个 1 秒桶）内尝试 ≥ min-requests 且坏结果占比 ≥ failure-ratio 时摘除 |
-| `outlier-detection.consecutive-failures` | 同上 | 5 | 连续条件：连续这么多个坏结果时摘除；0 = 不用这个条件 |
-| `outlier-detection.base-ejection` / `max-ejection` | 同上 | 10s / 60s | 摘除时长 = base × 该地址累计被摘次数，上限 max；到期自动回到候选集（不做半开探测、不做主动健康检查）；放回后每连续健康满一个 max，累计次数减 1（最低 0，长期健康后下一次摘除回到 base） |
-| `outlier-detection.max-ejection-percent` | 同上 | 50 | 最多摘除的提供者比例：摘掉之后健康的至少保留 `ceil(n × (100 − p) / 100)` 个、且至少 1 个；万一候选全在摘除期，退回全部候选 |
-| — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
+离群摘除开 / 关：kill -9（failfast）窗口错误 50,349 / 48,497 → 221 / 397，约 1.0s 恢复；连接静默挂起（failover）62,447 / 62,498 个超时且未恢复 → 5,038 / 5,038，约 3.0s 恢复（[数据表](docs/images/fault-recovery.md)）。
 
-引用级选项（`@RpcReference` / `ReferenceOptions`）：`version`、`group`、`timeout`（毫秒）、`retries`（缺省 0）、`inheritDeadline`（缺省 true）。
+<sub>测试条件：同机 WSL2 loopback · AMD Ryzen 5 4600H · 服务端 cpu 0-4 / 压测端 cpu 5-9 · 1KB 回显 · 开环 5000 req/s · 3 个提供者经 ZooKeeper · 超时 1s · 单轮 60s、t = 20s 注入故障 · 开 / 关各 2 次 · 同机 loopback 数字不可外推 · 探针口径（git_dirty），详见 [probes/outlier-detection.md](docs/probes/outlier-detection.md)</sub>
 
-**服务端 `rpc.server.*`**（`RpcServer.builder()`）
-
-| 属性 | builder | 缺省 | 说明 |
-|---|---|---|---|
-| `port` | `port` | 9000 | 0 = 随机端口，注册实际端口 |
-| `host` | `host` | 自动探测 | 注册给消费端的地址；多网卡 / 容器里请显式设置 |
-| `weight` | `weight` | 1 | 注册权重；`@RpcService(weight=)` 覆盖 |
-| `shutdown-timeout` | `shutdownTimeout` | 10s | 停机时等在途请求的上限 |
-| `deregister-grace` | `deregisterGrace` | 0 | 摘注册后、拒新请求前的宽限期；**生产建议 1s** |
-| `remote-stack-trace` | `remoteStackTrace` | true | 异常回包是否带服务端堆栈 |
-| `remote-stack-trace-max-bytes` | `remoteStackTraceMaxBytes` | 8192 | 回传堆栈上限（最小 256） |
-| `io-threads` | `ioThreads` | 0 | IO 事件循环（worker）线程数；0 = Netty 缺省（2 × 可用核数）。业务方法在 executor 上执行，与它无关 |
-| `flush-consolidation` | `flushConsolidation` | true | 同客户端：业务线程并发回包时多个回包合成一次写出；关掉只用于对照实验 |
-| `write-buffer-low` / `write-buffer-high` | `writeBufferWaterMark(low, high)` | 32KB / 64KB | 每条已接受连接的写缓冲水位线（同客户端）：回包待写字节超过 high 时连接不可写 |
-| `outbound-backpressure` | `outboundBackpressure` | true | 出站背压：连接不可写时暂停读它、恢复可写再读，不读回包的客户端不能让回包在直接内存里无界堆积；暂停读超过读空闲 30s 的连接被关闭。关掉只用于对照实验（docs/probes/outbound-backpressure.md） |
-| `outbound-hard-limit` | `outboundHardLimit` | high × 16 | 连接待写字节超过它时，新到的请求直接回 `SERVER_OVERLOADED`（业务不执行）；0 = 关闭，只在背压开时生效 |
-| `executor.type` | `executor(ExecutorConfig)` | `fixed` | `fixed` / `virtual` / `direct`（opt-in：业务方法在 IO 线程上执行。**业务方法阻塞会卡住同一事件循环上的所有连接，仅适用于纯 CPU、微秒级的方法；与 gRPC directExecutor 同类**） |
-| `executor.threads` | `ExecutorConfig.fixed(threads, queue)` | CPU 核数 × 2 | 固定池线程数 |
-| `executor.queue-capacity` | 同上 | 1000 | 固定池排队上限，满了回 `SERVER_OVERLOADED` |
-| `executor.max-concurrent` | `ExecutorConfig.virtualThreads(max)` / `ExecutorConfig.direct(max)` | 10000 | 虚拟线程同时执行上限 / direct 的在途请求上限（超出回 `SERVER_OVERLOADED`） |
-| — | `serverFilter(Filter...)` | — | Boot 中为容器里的 `ServerFilter` bean |
-
-**Boot 专属**：`RpcClientCustomizer` / `RpcServerCustomizer` bean 在属性与 Filter bean 之后修改 builder；
-`management.health.rpc.enabled`（有 Actuator 时，缺省 true）：健康组件 `rpc`，已启动且已注册为 UP，未注册、注册丢失（ZooKeeper 会话过期，节点尚未重建；Nacos 不报告）或停机中为 OUT_OF_SERVICE。
-停机最长耗时约 `deregister-grace + shutdown-timeout + 5s`，`spring.lifecycle.timeout-per-shutdown-phase`（Boot 缺省 30s）必须大于它。
-
-## 设计要点
-
-**为什么信封和 attachments 由框架自己编码，不交给序列化器。** 帧头之后先是 attachments（字符串键值）段，再是请求信封
-（service / version / group / method / paramSig，加上逐个参数的长度前缀字节）。序列化器只处理业务参数与返回值。
-这样 IO 线程只读头和 attachments 就能做停机 / 过载拒绝，不必先反序列化 body；错误路径（序列化失败、协商失败）
-也仍然有 requestId 与元数据可以回包；参数能按方法声明的泛型类型逐个反序列化，并推迟到业务线程、被拒绝的请求根本不解。
-换序列化器不改变线上格式。
-
-**为什么 SPI 只负责"找到类"，实例由 client / server 创建并持有。** 旧实现的注册中心、连接、在途表都是进程级单例，
-类加载即连注册中心，同一 JVM 起不了第二个客户端，也关不干净。现在 `META-INF/rpc/<接口全名>` 只把名字映射到类，
-有状态的实现（Registry、LoadBalance 游标、Cluster 重试线程、带配置的序列化器）由每个 `RpcClient` / `RpcServer` 各自 new、
-各自在 `close()` 里释放。框架所有线程名以 `rpc-` 开头，测试断言关闭后它们全部消失。
-
-**为什么超时是"整次调用的预算"。** `timeout` 覆盖一次调用的全部重试（gRPC deadline 语义），预算耗尽就结束，不会再换节点重发：
-超时之后再重试，对非幂等调用更危险，也只会让本就过载的下游更忙。发送时把剩余毫秒写进 `rpc.timeout`，服务端用"到达时刻 + 剩余"
-判定过期——用相对值而不是绝对时间戳，避免两台机器时钟偏差。在服务端业务方法里发起的下游调用自动取 min(自身超时, 上游剩余)，
-上游已经放弃的请求不会让下游白干。
-
-**为什么失败分两个通道、只重试其中一个。** 调用的 future 异常完成只表示**传输失败**：连不上、连接重置、写失败、无可用节点、
-服务端过载 / 停机拒绝（这些情况下业务方法确定没执行）。只有它会让 `failover` 换节点重试，而且只在引用显式声明了 `retries > 0`
-时。服务端已经执行并给出答复的错误（业务异常、`DEADLINE_EXCEEDED`、序列化失败）以及本地超时放在结果里，永不重试。
-默认 `retries = 0`：非幂等调用被意外执行两次的代价，远高于少一次重试。
-
-**为什么 Protostuff 要按声明类型构造 schema，并加类名白名单。** 探针（[docs/probes/protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)）发现：
-对 JDK 集合类调用 `RuntimeSchema.getSchema` 会静默损坏数据并永久污染全局策略；`Object` / 接口字段会按元素写全限定类名、
-接收方按名加载。所以序列化器按方法签名上的 `Type` 递归构造 schema（集合 / Map 用集合 schema + 元素 schema），并为每个实例
-持有一份带白名单的 ID 策略：多态位置的类名不在白名单（JDK 集合与基础类型 + `protobuf.allowed-packages`）内就拒绝加载。
-这比 autoType 黑名单更稳：默认拒绝，新的利用链不需要追着补。
-
-**何时把执行器换成 virtual。** 业务方法以阻塞等待为主、且阻塞时长 × QPS 超过固定池线程数（缺省 2 × 核数）时：业务等 10ms、闭环 256 并发，
-固定池 973 req/s（成功请求 p50 266ms 几乎全是排队），virtual 22.4k（23×），每请求服务端 CPU 反而更低；没超过时（开环、固定池约 60% 利用率）两者 p99 无差别，
-保持缺省即可。代价：JDK 21 上 synchronized 内阻塞会钉住载体——`Object.wait` 靠补偿扩到 256 个载体线程（每请求 CPU 4.4×），park / sleep 不补偿，
-吞吐跌到"核数 / 阻塞时长"（实测 480 req/s）；virtual 没有排队语义，只有同时执行上限（缺省 10000）。固定池则要让"排队上限 × 业务时长 / 线程数"远小于调用超时，
-否则过载时队列里的请求全部超时作废（并发 1500 时成功率约 0）。数据与方法见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
-
-**为什么停机顺序是"先摘注册、再拒新请求"。** 先拒绝会让还没收到下线推送的消费端持续撞上拒绝；先摘注册，绝大多数新流量在推送到达后
-自然不再进来。完整顺序：取消后台注册 → 摘注册 → 宽限期（`deregister-grace`，等推送传播）→ DRAINING（新请求回
-`SERVER_OVERLOADED`，业务未执行，配了重试的调用方会换节点）→ 等在途（上限 `shutdown-timeout`）→ 关端口与连接 → 关注册中心会话。
-超时仍未完成的请求会被中断，它们的调用方随连接关闭立即失败，而不是挂到自己的超时。
-
-## 已知边界
-
-使用前请确认这些限制对你的场景可以接受：
-
-- **Protostuff 不支持 `record` 作为业务 DTO**（参数、返回值、它们的字段）：1.8.0 的 Unsafe 与反射两种模式都无法还原 record。用普通类（无参构造 + 可变字段）；fastjson2 无此限制。
-- **Protostuff 的字段演进需要纪律**：要么全部字段加 `@Tag`，要么只在末尾追加字段；在中间插入字段会静默错位。声明为具体非 final 父类的字段会丢失子类型。
-- **Nacos 实现没有在真实 Nacos 上验证过**：它通过了与 ZooKeeper 相同的契约测试代码，但这些测试需要 Docker，在开发机上一直是跳过状态（CI 的 Linux runner 会实跑）。ZooKeeper 是主实现。
-- **Windows 上没有真实 SIGTERM**：`Process.destroy()` 在 Windows 上是强杀，不触发 JVM 关闭钩子；优雅停机在 Windows 上只能通过 `context.close()` / `server.close()` 验证，真实信号用例只在 Linux 上运行。
-- **ZooKeeper 不可达时，下线节点会残留到会话超时**：进程退出但无法连上 ZK 摘注册时，临时节点要等服务端判定会话过期（缺省请求 30s，实际值取决于 ZK 的 tickTime 协商）才消失，期间消费端可能仍选到它（会以连接失败的形式出现）。
-- **连接重置后，`retries > 0` 可能重发已经执行过的请求**：请求写出后连接断开，客户端无法知道服务端是否已执行，会按传输失败处理并重试。只对幂等方法设置 `retries`，或在业务侧用 `rpc.idempotency-key` attachment 自行去重（框架不内置去重）。
-- **返回 `CompletableFuture` 的方法，用户回调在 Netty IO 线程上执行**：在 `thenApply` / `whenComplete` 里做阻塞操作会卡住该连接上的所有请求；需要阻塞时用 `thenApplyAsync(fn, yourExecutor)`。
-- **还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在[路线图](#路线图)里。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](docs/observability.md)）。性能数字只来自一台笔记本的同机 loopback，见[测试与证据](#测试与证据)的"不可外推"。
-- **离群摘除只按失败、按时间放回**：进程存活但不回包、被 kill 但注册中心还没摘时，坏节点在连续 5 个坏结果（或 10 秒内过半失败）后被摘，摘除期间不再分到流量；
-  但它**不做半开探测与主动健康检查**——到期直接放回，若节点仍坏，放回后的前几个请求会再失败一次才再被摘（时长按次数倍增到 60s）；**不按延迟摘除**（慢节点交给 `p2c`）；
-  只有一个提供者的服务永远不摘（最多摘一半、至少留 1 个）；没有服务级熔断。实验见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。
-- **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。
-- **固定池过载时可能"拥塞崩溃"**：执行器只按队列长度拒绝，不看排队等待。若"排队上限 × 业务时长 / 线程数 ≥ 调用超时"，过载时挤进队列的请求轮到执行时调用方已经超时，
-  服务端满负荷却几乎没有成功（实测业务 10ms、缺省 10 线程 + 队列 1000、超时 1s、闭环 1500 并发：每秒约 8.4 万次拒绝，成功率约 0）。阻塞型业务按
-  "线程数 ≥ 阻塞时长 × 峰值 QPS、排队等待远小于超时"配置，或换 virtual；排队等待感知的准入 / 自适应限流列在路线图。见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
-- **服务端 Filter 运行在业务线程上**：IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filter 在业务执行器上运行，所以被执行器排队的请求要先拿到线程才会被 deadline 拒绝。
-
-## 测试与证据
-
-```bash
-mvn clean install                   # 全量：单元 + 集成 + 架构规则 + 覆盖率检查（约 3~4 分钟）
-```
-
-集成测试请用 `verify` / `install` 跑，不要只跑到 `test` 阶段：泄漏断言扩展经 rpc-core 的 test-jar 共享，`test` 阶段 test-jar 尚未打包，
-Maven 会把 rpc-core 的全部测试类放进集成测试的 classpath（`LeakCheckWiringTest` 会因此失败并提示）。
-
-| 机制 | 说明 |
-|---|---|
-| 集成测试 | `rpc-integration-tests`：多实例路由、优雅停机（含进程内 Boot 变体与 Linux 下的真实 SIGTERM 子进程用例）、deadline 与 attachments、过载、异常映射、序列化矩阵（Protostuff 与 fastjson2 各跑一遍）、示例应用端到端。ZooKeeper 用进程内 TestingServer |
-| Registry TCK | `rpc-registry-tck` 的 `RegistryContractTest`（14 条：首次推送、去重、跨 key 隔离、关闭后消失窗口、线程回收、后端不可达时订阅并在恢复后补推……），ZooKeeper / Nacos / 内存参考实现都继承它 |
-| 架构规则 | ArchUnit：core 不依赖 Spring、全仓禁止 `System.setProperty`、无可变静态状态（白名单除外），每条规则带"能失败"的自测；maven-enforcer 在依赖层面禁止 core 引入 Spring |
-| 编解码模糊测试 | jqwik：attachments / 信封随机往返、随机字节输入不崩溃且不泄漏 ByteBuf |
-| 泄漏断言 | `RpcLeakCheckExtension`（JUnit 自动注册）：rpc-core 与集成测试的**每个测试类**结束后，`rpc-` 线程须在 5s 内归零、测试类持有的 client / server 在途为零；带阳性对照（`LeakFixtureTest`，默认 `@Disabled`） |
-| 覆盖率 | JaCoCo：每个模块的测试都挂 agent；`rpc-integration-tests` 汇总报告在 `target/site/jacoco-aggregate/`；rpc-core 行覆盖率 ≥ 70% 检查两次（core 自身单元测试；全部模块测试的聚合） |
-| Netty 内存泄漏 | `mvn clean install "-DargLine=-Dio.netty.leakDetection.level=paranoid" \| tee build.log`，之后 `grep "LEAK:" build.log` 应为空，且 `grep "level = PARANOID" build.log` 有输出（证明检测器确实开着） |
-| 特征化探针 | 会改第三方库全局状态的探针类以 `*ProbeTest` 命名，默认不跑：`mvn test -Pprobe -pl rpc-serialize-protobuf -am` |
-
-CI（`.github/workflows/ci.yml`）：Linux + JDK 21 全量构建（Docker 可用，Nacos 契约测试实跑）、Linux 真实 SIGTERM 用例、paranoid 泄漏检测、JDK 25 可选任务。
-
-### 压测数据
-
-数字只由压测流水线产生（[docs/benchmarking.md](docs/benchmarking.md)）：口径卡驱动独立的服务端 / 客户端 JVM，JSON 是事实源，Markdown 由 JSON 生成。
-下面全部取自归档 [`bench/reports/20261022-d23e39d/`](bench/reports/20261022-d23e39d/)（干净提交 d23e39d，22 张卡全部通过，每卡 60s × 3 轮取正式轮），每个数字旁是它的结果文件；
-完整的三方对比、差距来源与对我们不利的数字见 **[docs/comparison.md](docs/comparison.md)**。
-
-环境：WSL2 Ubuntu（10 vCPU，AMD Ryzen 5 4600H），服务端绑 cpu 0-4、压测端绑 5-9，同机 loopback，1KB 回显，三方都直连（不经注册中心）。
-**不可外推**：没有真实网络、单一负载形态，只说明这台机器上各配置的相对关系与量级。
-
-| 卡 | 本框架 fixed（缺省） | 本框架 direct（非缺省，opt-in） | gRPC 1.85 开箱即用 / 2 连接 | Dubbo 3.3.6 开箱即用 / 2 连接 |
-|---|---|---|---|---|
-| 闭环 64 并发：吞吐 (req/s) | [101,943.2](bench/reports/20261022-d23e39d/compare/compare-closed64-rpc-v1-20261022-012703.md) | [142,671.6](bench/reports/20261022-d23e39d/compare/compare-closed64-rpc-direct-v1-20261022-020438.md) | [14,386.4](bench/reports/20261022-d23e39d/compare/compare-closed64-grpc-v1-20261022-013714.md) / [35,516.3](bench/reports/20261022-d23e39d/compare/compare-closed64-grpc-c2-v1-20261022-014400.md) | [14,401.8](bench/reports/20261022-d23e39d/compare/compare-closed64-dubbo-v1-20261022-015049.md) / [25,963.1](bench/reports/20261022-d23e39d/compare/compare-closed64-dubbo-c2-v1-20261022-015743.md) |
-| 开环 10000 req/s：p99 (ms) | [0.798](bench/reports/20261022-d23e39d/compare/compare-open10k-rpc-v1-20261022-013024.md) | [0.530](bench/reports/20261022-d23e39d/compare/compare-open10k-rpc-direct-v1-20261022-020759.md) | [20.955](bench/reports/20261022-d23e39d/compare/compare-open10k-grpc-v1-20261022-014037.md) / [1.338](bench/reports/20261022-d23e39d/compare/compare-open10k-grpc-c2-v1-20261022-014722.md) | [22.233](bench/reports/20261022-d23e39d/compare/compare-open10k-dubbo-v1-20261022-015412.md) / [4.235](bench/reports/20261022-d23e39d/compare/compare-open10k-dubbo-c2-v1-20261022-020106.md) |
-
-并排总表（含 CPU、GC、每请求系统调用与上下文切换）：[compare.md](bench/reports/20261022-d23e39d/compare/compare.md)、[sweep/compare.md](bench/reports/20261022-d23e39d/sweep/compare.md)。
-direct 让业务方法在 IO 线程上执行，阻塞即卡住同一事件循环上的所有连接，只适合纯 CPU、微秒级的方法，不是缺省，对外以 fixed 为准。
-gRPC / Dubbo 的缺省执行器是 `SynchronousQueue` 交接、缺省 1 条连接，开箱即用的差距大头在这两点，不在编解码（[comparison.md 第 3 节](docs/comparison.md#3-差在哪)）。
-
-- **故障注入**（慢节点 / 杀节点 / 突增，真实制造，判定预登记；探针口径）：P2C 把慢节点份额从 1/3 压到 0.038；failover 下 `kill -9` 零错误；
-  有界队列在 3 倍突增下快速拒绝、回落 1s 恢复；连接静默挂起时 1/3 流量持续超时，见 [docs/probes/fault-injection.md](docs/probes/fault-injection.md)。
-- **离群摘除 A/B**（同一批故障卡，只差 `--outlier-detection on|off`；探针口径）：连接静默挂起 6.2 万个超时 → 5 038 个（3.0s 恢复，之后只在到期回归时各约 1 秒）；
-  failfast 下 kill -9 4.8 ~ 5.0 万个错误 → 221 / 397 个（1.0s 恢复）；慢节点与优雅停机零摘除，见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。
-- **harness 交叉验证**（阶段 1 验收项 A1-4：与 wrk2 / wrk 打同一个 HTTP 端点）：开环**连续 3 次 PASS**（第 1 次在 d23e39d 上；第 2、3 次在 d8dc78b 上，它与 d23e39d 之间只改了对比表工具 `CompareReport` 与归档，不碰发压与测量路径）
-  （[第 1 次](bench/reports/20261022-d23e39d/crossval-open-20261022-024132.md) · [第 2 次](bench/reports/20261022-d23e39d/crossval-repeat/run-2/crossval-open-20261022-032433.md) · [第 3 次](bench/reports/20261022-d23e39d/crossval-repeat/run-3/crossval-open-20261022-033221.md)），
-  闭环容量标定 [PASS](bench/reports/20261022-d23e39d/crossval-closed-20261022-024556.md)；判据与流程见 [docs/benchmarking.md「交叉验证」](docs/benchmarking.md#交叉验证)。
-
-## 路线图
-
-- **阶段 0 · 可用性修复**：已完成。纯 Java 核心、协议 v2、多实例、优雅停机、deadline、序列化白名单、Registry TCK 等（见[特性](#特性)）。
-- **阶段 1 · 证据基础设施**：已完成。`docker compose up` 一条命令起 ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy（[docker/README.md](docker/README.md)）；
-  Micrometer 指标与 Grafana 面板；口径卡驱动的压测 harness（[docs/benchmarking.md](docs/benchmarking.md)）；harness 与 wrk / wrk2 交叉验证，开环连续 3 次 PASS（见[压测数据](#压测数据)）。
-- **阶段 2 · 跑数据**：已完成。同机吞吐与 p50 / p99 对照 gRPC-Java、Dubbo triple（开箱即用与连接数对齐两种配置）、并发与连接数扫描，
-  归档 [`bench/reports/20261022-d23e39d/`](bench/reports/20261022-d23e39d/)；传输路径调研（[docs/research/transport-path-comparison.md](docs/research/transport-path-comparison.md)）
-  之后的 flush 合并、出站背压、direct 执行器（opt-in）各有 A/B 探针，每连接写队列实测无收益已回退；慢节点 / 杀节点 / 突增三组故障注入。
-- **阶段 3 · 发布**：已完成就绪项。CI 全绿；坐标 `io.github.sisyfy-zhang`、`rpc-bom`、release profile 与 release.yml（[docs/releasing.md](docs/releasing.md)）；
-  空白 Boot 4 工程按接入文档跑通（[docs/getting-started.md](docs/getting-started.md)）。`1.0.0` 已发布到 Maven Central，空白工程从 Central 解析 1.0.0 复验通过。
-- **阶段 4 · 可选（每项自带对比实验）**：
-  - **离群摘除**：已完成（缺省开）。按节点的超时 / 传输失败 / 过载拒绝摘除，时间驱动放回；A/B 见 [docs/probes/outlier-detection.md](docs/probes/outlier-detection.md)。服务级熔断未做。
-  - **虚拟线程 vs 固定池**：已完成对比实验（执行器缺省不变，仍是固定池）。阻塞型业务下何时换 virtual、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃，
-    见 [docs/probes/executor-blocking.md](docs/probes/executor-blocking.md)。
-  - **连接数递减探针**：已完成（缺省 `connectionsPerNode = 2` 不改）。闭环 128 下每节点 2 → 8 条连接吞吐 143k → 123k 的归因：连接增多稀释两端事件循环每次唤醒的批量，
-    `netty_io` 每请求 CPU 成倍上升（压测端 +12.0、服务端 +10.2 µs），其它线程组不变；见 [docs/probes/connections-scaling.md](docs/probes/connections-scaling.md)。
-  - 自适应并发限制、Apache Fory 序列化（含 record 支持）、流式调用、OpenTelemetry 集成。
+正确性由测试体系保证：跨模块集成测试（含 Linux 真实 SIGTERM）、注册中心契约测试 TCK、ArchUnit 架构规则（每条带"能失败"的自测）、jqwik 编解码模糊测试、
+每个测试类结束后的线程与在途泄漏断言、Netty paranoid 泄漏检测、JaCoCo（rpc-core 行覆盖率 ≥ 70%），详见 [CONTRIBUTING.md「测试体系」](CONTRIBUTING.md#测试体系)。
 
 ## 文档
 
-- [docs/comparison.md](docs/comparison.md)：与 gRPC-Java / Dubbo 3 的对比报告：环境与口径、三方表、差距来源、对我们不利的数字、故障注入结论、方法论
-- [docs/getting-started.md](docs/getting-started.md)：15 分钟接入指南（空白 Boot 4 工程 → provider + consumer），含常见错误对照表
+- [docs/getting-started.md](docs/getting-started.md)：15 分钟接入指南（空白 Boot 4 工程 → provider + consumer）、模块一览、纯 Java 写法、常见错误对照表
+- [docs/configuration.md](docs/configuration.md)：配置项全表（通用 / 客户端 / 服务端 / Boot 专属）与端口
 - [docs/protocol.md](docs/protocol.md)：协议 v2 规格（帧头、attachments、信封、状态码、协商、连接关闭规则）
-- [docs/pitfalls.md](docs/pitfalls.md)：开发中踩过的坑（现象 / 根因 / 修法 / 教训）
-- [docs/benchmarking.md](docs/benchmarking.md)：端到端压测：口径卡字段、`server` / `run` / `report` / `crossval` 子命令、WSL2 标准流程、报告字段、harness 交叉验证
-- [docs/observability.md](docs/observability.md)：指标：指标名与 tag、status 取值、计时口径、PromQL 示例、Grafana 面板、纯 Java 内嵌 `/metrics`；中间件与面板的一键环境见 [docker/README.md](docker/README.md)
-- [docs/releasing.md](docs/releasing.md)：发布到 Maven Central：前置（Central 账号、命名空间、GPG、Secrets）、版本号规则、打 tag、release.yml 做了什么、在 Central Portal 点 Publish、回滚与重发
-- [docs/research/transport-path-comparison.md](docs/research/transport-path-comparison.md)：传输路径对照调研（gRPC-Java / Dubbo / Netty / SOFA-Bolt / Motan），候选优化清单
-- 探针与对照实验（[docs/probes/](docs/probes/)）：
-  - [flush-and-executor.md](docs/probes/flush-and-executor.md)：flush 合并 A/B、direct 执行器、单连接上限
-  - [write-queue-and-context-switches.md](docs/probes/write-queue-and-context-switches.md)：每连接写队列（否定结果，已回退）与上下文切换按线程组归因
-  - [outbound-backpressure.md](docs/probes/outbound-backpressure.md)：出站背压的机制、"只发不读"对照与正常负载下的代价
-  - [fault-injection.md](docs/probes/fault-injection.md)：慢节点、杀节点、突增三组故障注入
-  - [executor-blocking.md](docs/probes/executor-blocking.md)：虚拟线程 vs 固定池（阻塞型业务）、JDK 21 synchronized 钉住、固定池过载时的拥塞崩溃
-  - [connections-scaling.md](docs/probes/connections-scaling.md)：连接数递减的归因（事件循环唤醒批量被稀释、`netty_io` CPU 按线程组计量）
-  - [harness-tail-latency.md](docs/probes/harness-tail-latency.md)：harness 开环尾延迟的来源与修稳
-  - [nacos-timing.md](docs/probes/nacos-timing.md)：Nacos 首订阅与消失窗口的时序校准
-  - [protostuff-1.8.0.md](docs/probes/protostuff-1.8.0.md)：Protostuff 1.8.0 行为探针结果
-  - 探针原始结果（探针口径，不作数）：[bench/reports/probes/](bench/reports/probes/)，收录阶段 4a 任务 19 / 20 / 21 的结果 JSON 与报告
-- [rpc-examples/README.md](rpc-examples/README.md)：示例的运行方式
+- [docs/observability.md](docs/observability.md)：指标名与 tag、status 取值、计时口径、PromQL、Grafana 面板、纯 Java 内嵌 `/metrics`
+- [docs/benchmarking.md](docs/benchmarking.md)：端到端压测：口径卡、子命令、WSL2 标准流程、报告字段、交叉验证、故障注入
+- [docs/comparison.md](docs/comparison.md)：与 gRPC-Java / Dubbo 3 的对比报告：口径、三方表、差距来源、对我们不利的数字、方法论
+- 归档数据：正式归档 [bench/reports/20261022-d23e39d/](bench/reports/20261022-d23e39d/)（干净提交，作数）· 探针结果 [bench/reports/probes/](bench/reports/probes/README.md)（git_dirty，不作数）
+
+## 贡献与社区
+
+- 构建与测试、代码约定、哪些改动要先开 issue、压测数据的口径纪律：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告（GitHub 私密漏洞报告已开启），不要开公开 issue
+- 缺陷与建议：[Issues](https://github.com/sisyfy-Zhang/rpc-framework/issues)
+- 依赖更新：Dependabot 每周检查 GitHub Actions 与 Maven 依赖
 
 ## 许可证
 

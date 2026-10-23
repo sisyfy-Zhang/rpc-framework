@@ -31,7 +31,7 @@ import com.feynman.rpc.core.filter.Result;
  *
  * <p>同步方法的等待有两道上界：第一道是在途表的 deadline 定时器（超时后 future 以超时完成，正常情况总是它先到）；
  * 第二道是这里的有界等待——最多等"本次调用 deadline 的剩余时间 + {@code syncWaitGrace}"（{@code RpcClientConfig}，
- * 默认 1s）。定时器没有按时触发时（运行时内存事故等，见 docs/pitfalls.md 第 34 条），调用方线程不会无限期挂住：
+ * 默认 1s）。定时器没有按时触发时（运行时内存事故等），调用方线程不会无限期挂住：
  * 抛 {@link RpcDeadlineExceededException}（"deadline timer did not fire within grace"），并让本次调用已发出的请求失败
  * （在途表、在途闸门、连接上的请求记录随之释放）。等待不响应中断，与此前的 {@code join()} 一致（中断标志保留）。
  * <b>异步方法不受第二道上界约束</b>：返回的 future 只由定时器 / 响应完成，调用方应自带 {@code orTimeout} 之类的上界。

@@ -236,7 +236,7 @@ public class ServerHandler extends ChannelInboundHandlerAdapter {
 		public void run() {
 			// handle 不抛异常；返回的 future 在业务完成时完成——同步业务就在本线程，异步业务在完成它的线程上。
 			// 回包只携带备好的字节，本线程（业务线程，可能是虚拟线程）不分配缓冲区：writeAndFlush 把写出交给事件循环，
-			// 编码器在那里分配整帧（docs/pitfalls.md 第 32 条）
+			// 编码器在那里分配整帧
 			dispatcher.handle(request).whenComplete((reply, error) -> {
 				try {
 					if (reply != null) {

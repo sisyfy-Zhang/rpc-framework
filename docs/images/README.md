@@ -13,14 +13,14 @@ python bench/bin/charts.py --reports bench/reports --out docs/images
 - 脚本先检查每个来源文件（卡片 id、`git_sha`、`git_dirty`、判定通过、离群摘除开关与目录名一致），不符就退出码 1，不出图。
 - 每张数据图旁边有一份同名 `.md`，列出图上的每个数字、来源 JSON 路径、取数字段与口径，也由脚本生成。README 引用图里的数字时以它为准。
 
-最近生成：2026-10-23（main = 8fb26c9 时的归档）。
+最近生成：2026-10-23（归档数据同 main = 8fb26c9 时；之后只改了图上文字：标题去掉"越高越好 / 越低越好"，故障图去掉标题下的探针口径警示行与底部的恢复时间脚注——探针口径改由测试条件行里的 git_dirty、本表与 [fault-recovery.md](fault-recovery.md) 标明）。
 
 | 图 | 内容 | 数据来源 | 口径 | 数据表 |
 |---|---|---|---|---|
 | [throughput-closed64.svg](throughput-closed64.svg) | 闭环 64 并发吞吐：本框架 fixed（缺省）/ direct（opt-in），gRPC-Java 开箱即用 / 2 连接，Dubbo triple 开箱即用 / 2 连接 | `bench/reports/20261022-d23e39d/compare/compare-closed64-*.json`（6 个） | 正式轮（3 轮中窗口吞吐的中位那一轮）的 `summary.official.throughput_rps`；干净提交 d23e39d | [throughput-closed64.md](throughput-closed64.md) |
 | [tail-latency-open10k.svg](tail-latency-open10k.svg) | 开环 10,000 req/s 的 p50 与 p99（对数轴），灰带是三轮 p99 的极差；同样 6 种配置 | `bench/reports/20261022-d23e39d/compare/compare-open10k-*.json`（6 个） | 正式轮（3 轮中窗口 p99 的中位那一轮）的 `summary.official.p50_ms` / `p99_ms`，极差取 `summary.spread.p99_ms`；延迟从计划发出时刻算；干净提交 d23e39d | [tail-latency-open10k.md](tail-latency-open10k.md) |
 | [fault-recovery.svg](fault-recovery.svg) | 离群摘除开 / 关：kill -9（failfast）与连接静默挂起（toxic-timeout，failover）下的窗口错误数与错误恢复时间，开 / 关各 2 次 | `bench/reports/probes/20261022-task19-outlier-detection/{kill,timeout}/*/*.json`（8 个） | **探针口径（git_dirty，f160df9 + 未提交改动），不作数**，见 [probes/outlier-detection.md](../probes/outlier-detection.md)；`summary.official.window_errors` 与 `rounds[0].faults[0].recovery.errors_recovery_s` | [fault-recovery.md](fault-recovery.md) |
-| [architecture.svg](architecture.svg) | 架构：调用方 → 消费端（Filter 链 → Cluster → 负载均衡 · 离群摘除 → 连接池）→ 协议 v2 帧 → 服务端（IO 线程 → 业务执行器 → Filter 链 → 服务实现）；旁路注册中心与 Micrometer 指标 | 不读数据，按根 README「架构」一节的 ASCII 图重画 | — | — |
+| [architecture.svg](architecture.svg) | 架构：调用方 → 消费端（Filter 链 → Cluster → 负载均衡 · 离群摘除 → 连接池）→ 协议 v2 帧 → 服务端（IO 线程 → 业务执行器 → Filter 链 → 服务实现）；旁路注册中心与 Micrometer 指标 | 不读数据，按原根 README「架构」一节的 ASCII 图重画 | — | — |
 
 三张数据图底部都有一行测试条件：同机 WSL2 loopback、AMD Ryzen 5 4600H、服务端 cpu 0-4 / 压测端 cpu 5-9、1KB 回显、轮次与归档 sha，以及"同机数字不可外推"。
 完整口径见 [docs/benchmarking.md](../benchmarking.md) 与 [docs/comparison.md](../comparison.md)。

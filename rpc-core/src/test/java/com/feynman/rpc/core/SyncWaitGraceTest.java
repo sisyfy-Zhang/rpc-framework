@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 同步调用的第二道上界（{@code RpcClientConfig.syncWaitGrace}，docs/pitfalls.md 第 34 条）。
+ * 同步调用的第二道上界（{@code RpcClientConfig.syncWaitGrace}）。
  *
  * <p>"deadline 定时器没有按时触发"的模拟方式：在途表的定时器是 {@link CompletableFuture#orTimeout}，由 JDK 进程级唯一的
  * 延迟调度线程（CompletableFutureDelayScheduler）执行。往它上面放一个直接在该线程上运行、阻塞在闩上的任务，

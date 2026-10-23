@@ -14,7 +14,7 @@ import io.protostuff.runtime.RuntimeSchema;
  * 测试代码里，只供 {@link ProtostuffBehaviorProbeTest}
  * 使用：探针 P2a / P2b / P9 记录的正是"按运行时 Class 调 RuntimeSchema.getSchema、走全局 IdStrategy"这条旧路径的行为，
  * 新实现（按声明类型构造 schema、自有白名单策略）已经不会复现它们。保留旧路径，-Pprobe 的结果表才能保持不变、
- * 继续作为 docs/pitfalls.md 第 2 条的证据。不要在生产代码里使用。
+ * 继续作为"对 JDK 集合类调 RuntimeSchema.getSchema 会静默损坏数据并污染全局策略"的证据。不要在生产代码里使用。
  */
 final class LegacyProtobufSerializer {
 

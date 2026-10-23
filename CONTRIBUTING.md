@@ -7,7 +7,7 @@
 
 - **JDK 21**（编译目标 21）。CI 另有一个 JDK 25 的可选任务，失败不阻塞合并，但请不要引入只能在 21 上编译的写法。
 - **Maven 用仓库自带的 Wrapper**：`./mvnw`（Windows 的 cmd / PowerShell 用 `mvnw.cmd`）。版本由 `.mvn/wrapper/maven-wrapper.properties` 固定为 3.9.12，
-  与 CI 和压测机一致；不要用系统 Maven 3.10 发布或核对 bundle（见 [docs/pitfalls.md](docs/pitfalls.md) 第 37 条）。
+  与 CI 和压测机一致；不要用系统 Maven 3.10 发布或核对 bundle（3.10 下 central-publishing 的 bundle 会混进本地仓库跟踪文件，Central 校验失败）。
 - 构建与测试**不需要** Docker 和本机中间件：ZooKeeper 测试用进程内 TestingServer；Nacos 契约测试在没有 Docker 时自动跳过（CI 上有 Docker，会实跑）。
 
 ## 构建与测试
@@ -39,10 +39,29 @@ grep "level = PARANOID" build.log # 应有输出
 ./mvnw test -Pprobe -pl rpc-serialize-protobuf -am
 ```
 
-- 额外的 JVM 参数一律用 `-DargLine=...` 传：surefire 配置是 `@{argLine} ${argLine}`，JaCoCo agent 走前一半，你的参数走后一半（[pitfalls](docs/pitfalls.md) 第 25 条）。
+- 额外的 JVM 参数一律用 `-DargLine=...` 传：surefire 配置是 `@{argLine} ${argLine}`，JaCoCo agent 走前一半，你的参数走后一半。
 - `SigtermShutdownTest`（真实 `kill -TERM` 一个 provider 进程）只在 Linux 上运行，Windows / macOS 上被跳过；CI 有专门的 job 并核对它确实跑了。
 - CI（`.github/workflows/ci.yml`）在每次 push / PR 上跑：JDK 21 全量构建（Nacos 契约测试必须实跑）、Linux SIGTERM 用例、paranoid 泄漏检测、JDK 25 可选任务；
   另有 CodeQL 与 OpenSSF Scorecard。PR 合并前前三项必须全绿。
+
+## 测试体系
+
+上面的命令背后是这几类机制；README 只用一段话概括它们，细节以这里为准。
+
+| 机制 | 说明 |
+|---|---|
+| 集成测试 | `rpc-integration-tests`：多实例路由、优雅停机（含进程内 Boot 变体与 Linux 下的真实 SIGTERM 子进程用例）、deadline 与 attachments、过载、异常映射、序列化矩阵（Protostuff 与 fastjson2 各跑一遍）、示例应用端到端。ZooKeeper 用进程内 TestingServer |
+| Registry TCK | `rpc-registry-tck` 的 `RegistryContractTest`（14 条：首次推送、去重、跨 key 隔离、关闭后消失窗口、线程回收、后端不可达时订阅并在恢复后补推……），ZooKeeper / Nacos / 内存参考实现都继承它 |
+| 架构规则 | ArchUnit：core 不依赖 Spring、全仓禁止 `System.setProperty`、无可变静态状态（白名单除外），每条规则带"能失败"的自测；maven-enforcer 在依赖层面禁止 core 引入 Spring |
+| 编解码模糊测试 | jqwik：attachments / 信封随机往返、随机字节输入不崩溃且不泄漏 ByteBuf |
+| 泄漏断言 | `RpcLeakCheckExtension`（JUnit 自动注册）：rpc-core 与集成测试的**每个测试类**结束后，`rpc-` 线程须在 5s 内归零、测试类持有的 client / server 在途为零；带阳性对照（`LeakFixtureTest`，默认 `@Disabled`） |
+| 覆盖率 | JaCoCo：每个模块的测试都挂 agent；`rpc-integration-tests` 汇总报告在 `target/site/jacoco-aggregate/`；rpc-core 行覆盖率 ≥ 70% 检查两次（core 自身单元测试；全部模块测试的聚合） |
+| Netty 内存泄漏 | `./mvnw clean install "-DargLine=-Dio.netty.leakDetection.level=paranoid" \| tee build.log`，之后 `grep "LEAK:" build.log` 应为空，且 `grep "level = PARANOID" build.log` 有输出（证明检测器确实开着） |
+| 特征化探针 | 会改第三方库全局状态的探针类以 `*ProbeTest` 命名，默认不跑：`./mvnw test -Pprobe -pl rpc-serialize-protobuf -am` |
+
+rpc-core 的 `RpcLeakCheckExtension` 经 test-jar 共享给集成测试，这也是集成测试必须跑到 `verify` / `install` 的原因：`test` 阶段 test-jar 尚未打包，
+Maven 会把 rpc-core 的全部测试类放进集成测试的 classpath（`LeakCheckWiringTest` 会因此失败并提示）。
+README 与 `docs/getting-started.md` 里的 Java / YAML 代码块由 `DocsSnippetsTest` 逐字核对，必须原样取自 `rpc-examples`；`xml` 块里的 artifactId 必须是 `rpc-bom` 的模块或 `rpc-examples` 的依赖。
 
 ## 代码约定
 
@@ -72,7 +91,8 @@ grep "level = PARANOID" build.log # 应有输出
 - 提交信息首行一句话说清"改了什么"（中文或英文都可以，不加句号），需要时空一行写正文：为什么改、怎么验证的、有没有已知限制。
   如果改动由 AI 工具协助完成，在末尾加 `Co-Authored-By:` 行注明。
 - PR 描述写清：动机、改动范围、验证方式（跑了哪些命令、结果如何）、对使用者可见的变化（配置项、缺省行为、协议）。
-- 行为变化要同步更新文档：README（特性 / 配置项 / 已知边界）、`docs/` 下对应文档；`rpc.*` 配置项变化同步 starter 的配置元数据（`additional-spring-configuration-metadata.json`）。
+- 行为变化要同步更新文档：README（特性）、[docs/configuration.md](docs/configuration.md)（配置项）、[docs/getting-started.md](docs/getting-started.md#11-已知限制)（已知限制）、`docs/` 下其它对应文档；
+  README 与 getting-started 的 Java / YAML 代码块必须原样取自 `rpc-examples`（`DocsSnippetsTest` 逐字核对），`rpc.*` 配置项变化同步 starter 的配置元数据（`additional-spring-configuration-metadata.json`）。
 - PR 必须保持 CI 的 verify / sigterm / paranoid-leak 全绿；不要为了让 CI 通过而跳过、`@Disabled` 或放宽断言——如果断言本身不对，在 PR 里单独说明。
 
 ## 哪些改动需要先开 issue

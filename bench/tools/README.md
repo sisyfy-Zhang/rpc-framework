@@ -47,7 +47,7 @@ cp wrk ~/tools/bin/wrk2
 两者都用墙上时钟计时，WSL2 与宿主同步时间时墙上时钟会回拨（本机 45s 内观测到 2 次）：wrk2 因此记下负的延迟，在
 `hdr_histogram.c:54 counts_index: Assertion 'bucket_index < h->bucket_count' failed` 处 abort；wrk 则把回拨时刻在途的请求
 （`now - start` 下溢成巨大的无符号数）记成 `timeout` 错误（一次 10s 运行里 40 个假 timeout，而最大延迟只有 108ms）。
-只换计时源，不改任何测量逻辑。`src/ae.c` 的定时器（`aeGetTime`）仍用墙上时钟，未改。详见 [docs/pitfalls.md](../../docs/pitfalls.md) 第 30 条。
+只换计时源，不改任何测量逻辑。`src/ae.c` 的定时器（`aeGetTime`）仍用墙上时钟，未改。
 
 **wrk2 的 Makefile：内嵌 Lua 字节码改为经 C 文件编译**。原规则 `luajit -b src/wrk.lua obj/bytecode.o` 直接产出 ELF 目标文件，
 新版 binutils 链接时报 `obj/bytecode.o: string table [3] is corrupt`，链接"成功"但运行时 `attempt to index global 'wrk'
@@ -58,5 +58,4 @@ cp wrk ~/tools/bin/wrk2
 
 wrk2 的发送节拍是**毫秒粒度**：`src/wrk.c` 第 604 行 `msec_to_wait = round((time_usec_to_wait / 1000.0L) + 0.5)` 把等待向上取整到
 整毫秒、交给毫秒粒度的 ae 定时器，每个请求都比计划时刻晚发零点几到一毫秒多，并计入它的"修正后"延迟。所以亚毫秒级目标上，
-开环交叉验证比较的是 harness 的服务时间与 wrk2 `-U` 的"未修正"延迟，wrk2 的修正后延迟只作信息项
-（[docs/pitfalls.md](../../docs/pitfalls.md) 第 31 条）。
+开环交叉验证比较的是 harness 的服务时间与 wrk2 `-U` 的"未修正"延迟，wrk2 的修正后延迟只作信息项。

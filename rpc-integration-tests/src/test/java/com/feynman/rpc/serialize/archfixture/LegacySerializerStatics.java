@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * ExtensionModuleArchitectureRuleSelfTest 的夹具：序列化模块包名下的进程级 schema 缓存（Protostuff 全局 IdStrategy
- * 被污染的那类问题，docs/pitfalls.md 第 2 条），扩展后的规则应当拦下它。
+ * 被污染的那类问题），扩展后的规则应当拦下它。
  */
 public class LegacySerializerStatics {
 

@@ -15,7 +15,7 @@
                             每个文件取 summary.official.window_errors（单轮，窗口 [10s, 60s]）与
                             rounds[0].faults[0].recovery.errors_recovery_s（recovered = false 时画"未恢复"）
                             ——探针口径（git_dirty = true），不作数
-  architecture.svg          不读数据，按 README「架构」一节的 ASCII 图重画
+  architecture.svg          不读数据，按调用路径手工布局（消费端 → 协议 v2 → 服务端，旁路注册中心与指标）
 
 每张数据图另写一份 <图名>.md（与 SVG 同目录）：图里每个数字、来源文件、取数字段与口径；README 引用图时以它为准。
 脚本对每个来源文件做一致性检查（卡片 id、git_sha、git_dirty、判定通过、离群摘除开关与目录名一致），不符即退出码 1。
@@ -80,7 +80,6 @@ PEER = "#898781"          # 对比对象 / 离群摘除关
 PEER_LIGHT = "#d6d5cf"    # "未恢复"的删失条
 PANEL = "#f3f2ee"         # 架构图容器底色
 BAND = "#e8e7e1"          # 三轮 p99 极差带
-WARN_INK = "#9a3412"      # 探针口径警示文字（深橙，正文对比度 > 7:1）
 
 PX = 96.0  # 1 英寸 = 96 CSS px（SVG 以 pt 写尺寸，浏览器按 96 px/in 显示）
 ZH = True  # 由 setup_fonts() 决定
@@ -284,7 +283,7 @@ def chart_throughput(reports, out_dir, root):
 
     W, H = 960, 480
     fig = new_fig(W, H)
-    fig_text(fig, W, H, 24, 34, T("闭环 64 并发：吞吐（req/s，越高越好）", "Closed loop, 64 concurrent: throughput (req/s, higher is better)"), 17, INK, "bold")
+    fig_text(fig, W, H, 24, 34, T("闭环 64 并发：吞吐（req/s）", "Closed loop, 64 concurrent: throughput (req/s)"), 17, INK, "bold")
     fig_text(fig, W, H, 24, 58, T("1KB 回显、单提供者、直连；括号内倍数 = 相对本框架 fixed（缺省）。direct 让业务方法在 IO 线程上执行，非缺省，对外以 fixed 为准",
                                   "1KB echo, one provider, direct. Multiples are relative to this framework's default (fixed). direct runs business code on IO threads; not the default"), 12, INK_2)
     legend_swatches(fig, W, H, 24, 76, [(ACCENT, T("本框架缺省", "this framework, default")),
@@ -356,8 +355,8 @@ def chart_latency(reports, out_dir, root):
 
     W, H = 960, 500
     fig = new_fig(W, H)
-    fig_text(fig, W, H, 24, 34, T("开环 10,000 req/s：p50 与 p99 延迟（ms，对数轴，越低越好）",
-                                  "Open loop 10,000 req/s: p50 and p99 latency (ms, log scale, lower is better)"), 17, INK, "bold")
+    fig_text(fig, W, H, 24, 34, T("开环 10,000 req/s：p50 与 p99 延迟（ms，对数轴）",
+                                  "Open loop 10,000 req/s: p50 and p99 latency (ms, log scale)"), 17, INK, "bold")
     fig_text(fig, W, H, 24, 58, T("延迟从计划发出时刻算（修正 coordinated omission）；灰带 = 同一张卡三轮 p99 的极差，单连接的 gRPC / Dubbo 各轮波动大，只看量级",
                                   "Latency from the scheduled send time (corrects coordinated omission). Gray band = range of p99 across the 3 rounds"), 12, INK_2)
     # 图例（点）
@@ -509,8 +508,6 @@ def chart_fault(reports, out_dir, root):
     W, H = 960, 580
     fig = new_fig(W, H)
     fig_text(fig, W, H, 24, 34, T("故障注入：离群摘除 开 / 关 的窗口错误数与恢复时间", "Fault injection: outlier detection on / off — errors and recovery time"), 17, INK, "bold")
-    fig_text(fig, W, H, 24, 58, T("探针口径（git_dirty），不作数，见 probes/outlier-detection.md",
-                                  "Probe numbers (git_dirty), not official — see probes/outlier-detection.md"), 12.5, WARN_INK, "bold")
     legend_swatches(fig, W, H, 24, 76, [(ACCENT, T("离群摘除 开（缺省）", "outlier detection on (default)")),
                                          (PEER, T("离群摘除 关", "outlier detection off"))])
 
@@ -564,8 +561,6 @@ def chart_fault(reports, out_dir, root):
                 ax.xaxis.set_major_locator(FixedLocator([0, 10, 20, 30, 40]))
             style_value_axis(ax, "x")
             ax.tick_params(axis="y", labelsize=pt(12), labelcolor=INK_2)
-    fig_text(fig, W, H, 24, H - 64, T("恢复时间 = 故障时刻到“之后连续 3 秒错误为 0”的那一秒，只看第一次恢复；离群摘除开时，之后每次到期放回还会再出一小段错误（已计入错误数）。",
-                                      "Recovery = fault time to the first second followed by 3 error-free seconds (first recovery only); errors after later re-admissions are included in the counts."), 11, INK_2)
     fig_text(fig, W, H, 24, H - 32, footer, 10.5, MUTED)
     svg = save(fig, out_dir, "fault-recovery.svg")
 

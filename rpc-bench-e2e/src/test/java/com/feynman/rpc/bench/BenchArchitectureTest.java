@@ -31,7 +31,7 @@ class BenchArchitectureTest {
 
 	/**
 	 * 发压的调用方是虚拟线程：harness 里不是 ChannelHandler 的代码不碰 Netty 的池化分配器（虚拟线程无线程缓存、
-	 * 竞争 arena 锁、扩容时钉住载体线程，docs/pitfalls.md 第 32 条）。请求体用 Unpooled 包装现成的 byte[]，
+	 * 竞争 arena 锁、扩容时钉住载体线程）。请求体用 Unpooled 包装现成的 byte[]，
 	 * 其余缓冲区由编码器在事件循环上分配。
 	 */
 	@ArchTest
@@ -41,7 +41,7 @@ class BenchArchitectureTest {
 					call -> call.getTargetOwner().isAssignableTo("io.netty.buffer.ByteBufAllocator")
 							|| ("alloc".equals(call.getName()) && (call.getTargetOwner().isAssignableTo("io.netty.channel.Channel")
 									|| call.getTargetOwner().isAssignableTo("io.netty.channel.ChannelHandlerContext")))))
-			.because("load-generating virtual threads must not allocate from Netty's pooled allocator (docs/pitfalls.md #32)");
+			.because("load-generating virtual threads must not allocate from Netty's pooled allocator");
 
 	@ArchTest
 	static void importCoversTheHarness(JavaClasses classes) {

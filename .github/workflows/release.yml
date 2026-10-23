@@ -66,7 +66,7 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         # maven.test.skip：测试由 ci.yml 保证，同时让 rpc-core 的 test-jar 不生成、不发布；
         # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败。
-        # maven.install.skip：发布用不到本地安装，且让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同（pitfalls 第 37 条）。
+        # maven.install.skip：发布用不到本地安装，且让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同。
         # ./mvnw -v 先打出 Maven / resolver 版本，留作核对：版本由 wrapper 固定为 3.9.12；之前用 runner 镜像自带的 mvn 时，镜像升到 3.10（resolver 2）曾让 bundle 混入本地仓库跟踪文件
         run: |
           ./mvnw -v

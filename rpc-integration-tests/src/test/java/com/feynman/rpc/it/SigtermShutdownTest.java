@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>进程在 shutdown-timeout（5s）内退出，退出码 143（= 128 + SIGTERM：JVM 跑完关闭钩子后按信号退出的标准退出码；
  *       137 才表示被 SIGKILL 强杀），且日志里有 RpcServer "closed ... all in-flight requests completed"。</li>
  * </ul>
- * 只在 Linux 上运行：Windows 的 {@code Process.destroy()} 是 TerminateProcess，不触发 JVM 关闭钩子（docs/pitfalls.md 第 19 条）；
+ * 只在 Linux 上运行：Windows 的 {@code Process.destroy()} 是 TerminateProcess，不触发 JVM 关闭钩子；
  * 在 Unix 上 {@code destroy()} 发送的就是 SIGTERM。CI 的 sigterm 作业单独跑这个类。
  */
 @EnabledOnOs(OS.LINUX)

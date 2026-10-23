@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 服务端业务线程不碰池化分配器（docs/pitfalls.md 第 32 条，响应侧）：业务执行器是虚拟线程时，回包（正常结果与错误信封）
+ * 服务端业务线程不碰池化分配器（响应侧）：业务执行器是虚拟线程时，回包（正常结果与错误信封）
  * 只在业务线程上序列化成字节，整帧由编码器在连接的事件循环（{@code rpc-server-worker-*}）上分配；序列化返回值时抛出的
  * Error 回 SERIALIZATION_ERROR、不泄漏、连接仍可用。
  *
