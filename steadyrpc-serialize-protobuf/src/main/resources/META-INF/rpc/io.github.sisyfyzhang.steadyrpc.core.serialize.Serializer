@@ -1,0 +1,1 @@
+protobuf=io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtobufSerializer

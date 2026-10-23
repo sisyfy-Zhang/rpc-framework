@@ -1,12 +1,12 @@
-# rpc-framework
+# steady-rpc
 
-[![CI](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/ci.yml) [![CodeQL](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/codeql.yml/badge.svg)](https://github.com/sisyfy-Zhang/rpc-framework/actions/workflows/codeql.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sisyfy-Zhang/rpc-framework/badge)](https://scorecard.dev/viewer/?uri=github.com/sisyfy-Zhang/rpc-framework) [![codecov](https://codecov.io/gh/sisyfy-Zhang/rpc-framework/graph/badge.svg)](https://codecov.io/gh/sisyfy-Zhang/rpc-framework) [![Maven Central](https://img.shields.io/maven-central/v/io.github.sisyfy-zhang/rpc-core)](https://central.sonatype.com/artifact/io.github.sisyfy-zhang/rpc-core) [![javadoc](https://javadoc.io/badge2/io.github.sisyfy-zhang/rpc-core/1.0.0/javadoc.svg)](https://javadoc.io/doc/io.github.sisyfy-zhang/rpc-core) [![License](https://img.shields.io/github/license/sisyfy-Zhang/rpc-framework)](LICENSE) ![JDK 21+](https://img.shields.io/badge/JDK-21%2B-blue)
+[![CI](https://github.com/sisyfy-Zhang/steady-rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/sisyfy-Zhang/steady-rpc/actions/workflows/ci.yml) [![CodeQL](https://github.com/sisyfy-Zhang/steady-rpc/actions/workflows/codeql.yml/badge.svg)](https://github.com/sisyfy-Zhang/steady-rpc/actions/workflows/codeql.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sisyfy-Zhang/steady-rpc/badge)](https://scorecard.dev/viewer/?uri=github.com/sisyfy-Zhang/steady-rpc) [![codecov](https://codecov.io/gh/sisyfy-Zhang/steady-rpc/graph/badge.svg)](https://codecov.io/gh/sisyfy-Zhang/steady-rpc) [![Maven Central](https://img.shields.io/maven-central/v/io.github.sisyfy-zhang/steadyrpc-core)](https://central.sonatype.com/artifact/io.github.sisyfy-zhang/steadyrpc-core) [![javadoc](https://javadoc.io/badge2/io.github.sisyfy-zhang/steadyrpc-core/2.0.0/javadoc.svg)](https://javadoc.io/doc/io.github.sisyfy-zhang/steadyrpc-core) [![License](https://img.shields.io/github/license/sisyfy-Zhang/steady-rpc)](LICENSE) ![JDK 21+](https://img.shields.io/badge/JDK-21%2B-blue)
 
-可被真实项目依赖的 Java RPC 库：Netty 传输、自研二进制协议 v2、ZooKeeper / Nacos 服务发现、Spring Boot 4 starter；性能数字与故障注入都有归档的实测证据。
+可被真实项目依赖的 Java RPC 库（steady = 负载与故障下尾延迟稳得住）：Netty 传输、自研二进制协议 v2、ZooKeeper / Nacos 服务发现、Spring Boot 4 starter；性能数字与故障注入都有归档的实测证据。
 
 简体中文 | [English](README.en.md)
 
-> `1.0.0` 已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)；main 上是下一版本（含离群摘除）。
+> 当前版本 `2.0.0`（[Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，变更见 [CHANGELOG](CHANGELOG.md)）。`1.0.0`（旧坐标 `rpc-*`，包 `com.feynman.rpc`）仍在 Central 可用，2.0.0 起坐标与包名变更（迁移：改依赖 + 全局替换 import，属性与注解不变）。
 > 核心是纯 Java，不依赖任何容器，Spring Boot 只是外面的一层。
 
 ## 架构
@@ -33,7 +33,7 @@
 - 注册中心：ZooKeeper（会话过期重建、推送合并去重、不可达时后台重试）与 Nacos，同跑 14 条契约测试（TCK）；消费端推空保护
 - 负载均衡 `roundrobin` / `p2c`，容错 `failfast` / `failover` / `failback`；只重试传输失败，缺省 `retries = 0`
 - deadline：超时是整次调用（含重试）的预算，以剩余毫秒传给服务端，排队中过期的请求不执行，下游调用自动继承
-- 离群摘除（main，缺省开）：按节点统计超时 / 传输失败 / 过载拒绝，摘除 10s × 次数（上限 60s），最多摘一半（[A/B 探针](docs/probes/outlier-detection.md)）
+- 离群摘除（2.0.0 起，缺省开）：按节点统计超时 / 传输失败 / 过载拒绝，摘除 10s × 次数（上限 60s），最多摘一半（[A/B 探针](docs/probes/outlier-detection.md)）
 - 优雅停机：摘注册 → 宽限期 → 拒新请求 → 等在途 → 关端口；下线节点的连接排空在途后再关
 
 **性能与背压**
@@ -45,7 +45,7 @@
 **可观测与运维**
 
 - Filter 链：客户端 / 服务端同一个 `Filter` 接口，按 `order()` 稳定排序；attachments 经 `RpcContext` 设置，W3C `traceparent` 等键已预留
-- Micrometer 指标（`rpc-metrics-micrometer`，不依赖 Spring）：调用 Timer、在途与连接数 Gauge、离群摘除计数，可内嵌 Prometheus `/metrics`，附 Grafana 面板（[observability.md](docs/observability.md)）
+- Micrometer 指标（`steadyrpc-metrics-micrometer`，不依赖 Spring）：调用 Timer、在途与连接数 Gauge、离群摘除计数，可内嵌 Prometheus `/metrics`，附 Grafana 面板（[observability.md](docs/observability.md)）
 - 每个配置项都有缺省值，Boot 属性与纯 Java builder 一一对应（[configuration.md](docs/configuration.md)）
 
 **Spring Boot**
@@ -54,23 +54,23 @@
 
 ## 快速开始
 
-坐标 `io.github.sisyfy-zhang`，版本 `1.0.0`（Maven Central）；代码里 import 的包是 `com.feynman.rpc.*`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证，所以 groupId 与包名不同）。
+坐标 `io.github.sisyfy-zhang`，版本 `2.0.0`（Maven Central）；代码里 import 的包是 `io.github.sisyfyzhang.steadyrpc.*`（Central 的 `io.github.*` 命名空间按 GitHub 账号验证，groupId 带连字符 `sisyfy-zhang`，包名不能带，所以两者写法不同）。
 先导入 BOM，各模块不用逐个写版本：
 
 ```xml
 <dependencyManagement><dependencies><dependency>
-  <groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-bom</artifactId>
-  <version>1.0.0</version><type>pom</type><scope>import</scope>
+  <groupId>io.github.sisyfy-zhang</groupId><artifactId>steadyrpc-bom</artifactId>
+  <version>2.0.0</version><type>pom</type><scope>import</scope>
 </dependency></dependencies></dependencyManagement>
 <dependencies>
-  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-spring-boot-starter</artifactId></dependency>
-  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-zookeeper</artifactId></dependency>
-  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-serialize-protobuf</artifactId></dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>steadyrpc-spring-boot-starter</artifactId></dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>steadyrpc-registry-zookeeper</artifactId></dependency>
+  <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>steadyrpc-serialize-protobuf</artifactId></dependency>
 </dependencies>
 ```
 
-纯 Java 把 starter 换成 `rpc-core`；可再加 `rpc-serialize-fastjson2`，建连时与对端协商序列化方式。
-BOM 管本框架模块与 ZooKeeper 的版本，不覆盖 Netty、jackson、Spring 等第三方版本；不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
+纯 Java 把 starter 换成 `steadyrpc-core`；可再加 `steadyrpc-serialize-fastjson2`，建连时与对端协商序列化方式。
+BOM 管本框架模块与 ZooKeeper 的版本，不覆盖 Netty、jackson、Spring 等第三方版本；不用 BOM 时给每个依赖写 `<version>2.0.0</version>`。
 想用 main 上的最新代码时，在仓库根目录 `./mvnw install -DskipTests` 装到本地仓库，并把版本换成根 `pom.xml` 的 `<version>`。
 
 **接口**放在双方共享的 API 包里；DTO 用普通类，不要用 `record`（Protostuff 不支持）：
@@ -107,11 +107,11 @@ public class UserGateway {
 ```
 
 注册中心缺省是 `localhost:2181` 的 ZooKeeper，改用 `rpc.registry.type` / `rpc.registry.address`（[全部配置项](docs/configuration.md)）。容器里有 `@RpcService` 才会绑定端口；
-`SpringApplication.run()` 不会被 RPC 阻塞；`SIGTERM` / `context.close()` 走完整的优雅下线。以上代码逐字取自 [`rpc-examples`](rpc-examples/README.md)（`DocsSnippetsTest` 核对）。
+`SpringApplication.run()` 不会被 RPC 阻塞；`SIGTERM` / `context.close()` 走完整的优雅下线。以上代码逐字取自 [`steadyrpc-examples`](steadyrpc-examples/README.md)（`DocsSnippetsTest` 核对）。
 
 - 从空白 Boot 4 工程开始的完整步骤、模块一览与常见错误：[docs/getting-started.md](docs/getting-started.md)
 - 不用 Spring（`RpcServer.builder()` / `RpcClient.builder()` 各十几行）：[getting-started 第 10 节](docs/getting-started.md#10-不用-spring纯-java)
-- 直接运行示例（含嵌入式 ZooKeeper，无需安装）：[rpc-examples/README.md](rpc-examples/README.md#运行)
+- 直接运行示例（含嵌入式 ZooKeeper，无需安装）：[steadyrpc-examples/README.md](steadyrpc-examples/README.md#运行)
 
 ## 性能与证据
 
@@ -136,7 +136,7 @@ public class UserGateway {
 <sub>测试条件：同机 WSL2 loopback · AMD Ryzen 5 4600H · 服务端 cpu 0-4 / 压测端 cpu 5-9 · 1KB 回显 · 开环 5000 req/s · 3 个提供者经 ZooKeeper · 超时 1s · 单轮 60s、t = 20s 注入故障 · 开 / 关各 2 次 · 同机 loopback 数字不可外推 · 探针口径（git_dirty），详见 [probes/outlier-detection.md](docs/probes/outlier-detection.md)</sub>
 
 正确性由测试体系保证：跨模块集成测试（含 Linux 真实 SIGTERM）、注册中心契约测试 TCK、ArchUnit 架构规则（每条带"能失败"的自测）、jqwik 编解码模糊测试、
-每个测试类结束后的线程与在途泄漏断言、Netty paranoid 泄漏检测、JaCoCo（rpc-core 行覆盖率 ≥ 70%），详见 [CONTRIBUTING.md「测试体系」](CONTRIBUTING.md#测试体系)。
+每个测试类结束后的线程与在途泄漏断言、Netty paranoid 泄漏检测、JaCoCo（steadyrpc-core 行覆盖率 ≥ 70%），详见 [CONTRIBUTING.md「测试体系」](CONTRIBUTING.md#测试体系)。
 
 ## 文档
 
@@ -152,11 +152,11 @@ public class UserGateway {
 
 - 构建与测试、代码约定、哪些改动要先开 issue、压测数据的口径纪律：[CONTRIBUTING.md](CONTRIBUTING.md)
 - 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告（GitHub 私密漏洞报告已开启），不要开公开 issue
-- 缺陷与建议：[Issues](https://github.com/sisyfy-Zhang/rpc-framework/issues)
+- 缺陷与建议：[Issues](https://github.com/sisyfy-Zhang/steady-rpc/issues)
 - 依赖更新：Dependabot 每周检查 GitHub Actions 与 Maven 依赖
 
 ## 许可证
 
-本项目代码以 [MIT](LICENSE) 许可证发布。`rpc-serialize-protobuf` 中的 `io/protostuff/runtime/AllowlistIdStrategy.java`
+本项目代码以 [MIT](LICENSE) 许可证发布。`steadyrpc-serialize-protobuf` 中的 `io/protostuff/runtime/AllowlistIdStrategy.java`
 派生自 Protostuff 1.8.0（Apache License 2.0），继续适用 Apache 2.0，署名与修改说明见 [NOTICE](NOTICE)，许可证全文见
 [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt)。

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "label": "fixture",
+  "profile": {
+    "id": "fixture-open-v1",
+    "parsed": {
+      "profile": "fixture-open-v1",
+      "question": "fixture question | with a pipe",
+      "target": {
+        "transport": "rpc",
+        "service": "BenchService#echo",
+        "method": "echo",
+        "payload": {"kind": "bytes", "size": 1024},
+        "serializer": "protobuf",
+        "providers": 1
+      },
+      "load": {
+        "model": "open",
+        "concurrency": null,
+        "rate": 1000,
+        "duration": "10s",
+        "duration_ms": 10000.0,
+        "warmup": "2s",
+        "warmup_ms": 2000.0,
+        "steady_window": ["2s", "9s"],
+        "steady_window_ms": [2000.0, 9000.0],
+        "rounds": 3,
+        "timeout": "1s",
+        "timeout_ms": 1000.0,
+        "inflight_cap": 2000
+      },
+      "isolation": {"client_process": "separate_jvm", "server_process": "separate_jvm", "same_host": true, "registry": "none"},
+      "measure": {
+        "histogram": {"significant_digits": 3, "max": "10s", "max_ms": 10000.0},
+        "report": ["throughput", "p50", "p99", "errors_by_status"]
+      },
+      "assert": [
+        {"key": "errors_max", "metric": "errors", "bound": "max", "threshold": "0"},
+        {"key": "p99_max", "metric": "p99", "bound": "max", "threshold": "1ms"}
+      ]
+    },
+    "raw_yaml": "profile: fixture-open-v1\n"
+  },
+  "run": {
+    "command": "steadyrpc-bench-e2e run --profile fixture-open-v1.yaml --direct 127.0.0.1:9000",
+    "target": {"transport": "rpc", "mode": "direct", "address": "direct 127.0.0.1:9000", "providers": ["127.0.0.1:9000"],
+      "serializer": "protobuf", "load_balance": "roundrobin", "cluster": "failfast", "connections_per_node": 2}
+  },
+  "environment": {
+    "os_name": "Linux", "os_version": "6.6.87.2-microsoft-standard-WSL2", "os_arch": "amd64", "wsl": true,
+    "cpu_model": "Fixture CPU @ 3.00GHz", "available_cpus": 5, "host_cpus": 12, "total_memory_bytes": 8589934592,
+    "jdk_version": "21.0.11+10-LTS", "jdk_vendor": "Eclipse Adoptium", "jvm_name": "OpenJDK 64-Bit Server VM",
+    "jvm_args": ["-Xms1g", "-Xmx1g"], "gc": ["G1 Young Generation"], "netty_version": "4.1.136.Final",
+    "git_sha": "0123456789abcdef0123456789abcdef01234567", "git_dirty": false, "git_dirty_files": [],
+    "hostname": "fixture-host", "power_supply": "n/a", "cpu_governor": "n/a", "harness_version": "0.0.1-SNAPSHOT", "pid": 1, "metrics_enabled": false,
+    "started_at": "2026-01-01T00:00:00Z", "ended_at": "2026-01-01T00:00:31Z"
+  },
+  "rounds": [
+    {"round": 1, "window": {"requests": 7000, "successes": 7000, "errors": 0}, "throughput_rps": 1000.0,
+      "latency_ms": {"count": 7000, "p50": 0.41, "p90": 0.6, "p95": 0.7, "p99": 0.95, "p999": 1.5, "max": 2.0, "mean": 0.45},
+      "service_time_ms": {"p99": 0.9}, "dispatch_lag_ms": {"p99": 0.004},
+      "cpu": {"source": "/proc/stat, steady window", "window_ms": 7000, "client_cpus": "5-9", "client_busy_pct": 42.5, "server_cpus": "0-4", "server_busy_pct": 13.0},
+      "gc": {"client": {"collections": 9, "pause_ms": 84, "pause_pct": 1.2, "collectors": [{"name": "G1 Young Generation", "kind": "pause", "collections": 9, "time_ms": 84}]},
+             "server": {"collections": 2, "pause_ms": 7, "pause_pct": 0.1, "collectors": [{"name": "G1 Young Generation", "kind": "pause", "collections": 2, "time_ms": 7}]}},
+      "io": {"source": "fixture", "window_requests": 7000,
+             "client": {"syscr": 7100, "syscw": 8400, "vol_cs": 14000, "nonvol_cs": 70, "threads": "30 -> 30", "syscr_per_request": 1.014, "syscw_per_request": 1.2, "vol_cs_per_request": 2.0, "nonvol_cs_per_request": 0.01},
+             "server": {"syscr": 7000, "syscw": 2345, "vol_cs": 7000, "nonvol_cs": 7, "threads": "40 -> 40", "syscr_per_request": 1.0, "syscw_per_request": 0.336, "vol_cs_per_request": 1.0, "nonvol_cs_per_request": 0.001}},
+      "errors_by_type": {}, "backlog_dropped": 0, "warmup_completed": true, "valid": true, "invalid_reasons": []},
+    {"round": 2, "window": {"requests": 7001, "successes": 6998, "errors": 3}, "throughput_rps": 999.7,
+      "latency_ms": {"count": 6998, "p50": 0.42, "p90": 0.7, "p95": 0.8, "p99": 1.25, "p999": 1.9, "max": 3.0, "mean": 0.47},
+      "service_time_ms": {"p99": 1.2}, "dispatch_lag_ms": {"p99": 0.005}, "cpu": "n/a",
+      "gc": {"client": {"collections": 0, "pause_ms": 0, "pause_pct": 0.0, "collectors": []}, "server": "unknown"},
+      "io": {"source": "fixture", "window_requests": 7001, "client": "n/a", "server": "unknown"},
+      "errors_by_type": {"timeout": 3}, "backlog_dropped": 0, "warmup_completed": true, "valid": true, "invalid_reasons": []},
+    {"round": 3, "window": {"requests": 6990, "successes": 6990, "errors": 0}, "throughput_rps": 998.6,
+      "latency_ms": {"count": 6990, "p50": 0.43, "p90": 0.8, "p95": 0.9, "p99": 1.75, "p999": 2.5, "max": 4.0, "mean": 0.5},
+      "service_time_ms": {"p99": 1.7}, "dispatch_lag_ms": {"p99": 0.006},
+      "errors_by_type": {}, "backlog_dropped": 0, "warmup_completed": true, "valid": true, "invalid_reasons": []}
+  ],
+  "summary": {
+    "official_round": 2,
+    "selection_rule": "开环：窗口 p99 的中位数那一轮",
+    "official": {"throughput_rps": 999.7, "p99_ms": 1.25},
+    "spread": {"throughput_rps": {"range": 1.4, "range_pct": 0.14}, "p99_ms": {"range": 0.8, "range_pct": 84.211}}
+  },
+  "validity": {
+    "passed": false,
+    "warmup_completed": true,
+    "backlog_triggered": false,
+    "all_rounds_valid": true,
+    "statements": ["fixture statement about open loop"],
+    "topology": "fixture topology sentence",
+    "asserts": [
+      {"key": "errors_max", "threshold": "0", "actual": "3", "scope": "全部轮次窗口内错误之和", "passed": false},
+      {"key": "p99_max", "threshold": "1ms", "actual": "1.25ms", "scope": "正式轮", "passed": false}
+    ],
+    "asserts_passed": false
+  }
+}

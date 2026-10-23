@@ -194,7 +194,7 @@ harness 自身在正式卡上的 b 项偏差已降到 ±30µs，剩下决定判�
 
 ## 重跑
 
-在 WSL2 的仓库副本根目录（`bash ~/rpc-bench-sync.sh` 之后、`mvn -q -pl rpc-bench-e2e -am package -DskipTests`）：
+在 WSL2 的仓库副本根目录（`bash ~/rpc-bench-sync.sh` 之后、`mvn -q -pl steadyrpc-bench-e2e -am package -DskipTests`）：
 
 ```bash
 # 正式卡，缺省选项（即最终缺省）

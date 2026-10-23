@@ -1,0 +1,3 @@
+io.github.sisyfyzhang.steadyrpc.starter.RpcAutoConfiguration
+io.github.sisyfyzhang.steadyrpc.starter.RpcHealthAutoConfiguration
+io.github.sisyfyzhang.steadyrpc.starter.RpcMetricsAutoConfiguration

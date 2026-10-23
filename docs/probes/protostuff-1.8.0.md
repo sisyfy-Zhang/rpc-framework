@@ -1,7 +1,7 @@
 # Protostuff 1.8.0 行为探针结果
 
 记录 Protostuff 1.8.0 在本仓库运行环境下的实际行为，供序列化层设计时查证。数据来自特征化测试
-`rpc-serialize-protobuf/src/test/java/com/feynman/rpc/serialize/protobuf/ProtostuffBehaviorProbeTest.java`
+`steadyrpc-serialize-protobuf/src/test/java/io/github/sisyfyzhang/steadyrpc/serialize/protobuf/ProtostuffBehaviorProbeTest.java`
 （类上标 `@Tag("probe")`，默认构建不运行）。探针只记录事实，不做断言：每个探针捕获所有异常并登记结果，测试本身总是通过。
 
 ## 环境
@@ -11,9 +11,9 @@
 - 库：Protostuff 1.8.0（`protostuff-core` + `protostuff-runtime`，不含 `protostuff-runtime-registry`）
 - 主表来自默认配置：Unsafe 模式（`RuntimeEnv.USE_SUN_MISC_UNSAFE=true`），`RuntimeEnv.ID_STRATEGY=io.protostuff.runtime.DefaultIdStrategy`
 - **反射模式单独标注**：表中 `P5a-R` / `P5b-R` 两行来自另一个 JVM，加 `-Dprotostuff.runtime.use_sun_misc_unsafe=false`（`USE_SUN_MISC_UNSAFE=false`），只跑了 record 探针
-- `<FQCN>` = `com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest`；“含类名”按 ISO_8859_1 解读字节后用 contains 判断（`java.util`、各测试类全名、`ArrayList`、`HashMap`）
+- `<FQCN>` = `io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest`；“含类名”按 ISO_8859_1 解读字节后用 contains 判断（`java.util`、各测试类全名、`ArrayList`、`HashMap`）
 - 测试方法顺序：P2a/P2b/P2d、P9 被安排在最后执行，因为对容器类调用 `getSchema` 会改变同一 IdStrategy 的后续行为（见 P2c/P2d）
-- 原始输出：`rpc-serialize-protobuf/target/probe-protostuff-unsafe.md`、`rpc-serialize-protobuf/target/probe-protostuff-reflect.md`（构建产物，不入库）
+- 原始输出：`steadyrpc-serialize-protobuf/target/probe-protostuff-unsafe.md`、`steadyrpc-serialize-protobuf/target/probe-protostuff-reflect.md`（构建产物，不入库）
 
 ## 结果表
 
@@ -41,10 +41,10 @@
 | P4a 接口字段 Animal pet=Dog | 成功 | - | 76 | 是: <FQCN>$Dog | 解码类型=Dog |
 | P4b 抽象类字段 AbstractAnimal pet=Cat | 成功 | - | 78 | 是: <FQCN>$Cat | 解码类型=Cat |
 | P4c 具体非 final 父类字段 BaseAnimal pet=Puppy(附加) | 子类型丢失 | - | 8 | 否 | 解码类型=BaseAnimal，name=odie，MORPH_NON_FINAL_POJOS=false |
-| P5a record Point(int x,int y) | 失败(阶段: RuntimeSchema.getSchema) | java.lang.UnsupportedOperationException: can't get field offset on a record class: private final int com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x | - | - | USE_SUN_MISC_UNSAFE=true |
-| P5b record Order(long id,List<User> items) | 失败(阶段: RuntimeSchema.getSchema) | java.lang.UnsupportedOperationException: can't get field offset on a record class: private final long com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id | - | - | USE_SUN_MISC_UNSAFE=true |
-| P5a-R(反射模式) record Point(int x,int y) | 失败(阶段: mergeFrom) | java.lang.RuntimeException: java.lang.IllegalAccessException: Can not set final int field com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x to (int)3 <- caused by java.lang.IllegalAccessException: Can not set final int field com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x to (int)3 | 4 | 否 | USE_SUN_MISC_UNSAFE=false |
-| P5b-R(反射模式) record Order(long id,List<User> items) | 失败(阶段: mergeFrom) | java.lang.RuntimeException: java.lang.IllegalAccessException: Can not set final long field com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id to (long)7 <- caused by java.lang.IllegalAccessException: Can not set final long field com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id to (long)7 | 22 | 否 | USE_SUN_MISC_UNSAFE=false |
+| P5a record Point(int x,int y) | 失败(阶段: RuntimeSchema.getSchema) | java.lang.UnsupportedOperationException: can't get field offset on a record class: private final int io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x | - | - | USE_SUN_MISC_UNSAFE=true |
+| P5b record Order(long id,List<User> items) | 失败(阶段: RuntimeSchema.getSchema) | java.lang.UnsupportedOperationException: can't get field offset on a record class: private final long io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id | - | - | USE_SUN_MISC_UNSAFE=true |
+| P5a-R(反射模式) record Point(int x,int y) | 失败(阶段: mergeFrom) | java.lang.RuntimeException: java.lang.IllegalAccessException: Can not set final int field io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x to (int)3 <- caused by java.lang.IllegalAccessException: Can not set final int field io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Point.x to (int)3 | 4 | 否 | USE_SUN_MISC_UNSAFE=false |
+| P5b-R(反射模式) record Order(long id,List<User> items) | 失败(阶段: mergeFrom) | java.lang.RuntimeException: java.lang.IllegalAccessException: Can not set final long field io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id to (long)7 <- caused by java.lang.IllegalAccessException: Can not set final long field io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Order.id to (long)7 | 22 | 否 | USE_SUN_MISC_UNSAFE=false |
 | P6a 无@Tag V1{a=11,b=22} -> V2{a,c,b} | 错位 | - | 4 | 否 | a=11 c=22 b=0；V1 tags=[1=a 2=b] V2 tags=[1=a 2=c 3=b] |
 | P6b 无@Tag V2{a=11,c=33,b=22} -> V1{a,b}(附加反向) | 错位 | - | 6 | 否 | a=11 b=33 |
 | P6c @Tag V1{a@1=11,b@2=22} -> V2{a@1,c@3,b@2} | 正确 | - | 4 | 否 | a=11 c=0 b=22；V1 tags=[1=a 2=b] V2 tags=[1=a 2=b 3=c] |
@@ -53,7 +53,7 @@
 | P7a 类可用性 io.protostuff.runtime.ExplicitIdStrategy$Registry | 不存在 | java.lang.ClassNotFoundException: io.protostuff.runtime.ExplicitIdStrategy$Registry | - | - | 该类属于 io.protostuff:protostuff-runtime-registry 构件，当前依赖未包含，按约束不引入 |
 | P7b 替代: DefaultIdStrategy.registerPojo 后 Holder{Object}=ArrayList<User> | 成功 | - | 174 | 是: <FQCN>$User, ArrayList | 对照 P3-1 字节数；解码类型=java.util.ArrayList |
 | P7c 替代: DefaultIdStrategy.registerPojo 后 Zoo{Animal}=Dog | 成功 | - | 76 | 是: <FQCN>$Dog | 对照 P4a 字节数；解码类型=Dog |
-| P7d 未知类名(线上 Dog 改为不存在的 Dox) 反序列化 | 失败 | java.lang.RuntimeException: java.lang.ClassNotFoundException: com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Dox <- caused by java.lang.ClassNotFoundException: com.feynman.rpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Dox | 76 | 否 | DefaultIdStrategy 下接收方无此类的行为；ExplicitIdStrategy 的未注册行为无法验证(类不存在) |
+| P7d 未知类名(线上 Dog 改为不存在的 Dox) 反序列化 | 失败 | java.lang.RuntimeException: java.lang.ClassNotFoundException: io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Dox <- caused by java.lang.ClassNotFoundException: io.github.sisyfyzhang.steadyrpc.serialize.protobuf.ProtostuffBehaviorProbeTest$Dox | 76 | 否 | DefaultIdStrategy 下接收方无此类的行为；ExplicitIdStrategy 的未注册行为无法验证(类不存在) |
 | P8 POJO{Map<String,List<User>>} | 成功 | - | 283 | 是: <FQCN>$User, ArrayList | map 类型=java.util.HashMap，list 类型=java.util.ArrayList，元素类型=User，值={g1=[User(alice,30), User(bob,40)], g2=[User(carol,50)]} |
 | P9a serialize(null) / deserialize(byte[0] 或 null) | 无异常 | - | 0 | 否 | serialize(null) 长度=0；deserialize(byte[0])=null；deserialize(null)=null |
 | P9b 全默认值 POJO new User() | 成功 | - | 2 | 否 | 解码=User(null,0)；空对象与 null 在线上是否可区分见结果列 |
@@ -97,16 +97,16 @@
 
 所有命令在仓库根目录执行，`JAVA_HOME` 必须指向 JDK 17+（本机为 JDK 21）。探针会向 Protostuff 全局 `RuntimeEnv.ID_STRATEGY` 注册 `ArrayList`/`HashMap`/`Integer`，污染同一 JVM 内后续测试，所以只单独运行。
 
-默认模式（Unsafe，输出 `rpc-serialize-protobuf/target/probe-protostuff-unsafe.md`）：
+默认模式（Unsafe，输出 `steadyrpc-serialize-protobuf/target/probe-protostuff-unsafe.md`）：
 
 ```sh
-JAVA_HOME='D:\CS\JAVA\jdk-21' mvn -pl rpc-serialize-protobuf -am test -Pprobe
+JAVA_HOME='D:\CS\JAVA\jdk-21' mvn -pl steadyrpc-serialize-protobuf -am test -Pprobe
 ```
 
-反射模式只跑 record 探针（输出 `rpc-serialize-protobuf/target/probe-protostuff-reflect.md`）：
+反射模式只跑 record 探针（输出 `steadyrpc-serialize-protobuf/target/probe-protostuff-reflect.md`）：
 
 ```sh
-JAVA_HOME='D:\CS\JAVA\jdk-21' mvn -pl rpc-serialize-protobuf -am test "-Dtest=ProtostuffBehaviorProbeTest#p5Records" -Dsurefire.failIfNoSpecifiedTests=false "-DargLine=-Dprotostuff.runtime.use_sun_misc_unsafe=false"
+JAVA_HOME='D:\CS\JAVA\jdk-21' mvn -pl steadyrpc-serialize-protobuf -am test "-Dtest=ProtostuffBehaviorProbeTest#p5Records" -Dsurefire.failIfNoSpecifiedTests=false "-DargLine=-Dprotostuff.runtime.use_sun_misc_unsafe=false"
 ```
 
 反射模式下不能跑整个类：`p2cSchemaRegistrationSideEffect` 会因 `InaccessibleObjectException: Unable to make field private int java.util.ArrayList.size accessible: module java.base does not "opens java.util" to unnamed module` 报错。

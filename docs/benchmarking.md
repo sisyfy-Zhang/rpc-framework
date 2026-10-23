@@ -1,13 +1,13 @@
-# 端到端压测（rpc-bench-e2e）
+# 端到端压测（steadyrpc-bench-e2e）
 
-`rpc-bench-e2e` 是一个纯 Java 命令行：按**口径卡**（YAML）驱动真实的 `RpcServer` / `RpcClient` 进程，输出 **JSON**（事实源）
+`steadyrpc-bench-e2e` 是一个纯 Java 命令行：按**口径卡**（YAML）驱动真实的 `RpcServer` / `RpcClient` 进程，输出 **JSON**（事实源）
 和**由 JSON 生成的 Markdown** 报告。三条原则：
 
 - **数字只由流水线产生**：README 里的任何压测数字都引用这里生成的报告文件，不手写、不手抄。
 - **环境自动采集**：OS、CPU、内存、JDK、JVM 参数、Netty 版本、git sha 与是否有未提交改动、电源与调频策略，全部由程序读取，采集失败记 `unknown`。
 - **实验带断言、能失败**：卡片可以声明断言，断言不满足或有无效轮次时 `run` 以退出码 2 结束，报告里逐条写明失败项。
 
-它与 `rpc-benchmark`（JMH 微基准，测单个组件）互补：这里测的是两个进程之间一次完整 RPC 的吞吐与延迟。
+它与 `steadyrpc-benchmark`（JMH 微基准，测单个组件）互补：这里测的是两个进程之间一次完整 RPC 的吞吐与延迟。
 
 ## 目录
 
@@ -27,19 +27,19 @@
 ## 构建
 
 ```bash
-mvn -pl rpc-bench-e2e -am package -DskipTests
+mvn -pl steadyrpc-bench-e2e -am package -DskipTests
 ```
 
 本文的命令写 `mvn`（本机与 WSL 压测机都是 Maven 3.9.12）；CI 用仓库里的 `./mvnw`，Maven 版本同样固定为 3.9.12，两者可以互换。
 `-DskipTests` 同时跳过 JaCoCo（根 pom 里 `jacoco.skip` 缺省取 `skipTests`），`install` / `verify` 也不需要再加 `-Djacoco.skip=true`。
 
-产物是 `rpc-bench-e2e/target/classes` 与 `rpc-bench-e2e/target/lib/*`（`maven-dependency-plugin` 在 package 阶段复制运行时依赖，不打 fat jar），
+产物是 `steadyrpc-bench-e2e/target/classes` 与 `steadyrpc-bench-e2e/target/lib/*`（`maven-dependency-plugin` 在 package 阶段复制运行时依赖，不打 fat jar），
 `bench/bin/*.sh` 用这两者拼 classpath。脚本开头 `export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"`，从仓库根目录运行。
 
 对比对象（[gRPC / Dubbo](#对比对象grpc--dubbo)）各是一个模块，跑对比卡之前一起构建：
 
 ```bash
-mvn -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+mvn -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-grpc,steadyrpc-bench-compare-dubbo -am package -DskipTests
 ```
 
 ## 口径卡
@@ -231,7 +231,7 @@ crossval --harness <结果.json> --tool wrk|wrk2 --tool-output <file>[,<file>...
 - **crossval**：读一次 `transport: http` 运行的结果 JSON 与 wrk / wrk2 的原始输出（`--tool-output` 可给逗号分隔的多份，取 p99 中位那一次作对照值），并排比较、按[交叉验证](#交叉验证)的口径判定，
   写 `crossval-<mode>-<yyyyMMdd-HHmmss>.json` 与由它生成的 `.md`（闭环另有结论句）；判定 PASS 退出码 0，FAIL 退出码 2。一般由 `bench/bin/crossval.sh` 调用。
 
-- **`--metrics-port <p>`**（`server` 与 `run`，缺省关闭）：给被压的 RpcServer / RpcClient 加上 `rpc-metrics-micrometer` 的指标 Filter 与
+- **`--metrics-port <p>`**（`server` 与 `run`，缺省关闭）：给被压的 RpcServer / RpcClient 加上 `steadyrpc-metrics-micrometer` 的指标 Filter 与
   在途 / 连接数 Gauge，并在该端口内嵌 Prometheus 抓取端点 `/metrics`。[docker/](../docker/README.md) 里的 Prometheus 预置了
   `9464`（server）与 `9465`（run），起了 compose 之后 Grafana 的 RPC Overview 面板实时显示 QPS、p99、在途与连接数（指标说明见
   [observability.md](observability.md)）。**指标 Filter 在热路径上，正式数字默认不开 `--metrics-port`**；开了要在 `--label` 里写明
@@ -278,7 +278,7 @@ bash ~/rpc-bench-sync.sh
 # 2. 构建（WSL 侧的 JDK 21 与 Maven）
 cd ~/rpc-bench
 export JAVA_HOME=$HOME/tools/jdk-21
-mvn -q -pl rpc-bench-e2e -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e -am package -DskipTests
 
 # 3. 起服务端（单独一个终端，或后台运行并等待 ready 行），绑在 0-4 号核
 BENCH_SERVER_CPUS=0-4 bench/bin/bench-server.sh --port 9000 --host 127.0.0.1 --no-registry
@@ -495,7 +495,7 @@ wrk（闭环）与 wrk2（开环，按计划时刻计时、修正 coordinated om
 
 ```bash
 bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
-mvn -q -pl rpc-bench-e2e -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e -am package -DskipTests
 bash bench/bin/crossval.sh --mode open      # 测量校验：crossval-http-open-v1 vs wrk2 -R 5000 -U
 bash bench/bin/crossval.sh --mode closed    # 容量标定：crossval-http-closed-capacity-v1 vs wrk
 # 归档：输出到该 sha 的归档目录，与同一 sha 的压测结果放在一起（--label 缺省 crossval）
@@ -589,14 +589,14 @@ public interface CallTargetProvider {
 - 读卡时就按提供者校验（transport 名、serializer、service）；不认识的 transport 报错并列出可用的全部 transport。
 - 公开给对比模块的类型只有：`CallTarget`、`CallTargetProvider`、`ServerLauncher`、`BenchCallException`（自带错误分桶名）、
   `ServerProbes`（服务端环境 / GC 统计 / 压测负载，与 bench server 同一份采集）、`Profile`、`HarnessOptions`、`BenchService` / `BenchServiceImpl`、`Bench.execute`。
-  对比模块不依赖 harness 的包内实现，也不依赖 rpc-core 以外的本仓库模块。
+  对比模块不依赖 harness 的包内实现，也不依赖 steadyrpc-core 以外的本仓库模块。
 - 对比模块的 `target/classes:target/lib/*` 经 `BENCH_EXTRA_CP` 加到脚本 classpath 的**最前面**：对比模块的第三方 jar 按它自己解析出的版本生效
   （例如 grpc-java 需要的 guava 33.6.0-android 压过 curator 带来的 32.0.0-jre），运行时与该模块的测试同一组版本。`lib/` 里不复制本仓库的模块，
-  它们始终来自 `rpc-bench-e2e/target`。
+  它们始终来自 `steadyrpc-bench-e2e/target`。
 
 ### 两个对比模块
 
-| | `rpc-bench-compare-grpc` | `rpc-bench-compare-dubbo` |
+| | `steadyrpc-bench-compare-grpc` | `steadyrpc-bench-compare-dubbo` |
 |---|---|---|
 | 版本 | grpc-java 1.85.0（grpc-bom）、protobuf-java 3.25.9 | Dubbo 3.3.6（all-in-one `org.apache.dubbo:dubbo`） |
 | 契约 | `bench_echo.proto`：`Echo(Bytes) returns (Bytes)`、`Environment(Empty) returns (Env)`、`Stats(Empty) returns (ServerStats)`（`Stats` 消息与同名 rpc 冲突，改名 `ServerStats`；`Empty` 自定义，不引 well-known types） | Java 接口模式（不写 IDL），**直接导出与 rpc bench server 同一个 `BenchService` 接口与 `BenchServiceImpl` 实现** |
@@ -643,7 +643,7 @@ gRPC 是一个 protobuf 字段，Dubbo 在 hessian2 编码的参数外面再包�
 
 ```bash
 bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
-mvn -q -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-grpc,steadyrpc-bench-compare-dubbo -am package -DskipTests
 bash bench/bin/compare.sh                         # rpc、grpc、grpc-c2、dubbo、dubbo-c2 × closed64、open10k → target/compare/run-<时间>/compare.md
 bash bench/bin/compare.sh --out bench/reports/<yyyyMMdd>-<sha7>/compare    # 归档
 COMPARE_SERVER_ARGS_GRPC="--executor direct" bash bench/bin/compare.sh --transports rpc,grpc,grpc-c2 --out <dir>   # gRPC 上界对照点（directExecutor，非缺省用法，结果另放一个目录）
@@ -757,7 +757,7 @@ FAULT_HARNESS_OPTS="--open-workers per-request --outlier-detection off"   bash b
    缺省另加 `FAULT_HARNESS_OPTS="--open-workers per-request"`：故障期间挂住到超时的调用不会占满固定的 64 个工作者（那会让发压在故障期间退化成闭环）。
 3. harness 在**本轮开始时**（预热段之后）写出时间表：
    ```text
-   # rpc-bench-e2e fault schedule v1
+   # steadyrpc-bench-e2e fault schedule v1
    mode inject
    round_start_epoch_ms 1792566650657
    fault 0 20000 kill-9 2

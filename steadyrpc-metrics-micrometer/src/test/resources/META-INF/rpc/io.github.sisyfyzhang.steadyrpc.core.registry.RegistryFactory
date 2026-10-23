@@ -1,0 +1,1 @@
+static=io.github.sisyfyzhang.steadyrpc.metrics.micrometer.StaticRegistryFactory

@@ -111,7 +111,7 @@ def setup_fonts():
         "font.sans-serif": family,
         "axes.unicode_minus": False,
         "svg.fonttype": "path",
-        "svg.hashsalt": "rpc-framework-charts",
+        "svg.hashsalt": "steady-rpc-charts",
         "figure.facecolor": SURFACE,
         "savefig.facecolor": SURFACE,
         "axes.facecolor": SURFACE,
@@ -689,7 +689,7 @@ def chart_architecture(out_dir):
     my = ys_c[0] - 8
     box(RX, my, RW, 104, fill="#ffffff", edge=AXIS, r=8)
     text(RX + 14, my + 22, T("Micrometer 指标", "Micrometer metrics"), 13.5, INK, "bold")
-    text(RX + 14, my + 40, "rpc-metrics-micrometer", 11.5, INK_2)
+    text(RX + 14, my + 40, "steadyrpc-metrics-micrometer", 11.5, INK_2)
     text(RX + 14, my + 60, T("调用 Timer（service / method / status）", "call Timer (service/method/status)"), 11.5, INK_2)
     text(RX + 14, my + 78, T("在途 · 连接数 Gauge", "in-flight · connection Gauges"), 11.5, INK_2)
     text(RX + 14, my + 96, T("可内嵌 Prometheus /metrics", "embeddable Prometheus /metrics"), 11.5, INK_2)

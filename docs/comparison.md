@@ -163,7 +163,7 @@ gRPC / Dubbo 单连接开环卡的各轮 p99 从几毫秒到几十毫秒，只�
 
 ```bash
 bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
-mvn -q -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-grpc,steadyrpc-bench-compare-dubbo -am package -DskipTests
 bash bench/bin/compare.sh --out <dir>/compare                          # rpc、grpc、grpc-c2、dubbo、dubbo-c2 × closed64、open10k
 bash bench/bin/compare.sh --transports rpc-direct --out <dir>/compare  # 本框架 direct（非缺省），与缺省同目录
 bash bench/bin/sweep.sh --cards sweep-c1-closed64-rpc-v1,compare-closed64-rpc-v1 --out <dir>/sweep

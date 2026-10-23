@@ -72,7 +72,7 @@ bench：`server --outbound-backpressure on|off`、`--write-buffer-water-mark <lo
 
 ## "只发不读"对照测试
 
-`rpc-core` 的 `server/NonReadingClientTest`：原始 Netty 客户端（autoRead=false，按协议编码请求帧）向真实的 NettyServer（fixed(4, 1000)、
+`steadyrpc-core` 的 `server/NonReadingClientTest`：原始 Netty 客户端（autoRead=false，按协议编码请求帧）向真实的 NettyServer（fixed(4, 1000)、
 缺省水位线与硬上限、flush 合并开）发**固定总量** 20,000 个请求（每个要 1KB 回包，回包总量约 21MB），每批 100 个、批间 1ms，期间完全不读；
 两端套接字缓冲区固定为 64KiB（不让内核自动调整吸收回包）。服务端那条连接的待写字节峰值由 pipeline 最靠近 transport 处的记录 handler
 在每次写之后取。之后客户端恢复读。全程在 ByteBuf 泄漏探针（PARANOID）下运行。Windows 本机（2026-10-20，工作区未提交）：

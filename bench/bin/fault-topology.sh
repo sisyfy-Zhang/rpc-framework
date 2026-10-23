@@ -84,8 +84,8 @@ case "$cmd" in
     ;;
   up)
     [ -n "$PROVIDERS" ] && [ -n "$OUT" ] || usage
-    if [ ! -d "$ROOT/rpc-bench-e2e/target/lib" ]; then
-      echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+    if [ ! -d "$ROOT/steadyrpc-bench-e2e/target/lib" ]; then
+      echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
       exit 1
     fi
     mkdir -p "$OUT"

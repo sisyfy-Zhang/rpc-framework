@@ -1,0 +1,76 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-registry-nacos</artifactId>
+  <name>steadyrpc-registry-nacos</name>
+  <!-- Registry SPI implementation backed by Nacos: groupName = ServiceKey.group, serviceName = interface:version, node metadata in Instance.metadata. -->
+  <description>Registry SPI implementation backed by Nacos.</description>
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-core</artifactId>
+    </dependency>
+    <!-- 对 nacos-client 2.4.3 写死的 jackson 2.13.5 的对齐：在 nacos-client 之前直接声明 jackson-core / jackson-databind，
+         版本由根 pom 的 jackson-bom 管理。使用方的依赖图里这两项比 nacos-client → jackson 近一层，按就近原则胜出；
+         只在 dependencyManagement 里管理不够（它对使用方不生效），使用方会拿到 2.13.5（SECURITY.md「依赖漏洞」）。 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.nacos</groupId>
+      <artifactId>nacos-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-registry-tck</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 契约测试的后端：Docker 可用时起 nacos/nacos-server 容器，否则整个契约测试类 skipped -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>io.github.sisyfyzhang.steadyrpc.registry.nacos</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

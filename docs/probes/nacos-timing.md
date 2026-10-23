@@ -2,7 +2,7 @@
 
 记录 `NacosRegistry` 在真实 Nacos 上的两组时序：首订阅是否漏事件，以及 Registry 契约里声明的两个时间窗（实例消失窗口 40s、
 不可达时注册失败上限 15s）的实际值与余量。数据来自
-`rpc-registry-nacos/src/test/java/com/feynman/rpc/registry/nacos/NacosTimingProbeTest.java`
+`steadyrpc-registry-nacos/src/test/java/io/github/sisyfyzhang/steadyrpc/registry/nacos/NacosTimingProbeTest.java`
 （类上标 `@Tag("probe")`、类名以 ProbeTest 结尾，默认构建不运行；`-Pprobe` 运行；Docker 不可用时整个类 skipped）。
 与 Protostuff 探针不同，这里每项都**断言上界**：超出即失败。
 
@@ -28,8 +28,8 @@
 - 服务端：`nacos/nacos-server:v2.4.3`（standalone，Docker Desktop，容器未绑核、与探针共享宿主核），Testcontainers 起容器约 16s
 - 客户端：nacos-client 2.4.3，`NacosRegistry` 缺省配置（`connect-wait-ms` = 3000）
 - 日期：2026-10-19；工作区有未提交改动（git 18bda15 之上）
-- 命令：`mvn -Pprobe -pl rpc-registry-nacos -am test -Dtest=NacosTimingProbeTest -Dsurefire.failIfNoSpecifiedTests=false`
-- 原始输出：`rpc-registry-nacos/target/probe-nacos-timing.md`（构建产物，不入库）；本文的表格从它整理而来，数字未改动
+- 命令：`mvn -Pprobe -pl steadyrpc-registry-nacos -am test -Dtest=NacosTimingProbeTest -Dsurefire.failIfNoSpecifiedTests=false`
+- 原始输出：`steadyrpc-registry-nacos/target/probe-nacos-timing.md`（构建产物，不入库）；本文的表格从它整理而来，数字未改动
 
 ## 数据
 
@@ -128,7 +128,7 @@
 在 WSL2（或任意有 Docker 的 Linux）的仓库根目录执行，`JAVA_HOME` 指向 JDK 21：
 
 ```sh
-mvn -Pprobe -pl rpc-registry-nacos -am test -Dtest=NacosTimingProbeTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -Pprobe -pl steadyrpc-registry-nacos -am test -Dtest=NacosTimingProbeTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 整类约 2 分钟（容器启动约 16s，静默死亡两轮约 1 分钟）。结束后容器由 Testcontainers 回收；`docker pause` 的那个用例在 finally 里

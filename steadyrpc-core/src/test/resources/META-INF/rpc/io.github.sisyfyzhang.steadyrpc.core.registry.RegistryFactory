@@ -1,0 +1,5 @@
+# 进程内注册中心与永远注册失败的注册中心，供 steadyrpc-core 自身的测试使用（core 不依赖任何真实注册中心实现）
+memory=io.github.sisyfyzhang.steadyrpc.core.testutil.InMemoryRegistryFactory
+failing=io.github.sisyfyzhang.steadyrpc.core.testutil.FailingRegistryFactory
+flaky=io.github.sisyfyzhang.steadyrpc.core.testutil.FlakyRegistryFactory
+lossy=io.github.sisyfyzhang.steadyrpc.core.testutil.LossyRegistryFactory

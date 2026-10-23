@@ -1,0 +1,2 @@
+simple=io.github.sisyfyzhang.steadyrpc.core.testutil.SimpleTestSerializer
+alt=io.github.sisyfyzhang.steadyrpc.core.server.FakeSerializerB

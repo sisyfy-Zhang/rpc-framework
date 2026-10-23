@@ -18,7 +18,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `rpc.registry.type` | `registry(RegistryConfig)` | `zookeeper` | 注册中心 SPI 名：`zookeeper` / `nacos` |
 | `rpc.registry.address` | 同上 | `localhost:2181` | 注册中心地址 |
 | `rpc.registry.properties.*` | `RegistryConfig.withProperty(k, v)` | — | 实现相关：ZK 的 `session-timeout-ms`（30000）、`connection-timeout-ms`（5000）、`connect-wait-ms`（1000）、`push-merge-ms`（50）；Nacos 的 `namespace`、`username`、`password`、`connect-wait-ms`（3000） |
-| `rpc.serializer` | `serializer(String)` | `protobuf`（SPI 缺省名） | 客户端首选 / 服务端兜底的序列化方式；缺省值需要 `rpc-serialize-protobuf` 在 classpath 上，只带 fastjson2 时设为 `fastjson2` |
+| `rpc.serializer` | `serializer(String)` | `protobuf`（SPI 缺省名） | 客户端首选 / 服务端兜底的序列化方式；缺省值需要 `steadyrpc-serialize-protobuf` 在 classpath 上，只带 fastjson2 时设为 `fastjson2` |
 | `rpc.serializer-options.*` | `serializerOption(k, v)` | — | 交给序列化器，如 `protobuf.allowed-packages: "com.acme.api.,com.acme.dto."`（多态位置按名加载的包白名单） |
 
 ## 客户端 `rpc.client.*`
@@ -46,7 +46,7 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 | `outlier-detection.max-ejection-percent` | 同上 | 50 | 最多摘除的提供者比例：摘掉之后健康的至少保留 `ceil(n × (100 − p) / 100)` 个、且至少 1 个；万一候选全在摘除期，退回全部候选 |
 | — | `clientFilter(Filter...)` | — | Boot 中为容器里的 `ClientFilter` bean |
 
-`outlier-detection.*`（离群摘除）在 1.0.0 之后的 main 上加入，1.0.0 没有这几项；机制与 A/B 实验见
+`outlier-detection.*`（离群摘除）自 2.0.0 起提供，1.0.0 没有这几项；机制与 A/B 实验见
 [probes/outlier-detection.md](probes/outlier-detection.md)，边界见 [getting-started.md「已知限制」](getting-started.md#离群摘除只按失败按时间放回)。
 
 ### 引用级选项
@@ -87,5 +87,5 @@ Boot 的 `rpc.*` 属性与纯 Java builder 一一对应；没写的项取 core �
 
 - **RPC 服务端**：`rpc.server.port` / `port(int)`，缺省 9000；0 = 随机端口，注册中心里登记的是实际绑定的端口。注册给消费端的地址由 `host` 决定（缺省自动探测）。
 - **客户端**不监听端口。
-- **rpc-examples**：Boot provider 9000（`provider.yml`），纯 Java `PlainProvider` 9100；`PlainProvider --metrics-port <p>` 另开内嵌 Prometheus `/metrics` 端点（[rpc-examples/README.md](../rpc-examples/README.md#运行)）。
+- **steadyrpc-examples**：Boot provider 9000（`provider.yml`），纯 Java `PlainProvider` 9100；`PlainProvider --metrics-port <p>` 另开内嵌 Prometheus `/metrics` 端点（[steadyrpc-examples/README.md](../steadyrpc-examples/README.md#运行)）。
 - **本机中间件与压测进程**：ZooKeeper、Nacos、Prometheus、Grafana、toxiproxy 的宿主机端口，以及 Prometheus 预置抓取的 `rpc-bench-server` / `rpc-bench-client` / 示例应用的指标端口，见 [docker/README.md「端口」](../docker/README.md#端口)；指标端点本身见 [observability.md](observability.md#内嵌-metrics-端点)。

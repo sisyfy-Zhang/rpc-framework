@@ -1,2 +1,0 @@
-simple=com.feynman.rpc.core.testutil.SimpleTestSerializer
-alt=com.feynman.rpc.core.server.FakeSerializerB

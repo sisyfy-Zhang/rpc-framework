@@ -1,2 +1,0 @@
-memory=com.feynman.rpc.starter.InMemoryRegistryFactory
-failing=com.feynman.rpc.starter.FailingRegistryFactory

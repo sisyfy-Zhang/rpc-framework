@@ -1,6 +1,6 @@
 # RPC 协议 v2 规格
 
-本文是本框架线上协议 v2 的公开规格，面向框架使用者与第三方实现者（其他语言的客户端 / 服务端、抓包分析工具等）。所有规则以 `rpc-core` 的实现为准；文中"必须"表示不遵守会导致对端拒绝或行为未定义，"当前实现"表示 Java 实现的现有行为，可能随版本演进。
+本文是本框架线上协议 v2 的公开规格，面向框架使用者与第三方实现者（其他语言的客户端 / 服务端、抓包分析工具等）。所有规则以 `steadyrpc-core` 的实现为准；文中"必须"表示不遵守会导致对端拒绝或行为未定义，"当前实现"表示 Java 实现的现有行为，可能随版本演进。
 
 ## 目录
 
@@ -363,7 +363,7 @@ RESPONSE 帧的 body，格式取决于帧头 status。
 | 来源 | 说明 |
 |---|---|
 | `java.`、`javax.` | 默认 |
-| 框架包 `com.feynman.rpc.core.` | 默认 |
+| 框架包 `io.github.sisyfyzhang.steadyrpc.core.` | 默认 |
 | 被引用接口所在的包及其子包 | 默认（业务异常最常见的位置） |
 | 方法 `throws` 子句声明的异常类 | 默认，按类名精确匹配 |
 | `RpcClientConfig.Builder#exceptionAllowlist(...)` 追加的前缀 | 以 `.` 结尾表示该包及其子包，否则按类名前缀匹配 |
@@ -391,10 +391,10 @@ serializer 字节是各实现的稳定标识，一旦分配不再更改。
 | 编码 | SPI 名 | 实现 | 模块 |
 |---|---|---|---|
 | 0 | — | 未分配；心跳 / 协商帧的 serializer 字段填 0 | — |
-| 1 | `fastjson2` | Fastjson2Serializer（JSON，UTF-8） | `rpc-serialize-fastjson2` |
-| 2 | `protobuf` | ProtobufSerializer（基于 Protostuff） | `rpc-serialize-protobuf` |
+| 1 | `fastjson2` | Fastjson2Serializer（JSON，UTF-8） | `steadyrpc-serialize-fastjson2` |
+| 2 | `protobuf` | ProtobufSerializer（基于 Protostuff） | `steadyrpc-serialize-protobuf` |
 
-未显式配置时，首选序列化器（服务端为兜底序列化器）为 SPI 缺省名 `protobuf`（Protostuff：无需 IDL、二进制紧凑、字节流不含类名）；classpath 上没有 `rpc-serialize-protobuf` 时必须显式配置。null 由信封的 present 标志表达，序列化器永远不会收到 null；收到 0 字节时应返回"空对象"。
+未显式配置时，首选序列化器（服务端为兜底序列化器）为 SPI 缺省名 `protobuf`（Protostuff：无需 IDL、二进制紧凑、字节流不含类名）；classpath 上没有 `steadyrpc-serialize-protobuf` 时必须显式配置。null 由信封的 present 标志表达，序列化器永远不会收到 null；收到 0 字节时应返回"空对象"。
 
 ### 11.2 握手流程
 

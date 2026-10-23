@@ -1,6 +1,6 @@
 # CodeQL 静态安全扫描（Java）：push main、PR、每周一次。结果进仓库 Security → Code scanning。
 # build-mode manual：用与 ci.yml 相同的 JDK 21 + ./mvnw（Maven 3.9.12）编译，CodeQL 跟踪这次编译抽取代码；
-# 只编译不跑测试（-DskipTests 仍编译测试代码），rpc-integration-tests 排除出 reactor（与 release.yml 同一个 -pl 写法；它只有测试代码）。
+# 只编译不跑测试（-DskipTests 仍编译测试代码），steadyrpc-integration-tests 排除出 reactor（与 release.yml 同一个 -pl 写法；它只有测试代码）。
 # actions 按 commit SHA 固定，行尾注释是对应 tag（见 ci.yml 顶部说明）。
 name: codeql
 
@@ -47,7 +47,7 @@ jobs:
           languages: java-kotlin
           build-mode: manual
       - name: Build (./mvnw install, no tests)
-        run: ./mvnw $MVN_FLAGS -DskipTests -Djacoco.skip=true -pl '!rpc-integration-tests' install
+        run: ./mvnw $MVN_FLAGS -DskipTests -Djacoco.skip=true -pl '!steadyrpc-integration-tests' install
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 对比对象并排压测（Linux / WSL2）：依次起各 transport 的服务端（绑 BENCH_SERVER_CPUS，缺省 0-4）→ 跑它的对比卡
 # （绑 BENCH_CLIENT_CPUS，缺省 5-9，--direct 直连：基础性能对比排除注册中心变量）→ 停服务端；全部结果写进同一目录，
-# 最后用 rpc-bench-e2e compare 生成并排的对比表 compare.md。口径见 docs/benchmarking.md「对比对象」。
+# 最后用 steadyrpc-bench-e2e compare 生成并排的对比表 compare.md。口径见 docs/benchmarking.md「对比对象」。
 #   bench/bin/compare.sh                                   # 开箱即用 + 连接数对齐：rpc、grpc、grpc-c2、dubbo、dubbo-c2 的 closed64 + open10k
 #   bench/bin/compare.sh --transports rpc,grpc --loads closed64 --out bench/reports/<yyyyMMdd>-<sha7>/compare
 #   bench/bin/compare.sh --profiles ~/t11/profiles --suffix short --label smoke   # 缩短卡（不入库）冒烟流水线
@@ -20,12 +20,12 @@
 # 服务端统计：rpc 服务端另开 --http-port <端口 + 100>（HTTP 控制端点），脚本写 <out>/control-topology-<transport>.txt 并给它的 run 传 --topology，
 #           窗口起止的服务端统计经 GET /stats 取（IO 线程回答、不经业务执行器）；对比对象的服务端没有这个端点，照旧经各自的统计调用。
 # 端口：第 i 个 transport 用 19300 + i（rpc 19300、grpc 19301……）。对比模块须已构建：
-#   mvn -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+#   mvn -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-grpc,steadyrpc-bench-compare-dubbo -am package -DskipTests
 # 退出码：0 全部跑完（单张卡判定未通过也算跑完，判定写在对比表里）；1 运行出错。
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="$ROOT/rpc-bench-e2e"
+MODULE="$ROOT/steadyrpc-bench-e2e"
 # shellcheck source=lib-bench.sh
 . "$ROOT/bench/bin/lib-bench.sh"
 
@@ -47,7 +47,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ ! -d "$MODULE/target/lib" ]; then
-  echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+  echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
   exit 1
 fi
 OUT="${OUT:-$ROOT/target/compare/run-$(date +%Y%m%d-%H%M%S)}"
@@ -113,5 +113,5 @@ for t in "${TRANSPORT_LIST[@]}"; do
   stop_server
 done
 
-"$JAVA_HOME/bin/java" -cp "$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench compare --in "$OUT" --out "$OUT/compare.md"
+"$JAVA_HOME/bin/java" -cp "$MODULE/target/classes:$MODULE/target/lib/*" io.github.sisyfyzhang.steadyrpc.bench.Bench compare --in "$OUT" --out "$OUT/compare.md"
 echo "compare table: $OUT/compare.md"

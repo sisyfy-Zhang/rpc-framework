@@ -1,0 +1,83 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-registry-zookeeper</artifactId>
+  <name>steadyrpc-registry-zookeeper</name>
+  <description>Registry SPI implementation backed by ZooKeeper/Curator.</description>
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.curator</groupId>
+      <artifactId>curator-framework</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.curator</groupId>
+      <artifactId>curator-recipes</artifactId>
+    </dependency>
+    <!-- 排除 zookeeper 自带的全部 Netty（netty-handler / netty-transport-native-epoll / netty-tcnative-boringssl-static）：
+         它们在使用方的依赖图里比 steadyrpc-core → netty-all 的同名构件近一层，按就近原则会胜出（3.9.4 时是 netty-handler 4.1.119，
+         与 netty-all 的其余构件混成两个版本）；本 pom 的 dependencyManagement 对使用方不生效，只有 exclusion 会随 pom 发布。
+         ZooKeeper 客户端缺省走 NIO（ClientCnxnSocketNIO）；使用方改用 ClientCnxnSocketNetty（ZK 客户端 TLS）时，
+         所需的 netty-handler / native epoll 由 steadyrpc-core 的 netty-all 提供（同一 Netty 版本）；要 OpenSSL 引擎时自己加 netty-tcnative。 -->
+    <dependency>
+      <groupId>org.apache.zookeeper</groupId>
+      <artifactId>zookeeper</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>io.netty</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-registry-tck</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 内嵌 ZK 测试服务器：同进程启动/关闭，不受这个沙箱环境手动起 ZK 时遇到的连接问题影响 -->
+    <dependency>
+      <groupId>org.apache.curator</groupId>
+      <artifactId>curator-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>io.github.sisyfyzhang.steadyrpc.registry.zookeeper</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

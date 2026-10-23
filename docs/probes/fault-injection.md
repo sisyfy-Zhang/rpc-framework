@@ -196,7 +196,7 @@ t=42 ok=5000 err=0     p99=1.991                                  t=42 ok=6390 e
 
 ```bash
 bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
-mvn -q -pl rpc-bench-e2e -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e -am package -DskipTests
 setsid nohup ~/tools/toxiproxy-2.13.0/toxiproxy -host 127.0.0.1 -port 8475 > toxiproxy.log 2>&1 < /dev/null &
 export TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOXIPROXY_LISTEN_HOST=127.0.0.1 TOXIPROXY_PORT_BASE=21000
 bash bench/bin/fault-run.sh --card fault-slow-node-p2c-v1 --behind-toxiproxy all [--no-faults]

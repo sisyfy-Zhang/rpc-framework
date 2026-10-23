@@ -37,12 +37,12 @@ jobs:
           cache: maven
       - name: Docker info (Nacos contract tests run only when Docker is available)
         run: docker version
-      # 全量：单元 + 集成 + ArchUnit + Registry TCK（Nacos 经 Testcontainers 实跑）+ JaCoCo check（rpc-core ≥ 70%）
+      # 全量：单元 + 集成 + ArchUnit + Registry TCK（Nacos 经 Testcontainers 实跑）+ JaCoCo check（steadyrpc-core ≥ 70%）
       - name: ./mvnw clean install
         run: ./mvnw $MVN_FLAGS clean install
       - name: Nacos contract tests must have run on this runner (only the known capability skip allowed)
         run: |
-          report=rpc-registry-nacos/target/surefire-reports/TEST-com.feynman.rpc.registry.nacos.NacosRegistryContractTest.xml
+          report=steadyrpc-registry-nacos/target/surefire-reports/TEST-io.github.sisyfyzhang.steadyrpc.registry.nacos.NacosRegistryContractTest.xml
           test -f "$report"
           suite=$(grep -o '<testsuite [^>]*' "$report" | head -1)
           echo "$suite"
@@ -59,16 +59,16 @@ jobs:
               || { echo "::error::an unexpected Nacos contract test was skipped"; exit 1; }
           fi
           echo "Nacos contract tests ran: tests=$tests skipped=$skipped (only the known capability skip)"
-      # Codecov 只上传 rpc-integration-tests 的 JaCoCo 聚合报告（全部模块测试的 exec 合并后，对 core / 注册中心 / 序列化 / starter / metrics / examples 各模块的覆盖），disable_search 不再自动搜各模块的 jacoco.xml，避免重复计数。
+      # Codecov 只上传 steadyrpc-integration-tests 的 JaCoCo 聚合报告（全部模块测试的 exec 合并后，对 core / 注册中心 / 序列化 / starter / metrics / examples 各模块的覆盖），disable_search 不再自动搜各模块的 jacoco.xml，避免重复计数。
       # 先核对报告存在：聚合报告路径变了要在这里看见，而不是变成 Codecov 上静默的"无数据"。
       - name: JaCoCo aggregate XML exists
-        run: ls -l rpc-integration-tests/target/site/jacoco-aggregate/jacoco.xml
+        run: ls -l steadyrpc-integration-tests/target/site/jacoco-aggregate/jacoco.xml
       # CODECOV_TOKEN 未设置（或 fork 的 PR 拿不到 secret）时上传失败只记日志，不让 CI 变红
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: rpc-integration-tests/target/site/jacoco-aggregate/jacoco.xml
+          files: steadyrpc-integration-tests/target/site/jacoco-aggregate/jacoco.xml
           disable_search: true
           fail_ci_if_error: false
       - name: Upload test reports and coverage
@@ -78,8 +78,8 @@ jobs:
           name: verify-reports
           path: |
             **/target/surefire-reports/
-            rpc-core/target/site/jacoco/
-            rpc-integration-tests/target/site/jacoco-aggregate/
+            steadyrpc-core/target/site/jacoco/
+            steadyrpc-integration-tests/target/site/jacoco-aggregate/
           if-no-files-found: ignore
 
   sigterm:
@@ -95,16 +95,16 @@ jobs:
           cache: maven
       - name: Build and install all modules (no tests)
         run: ./mvnw $MVN_FLAGS install -DskipTests -Djacoco.skip=true
-      # SigtermShutdownTest：独立 JVM 起 rpc-examples 的 provider，连测试进程里的 ZooKeeper（curator TestingServer），
+      # SigtermShutdownTest：独立 JVM 起 steadyrpc-examples 的 provider，连测试进程里的 ZooKeeper（curator TestingServer），
       # 慢调用进行中 kill -TERM，断言：慢调用正常返回、节点先于它消失、进程在 shutdown-timeout 内以 143 退出。
       # 本机（Windows）上该用例被 @EnabledOnOs(LINUX) 跳过。
       - name: Run SigtermShutdownTest
         run: >
-          ./mvnw $MVN_FLAGS -pl rpc-integration-tests verify -Djacoco.skip=true
+          ./mvnw $MVN_FLAGS -pl steadyrpc-integration-tests verify -Djacoco.skip=true
           -Dtest=SigtermShutdownTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: The SIGTERM test must have run (not skipped)
         run: |
-          report=rpc-integration-tests/target/surefire-reports/TEST-com.feynman.rpc.it.SigtermShutdownTest.xml
+          report=steadyrpc-integration-tests/target/surefire-reports/TEST-io.github.sisyfyzhang.steadyrpc.it.SigtermShutdownTest.xml
           test -f "$report"
           grep -q 'tests="1"' "$report" && grep -q 'skipped="0"' "$report" && grep -q 'failures="0"' "$report" && grep -q 'errors="0"' "$report"
       - name: Upload report
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sigterm-reports
-          path: rpc-integration-tests/target/surefire-reports/
+          path: steadyrpc-integration-tests/target/surefire-reports/
           if-no-files-found: ignore
 
   paranoid-leak:
@@ -140,7 +140,7 @@ jobs:
           if grep -rln "LEAK:" --include='*.txt' --include='*.xml' . ; then echo "::error::Netty reported ByteBuf leaks"; exit 1; fi
           echo "no LEAK reports"
 
-  # Netty 4.2 线：Spring Boot 4.1 的 spring-boot-dependencies 把 Netty 管理到 4.2.x，Boot 应用里的 rpc-core 实际跑在 4.2 上。
+  # Netty 4.2 线：Spring Boot 4.1 的 spring-boot-dependencies 把 Netty 管理到 4.2.x，Boot 应用里的 steadyrpc-core 实际跑在 4.2 上。
   # 本仓库在 4.1 线上构建与压测（根 pom netty.version）；这里用 Boot 4.1.0 管理的版本覆盖 netty.version（netty-bom 的 import 版本），
   # 跑同一份全量构建 + 测试，保证两条线都可用。
   netty-42:
@@ -158,15 +158,50 @@ jobs:
           cache: maven
       - name: ./mvnw clean install on Netty 4.2
         run: ./mvnw $MVN_FLAGS clean install -Djacoco.skip=true -Dnetty.version=$NETTY_42_VERSION
-      - name: Netty override really applies (every io.netty artifact of rpc-core and rpc-registry-zookeeper on 4.2)
+      - name: Netty override really applies (every io.netty artifact of steadyrpc-core and steadyrpc-registry-zookeeper on 4.2)
         if: always()
         run: |
           set -o pipefail
-          ./mvnw $MVN_FLAGS -q -pl rpc-core,rpc-registry-zookeeper -am dependency:list -Dnetty.version=$NETTY_42_VERSION -DoutputFile=deps.txt
-          cat rpc-core/deps.txt rpc-registry-zookeeper/deps.txt
-          grep -h "io.netty:" rpc-core/deps.txt rpc-registry-zookeeper/deps.txt > netty.txt
+          ./mvnw $MVN_FLAGS -q -pl steadyrpc-core,steadyrpc-registry-zookeeper -am dependency:list -Dnetty.version=$NETTY_42_VERSION -DoutputFile=deps.txt
+          cat steadyrpc-core/deps.txt steadyrpc-registry-zookeeper/deps.txt
+          grep -h "io.netty:" steadyrpc-core/deps.txt steadyrpc-registry-zookeeper/deps.txt > netty.txt
           test -s netty.txt
           if grep -v ":$NETTY_42_VERSION" netty.txt | grep -v "netty-tcnative"; then echo "::error::io.netty artifacts not on $NETTY_42_VERSION"; exit 1; fi
+
+  # 发布构建的干跑：javadoc（doclint）、sources、MANIFEST 这类只在 release profile 里出现的问题在每次 push 就暴露，
+  # 而不是推 tag 后 release.yml 才失败（2.0.0 前 registry-nacos 的 javadoc 就是这样漏到发布前的）。
+  # 与 release.yml 同一条 -Prelease 命令，只把 deploy 换成 install、跳过签名：central-publishing 的 publish 目标绑在 deploy 阶段，
+  # install 不会走到它，不连 Central、不需要任何 Secret。
+  release-dryrun:
+    name: release-dryrun (-Prelease install, no signing, no upload)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: ./mvnw -Prelease install (sources, javadoc, manifest; gpg skipped)
+        run: ./mvnw $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -Dgpg.skip=true -pl '!steadyrpc-integration-tests' install
+      - name: Published jars have sources / javadoc and the expected MANIFEST
+        run: |
+          set -euo pipefail
+          version=$(./mvnw $MVN_FLAGS -q -DforceStdout help:evaluate -Dexpression=project.version)
+          for m in core registry-tck registry-zookeeper registry-nacos serialize-fastjson2 serialize-protobuf metrics-micrometer spring-boot-starter; do
+            base="steadyrpc-$m/target/steadyrpc-$m-$version"
+            for f in "$base.jar" "$base-sources.jar" "$base-javadoc.jar"; do
+              [ -s "$f" ] || { echo "::error::missing $f"; exit 1; }
+            done
+            # MANIFEST 每行 72 字节折行，续行以一个空格开头：先拼回再取值
+            mf=$(unzip -p "$base.jar" META-INF/MANIFEST.MF | tr -d '\r' | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g')
+            amn=$(echo "$mf" | sed -n 's/^Automatic-Module-Name: //p')
+            iv=$(echo "$mf" | sed -n 's/^Implementation-Version: //p')
+            echo "steadyrpc-$m: Automatic-Module-Name=$amn Implementation-Version=$iv"
+            case "$amn" in io.github.sisyfyzhang.steadyrpc.*) ;; *) echo "::error::steadyrpc-$m Automatic-Module-Name=$amn"; exit 1;; esac
+            [ "$iv" = "$version" ] || { echo "::error::steadyrpc-$m Implementation-Version=$iv, expected $version"; exit 1; }
+          done
 
   jdk25:
     name: jdk25 (optional)

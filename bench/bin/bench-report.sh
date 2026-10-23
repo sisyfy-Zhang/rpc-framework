@@ -5,9 +5,9 @@
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="$ROOT/rpc-bench-e2e"
+MODULE="$ROOT/steadyrpc-bench-e2e"
 if [ ! -d "$MODULE/target/lib" ]; then
-  echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+  echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
   exit 1
 fi
 PIN=()
@@ -18,4 +18,4 @@ if [ -n "${BENCH_CLIENT_CPUS:-}" ]; then
     echo "warning: BENCH_CLIENT_CPUS is set but taskset is not available; starting unpinned" >&2
   fi
 fi
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench report "$@"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" io.github.sisyfyzhang.steadyrpc.bench.Bench report "$@"

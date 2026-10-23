@@ -1,0 +1,32 @@
+# 服务提供方示例配置（ProviderApplication 以 spring.config.name=provider 加载本文件）
+rpc:
+  registry:
+    type: zookeeper
+    address: localhost:2181
+  # 首选序列化方式；classpath 上同时有 fastjson2，建连时与对端协商
+  serializer: protobuf
+  server:
+    port: 9000
+    weight: 1
+    # 优雅停机等待在途请求的上限（摘注册之后、关端口之前）
+    shutdown-timeout: 10s
+    # 摘注册后继续服务的宽限期，让注册中心把下线推送到消费端再开始拒绝新请求（生产建议 1s）
+    deregister-grace: 1s
+    executor:
+      type: fixed
+      threads: 16
+      # 有界队列：满了的请求回 SERVER_OVERLOADED（业务未执行，配了重试的调用方会换节点）
+      queue-capacity: 1000
+
+# Actuator：health 组件 rpc（已注册 = UP；尚未注册、注册丢失或停机中 = OUT_OF_SERVICE）接进 readiness 组，并列出组件明细
+management:
+  endpoint:
+    health:
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,rpc
+
+logging:
+  level:
+    io.github.sisyfyzhang.steadyrpc: INFO

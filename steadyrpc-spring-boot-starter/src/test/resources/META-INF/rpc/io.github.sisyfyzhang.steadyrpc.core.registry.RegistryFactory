@@ -1,0 +1,2 @@
+memory=io.github.sisyfyzhang.steadyrpc.starter.InMemoryRegistryFactory
+failing=io.github.sisyfyzhang.steadyrpc.starter.FailingRegistryFactory

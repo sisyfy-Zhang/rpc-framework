@@ -1,16 +1,16 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" child.project.url.inherit.append.path="false">
   <modelVersion>4.0.0</modelVersion>
-  <!-- 坐标 groupId（io.github.sisyfy-zhang）与 Java 包名（com.feynman.rpc）不同：Maven Central 的 io.github.* 命名空间按 GitHub 账号验证。
-       版本号：开发期 X.Y.Z-SNAPSHOT，发布时改成 X.Y.Z 并打 vX.Y.Z tag（docs/releasing.md）；rpc-bom 不继承本 pom，版本要一起改。 -->
+  <!-- 坐标 groupId（io.github.sisyfy-zhang）与 Java 包名（io.github.sisyfyzhang.steadyrpc）不同：Maven Central 的 io.github.* 命名空间按 GitHub 账号验证。
+       版本号：开发期 X.Y.Z-SNAPSHOT，发布时改成 X.Y.Z 并打 vX.Y.Z tag（docs/releasing.md）；steadyrpc-bom 不继承本 pom，版本要一起改。 -->
   <groupId>io.github.sisyfy-zhang</groupId>
-  <artifactId>rpc-parent</artifactId>
-  <version>1.0.0</version>
+  <artifactId>steadyrpc-parent</artifactId>
+  <version>2.0.0</version>
   <packaging>pom</packaging>
-  <name>rpc-parent</name>
-  <description>Parent POM of rpc-framework, a Netty-based Java RPC framework with pluggable registry, serializer, load-balancing and cluster SPIs.</description>
+  <name>steadyrpc-parent</name>
+  <description>Parent POM of steady-rpc, a Netty-based Java RPC framework with pluggable registry, serializer, load-balancing and cluster SPIs.</description>
   <!-- Central 必填元数据（name / description / url / licenses / developers / scm），所有子模块继承；
        child.*.inherit.append.path=false：子模块的 url / scm 不在末尾拼 /artifactId（仓库没有按模块的独立页面） -->
-  <url>https://github.com/sisyfy-Zhang/rpc-framework</url>
+  <url>https://github.com/sisyfy-Zhang/steady-rpc</url>
   <licenses>
     <license>
       <name>MIT License</name>
@@ -26,27 +26,27 @@
     </developer>
   </developers>
   <scm child.scm.connection.inherit.append.path="false" child.scm.developerConnection.inherit.append.path="false" child.scm.url.inherit.append.path="false">
-    <connection>scm:git:https://github.com/sisyfy-Zhang/rpc-framework.git</connection>
-    <developerConnection>scm:git:ssh://git@github.com/sisyfy-Zhang/rpc-framework.git</developerConnection>
-    <url>https://github.com/sisyfy-Zhang/rpc-framework</url>
+    <connection>scm:git:https://github.com/sisyfy-Zhang/steady-rpc.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/sisyfy-Zhang/steady-rpc.git</developerConnection>
+    <url>https://github.com/sisyfy-Zhang/steady-rpc</url>
     <tag>HEAD</tag>
   </scm>
   <modules>
-  	<module>rpc-bom</module>
-  	<module>rpc-core</module>
-  	<module>rpc-registry-tck</module>
-  	<module>rpc-registry-zookeeper</module>
-  	<module>rpc-registry-nacos</module>
-  	<module>rpc-serialize-fastjson2</module>
-  	<module>rpc-serialize-protobuf</module>
-  	<module>rpc-metrics-micrometer</module>
-  	<module>rpc-spring-boot-starter</module>
-  	<module>rpc-examples</module>
-  	<module>rpc-integration-tests</module>
-  	<module>rpc-benchmark</module>
-  	<module>rpc-bench-e2e</module>
-  	<module>rpc-bench-compare-grpc</module>
-  	<module>rpc-bench-compare-dubbo</module>
+  	<module>steadyrpc-bom</module>
+  	<module>steadyrpc-core</module>
+  	<module>steadyrpc-registry-tck</module>
+  	<module>steadyrpc-registry-zookeeper</module>
+  	<module>steadyrpc-registry-nacos</module>
+  	<module>steadyrpc-serialize-fastjson2</module>
+  	<module>steadyrpc-serialize-protobuf</module>
+  	<module>steadyrpc-metrics-micrometer</module>
+  	<module>steadyrpc-spring-boot-starter</module>
+  	<module>steadyrpc-examples</module>
+  	<module>steadyrpc-integration-tests</module>
+  	<module>steadyrpc-benchmark</module>
+  	<module>steadyrpc-bench-e2e</module>
+  	<module>steadyrpc-bench-compare-grpc</module>
+  	<module>steadyrpc-bench-compare-dubbo</module>
   </modules>
 
   <properties>
@@ -60,11 +60,11 @@
     <!-- Testcontainers 2.x 只 shade 了 jackson-databind/core，jackson-annotations 走 classpath：docker-java-api 3.7.1 要 ≥ 2.20 的 annotations，
          不管理时 nacos-client 2.4.3 写死的 2.13.5 按就近原则胜出，CI 有 Docker 时 NoSuchFieldError。
          2.21 线与 Spring Boot 4.1 的 jackson-2-bom 同线；2.21.7 起修复 2.20.x 上的 jackson-core / databind 公告（SECURITY.md「依赖漏洞」）。
-         rpc-registry-nacos 另外直接声明 jackson-core / databind，让使用方也拿到这个版本（本 dependencyManagement 对使用方不生效）。 -->
+         steadyrpc-registry-nacos 另外直接声明 jackson-core / databind，让使用方也拿到这个版本（本 dependencyManagement 对使用方不生效）。 -->
     <jackson-bom.version>2.21.8</jackson-bom.version>
     <fastjson2.version>2.0.60</fastjson2.version>
     <slf4j.version>2.0.17</slf4j.version> <!-- 1.7.x 的 StaticLoggerBinder 机制和 logback-classic 1.5.x（基于 SLF4J 2.x ServiceLoader）不兼容，绑定了也不生效 -->
-    <zookeeper.version>3.9.6</zookeeper.version> <!-- 3.9.5 起修复 ZKTrustManager 反向 DNS 回退与 ZKConfig 配置值写入日志；rpc-bom 里写死同一版本，两处一起改（BomConsistencyTest 核对） -->
+    <zookeeper.version>3.9.6</zookeeper.version> <!-- 3.9.5 起修复 ZKTrustManager 反向 DNS 回退与 ZKConfig 配置值写入日志；steadyrpc-bom 里写死同一版本，两处一起改（BomConsistencyTest 核对） -->
     <curator.version>5.8.0</curator.version> <!-- 5.2.0 的 curator-test 和 zookeeper 3.9.4 有二进制不兼容（IncompatibleClassChangeError），升到 5.8.0 修复 -->
     <protostuff.version>1.8.0</protostuff.version>
     <nacos-client.version>2.4.3</nacos-client.version>
@@ -79,19 +79,19 @@
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <testcontainers.version>2.0.5</testcontainers.version>
     <jacoco.version>0.8.14</jacoco.version>
-    <!-- rpc-bench-e2e：延迟直方图与口径卡解析（只用 SafeConstructor 加载成 Map，不反序列化到 Bean） -->
+    <!-- steadyrpc-bench-e2e：延迟直方图与口径卡解析（只用 SafeConstructor 加载成 Map，不反序列化到 Bean） -->
     <hdrhistogram.version>2.2.2</hdrhistogram.version>
     <snakeyaml.version>2.7</snakeyaml.version>
-    <!-- rpc-metrics-micrometer：与 Spring Boot 4.1 管理的 Micrometer 同一条 1.17 线（starter 的 optional Actuator 也走它），
+    <!-- steadyrpc-metrics-micrometer：与 Spring Boot 4.1 管理的 Micrometer 同一条 1.17 线（starter 的 optional Actuator 也走它），
          避免同一个 classpath 上 Boot 的指标自动配置与本模块各拿一个 Micrometer 小版本 -->
     <micrometer.version>1.17.1</micrometer.version>
-    <!-- 对比对象（rpc-bench-compare-grpc）：grpc-java 当前稳定版（1.85.0，2026-10-14），grpc-protobuf 1.85.0 依赖 protobuf-java 3.25.9，
+    <!-- 对比对象（steadyrpc-bench-compare-grpc）：grpc-java 当前稳定版（1.85.0，2026-10-14），grpc-protobuf 1.85.0 依赖 protobuf-java 3.25.9，
          protoc 用同一版本生成代码（生成代码与运行时同一条 3.25 线）。protoc / protoc-gen-grpc-java 由 ascopes 的
          protobuf-maven-plugin 按平台从 Maven Central 取（Windows 与 Linux 同一份配置，不需要 os-maven-plugin 扩展）。 -->
     <grpc.version>1.85.0</grpc.version>
     <protobuf.version>3.25.9</protobuf.version>
     <protobuf-maven-plugin.version>5.1.11</protobuf-maven-plugin.version>
-    <!-- 对比对象（rpc-bench-compare-dubbo）：Dubbo 3.3 线当前稳定版（3.3.6，2025-10-17），all-in-one 的 org.apache.dubbo:dubbo。
+    <!-- 对比对象（steadyrpc-bench-compare-dubbo）：Dubbo 3.3 线当前稳定版（3.3.6，2025-10-17），all-in-one 的 org.apache.dubbo:dubbo。
          它声明依赖 netty-all 4.2.2.Final（未 shade）；本仓库在下面经 netty-bom 统一管理 Netty，Dubbo 模块也解析到 netty.version
          （dependency:tree -Dverbose 实证：4.2.2 omitted；3.3.6 的 remoting / triple 代码不引用 4.2 才有的 IoHandler 系 API，测试与压测在 4.1.136 上跑通，2.0.0 起为 4.1.139）。
          这样同一个 JVM（harness + Dubbo 客户端）里只有一份 Netty，与本框架同一版本。 -->
@@ -101,7 +101,7 @@
          让 CI 与 paranoid 命令里的 -Djacoco.skip=true 失效；命令行的 -Djacoco.skip=... 仍然优先。 -->
     <skipTests>false</skipTests>
     <jacoco.skip>${skipTests}</jacoco.skip>
-    <!-- A0-9：rpc-core 行覆盖率下限（core 自身单元测试、以及全部模块测试的聚合结果各检查一次） -->
+    <!-- A0-9：steadyrpc-core 行覆盖率下限（core 自身单元测试、以及全部模块测试的聚合结果各检查一次） -->
     <rpc.core.minLineCoverage>0.70</rpc.core.minLineCoverage>
     <!-- surefire 的 JVM 参数：jacoco:prepare-agent 把探针 agent 写进这个属性；默认空值让跳过 JaCoCo 时 @{argLine} 也能解析。
          额外参数（如 -Dio.netty.leakDetection.level=paranoid）用 -DargLine=... 传入，见 surefire 配置的注释。 -->
@@ -110,7 +110,7 @@
     <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
     <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
     <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-    <!-- rpc-bom 不继承本 pom，它的 release profile 里写死了同一个版本，升级时两处一起改。
+    <!-- steadyrpc-bom 不继承本 pom，它的 release profile 里写死了同一个版本，升级时两处一起改。
          至少 0.12.0：0.11.x 在 Maven 3.10（resolver 2）下暂存目录里会留下 maven-metadata-local.xml 与 _remote.repositories，
          被打进 bundle，Central 校验失败 -->
     <central-publishing-maven-plugin.version>0.12.0</central-publishing-maven-plugin.version>
@@ -133,7 +133,7 @@
         <scope>import</scope>
       </dependency>
 
-      <!-- 对比对象 gRPC：grpc-netty-shaded / grpc-protobuf / grpc-stub 同一版本线（只用于 rpc-bench-compare-grpc） -->
+      <!-- 对比对象 gRPC：grpc-netty-shaded / grpc-protobuf / grpc-stub 同一版本线（只用于 steadyrpc-bench-compare-grpc） -->
       <dependency>
         <groupId>io.grpc</groupId>
         <artifactId>grpc-bom</artifactId>
@@ -146,7 +146,7 @@
         <artifactId>protobuf-java</artifactId>
         <version>${protobuf.version}</version>
       </dependency>
-      <!-- 对比对象 Dubbo（只用于 rpc-bench-compare-dubbo） -->
+      <!-- 对比对象 Dubbo（只用于 steadyrpc-bench-compare-dubbo） -->
       <dependency>
         <groupId>org.apache.dubbo</groupId>
         <artifactId>dubbo</artifactId>
@@ -248,9 +248,9 @@
         <version>${nacos-client.version}</version>
       </dependency>
 
-      <!-- rpc-core/rpc-registry-*/rpc-serialize-* 只依赖 slf4j-api（库的通用规则：绝不强制给
+      <!-- steadyrpc-core/steadyrpc-registry-*/steadyrpc-serialize-* 只依赖 slf4j-api（库的通用规则：绝不强制给
            使用方绑定具体日志实现）；logback-classic 在这里只作为*运行时*选择给实际应用
-           （如 rpc-examples）使用，和任何真实应用的做法一样。 -->
+           （如 steadyrpc-examples）使用，和任何真实应用的做法一样。 -->
       <dependency>
         <groupId>ch.qos.logback</groupId>
         <artifactId>logback-classic</artifactId>
@@ -331,7 +331,7 @@
         <scope>test</scope>
       </dependency>
 
-      <!-- 端到端压测 harness（rpc-bench-e2e）专用 -->
+      <!-- 端到端压测 harness（steadyrpc-bench-e2e）专用 -->
       <dependency>
         <groupId>org.hdrhistogram</groupId>
         <artifactId>HdrHistogram</artifactId>
@@ -346,53 +346,53 @@
       <!-- 本项目自己的模块，方便子模块间互相依赖时不用重复写 version -->
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-core</artifactId>
+        <artifactId>steadyrpc-core</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-registry-tck</artifactId>
+        <artifactId>steadyrpc-registry-tck</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-registry-zookeeper</artifactId>
+        <artifactId>steadyrpc-registry-zookeeper</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-registry-nacos</artifactId>
+        <artifactId>steadyrpc-registry-nacos</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-serialize-fastjson2</artifactId>
+        <artifactId>steadyrpc-serialize-fastjson2</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-serialize-protobuf</artifactId>
+        <artifactId>steadyrpc-serialize-protobuf</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-metrics-micrometer</artifactId>
+        <artifactId>steadyrpc-metrics-micrometer</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-examples</artifactId>
+        <artifactId>steadyrpc-examples</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-spring-boot-starter</artifactId>
+        <artifactId>steadyrpc-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>
-      <!-- 对比模块（rpc-bench-compare-*）实现 harness 的公开 SPI（CallTarget / CallTargetProvider） -->
+      <!-- 对比模块（steadyrpc-bench-compare-*）实现 harness 的公开 SPI（CallTarget / CallTargetProvider） -->
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>rpc-bench-e2e</artifactId>
+        <artifactId>steadyrpc-bench-e2e</artifactId>
         <version>${project.version}</version>
       </dependency>
     </dependencies>
@@ -412,7 +412,7 @@
           <version>3.2.5</version>
           <configuration>
             <!-- 探针类（类名以 ProbeTest 结尾，并标 @Tag("probe")）会改 Protostuff 全局 IdStrategy，默认不跑，用 -Pprobe 单独运行。
-                 不用 excludedGroups：没有 JUnit 依赖的模块（如 rpc-benchmark）一配 groups/excludedGroups，surefire 就直接构建失败。 -->
+                 不用 excludedGroups：没有 JUnit 依赖的模块（如 steadyrpc-benchmark）一配 groups/excludedGroups，surefire 就直接构建失败。 -->
             <excludes>
               <exclude>**/*ProbeTest.java</exclude>
               <exclude>**/*$*</exclude>
@@ -460,8 +460,8 @@
     </pluginManagement>
     <plugins>
       <!-- 覆盖率（A0-9）：每个模块的测试都挂 JaCoCo agent，exec 写在各自的 target/jacoco.exec；
-           rpc-integration-tests 用 report-aggregate 汇总全部模块（集成测试覆盖到的 core 代码也算进 core），
-           rpc-core 自身用 check 守住行覆盖率下限。 -->
+           steadyrpc-integration-tests 用 report-aggregate 汇总全部模块（集成测试覆盖到的 core 代码也算进 core），
+           steadyrpc-core 自身用 check 守住行覆盖率下限。 -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
@@ -498,7 +498,7 @@
     </profile>
     <profile>
       <!-- 发布到 Maven Central（docs/releasing.md）：mvn -Prelease -DskipTests deploy。
-           发布面 = rpc-parent、rpc-bom 与 8 个库模块；示例 / 集成测试 / 压测模块在各自 pom 里设了
+           发布面 = steadyrpc-parent、steadyrpc-bom 与 8 个库模块；示例 / 集成测试 / 压测模块在各自 pom 里设了
            maven.deploy.skip / maven.source.skip / maven.javadoc.skip / gpg.skip，并列在下面的 excludeArtifacts 里。 -->
       <id>release</id>
       <build>
@@ -531,6 +531,9 @@
             <configuration>
               <!-- 只放过"缺注释"（missing），其余 doclint 检查（语法、引用、HTML、可访问性）照常报错并让构建失败 -->
               <doclint>all,-missing</doclint>
+              <!-- 按 classpath 生成（与 1.0.0 相同）：主 jar 配了 Automatic-Module-Name 后，插件会改走模块路径，
+                   而 nacos-client 2.4.3 推导不出自动模块描述符（META-INF/services 指向 jar 里不存在的类），steadyrpc-registry-nacos 的 javadoc 失败 -->
+              <legacyMode>true</legacyMode>
               <encoding>UTF-8</encoding>
               <docencoding>UTF-8</docencoding>
               <charset>UTF-8</charset>
@@ -571,12 +574,12 @@
               <waitUntil>validated</waitUntil>
               <!-- 本插件以扩展方式接管所有模块的 deploy，不看 maven.deploy.skip：不发布的模块必须按 artifactId 排除 -->
               <excludeArtifacts>
-                <artifact>rpc-examples</artifact>
-                <artifact>rpc-integration-tests</artifact>
-                <artifact>rpc-benchmark</artifact>
-                <artifact>rpc-bench-e2e</artifact>
-                <artifact>rpc-bench-compare-grpc</artifact>
-                <artifact>rpc-bench-compare-dubbo</artifact>
+                <artifact>steadyrpc-examples</artifact>
+                <artifact>steadyrpc-integration-tests</artifact>
+                <artifact>steadyrpc-benchmark</artifact>
+                <artifact>steadyrpc-bench-e2e</artifact>
+                <artifact>steadyrpc-bench-compare-grpc</artifact>
+                <artifact>steadyrpc-bench-compare-dubbo</artifact>
               </excludeArtifacts>
             </configuration>
           </plugin>

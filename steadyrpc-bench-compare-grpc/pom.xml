@@ -1,0 +1,106 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-bench-compare-grpc</artifactId>
+  <name>steadyrpc-bench-compare-grpc</name>
+  <description>对比对象 gRPC（grpc-java，Netty 传输）：与 BenchService#echo 同一契约的 gRPC 服务端（GrpcBenchServer）与
+    steadyrpc-bench-e2e 的 CallTarget 实现（transport: grpc）。经 BENCH_EXTRA_CP 加进 bench/bin/*.sh 的 classpath，
+    口径见 docs/benchmarking.md「对比对象」。</description>
+
+  <properties>
+    <!-- 压测工具，不作为库发布 -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
+  </properties>
+
+  <dependencies>
+    <!-- harness 的公开 SPI（CallTarget / CallTargetProvider / ServerLauncher / ServerProbes / Profile / HarnessOptions）。
+         只用这些公开类型，不碰 steadyrpc-bench-e2e 的包内实现，也不依赖 steadyrpc-core 以外的本仓库模块的运行时类。 -->
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-bench-e2e</artifactId>
+    </dependency>
+    <!-- grpc-netty-shaded：Netty 被重定位到 io.grpc.netty.shaded.io.netty，与 harness 的 netty-all（netty.version，2.0.0 起 4.1.139）互不影响 -->
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-netty-shaded</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-protobuf</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- .proto → Java。选 ascopes/protobuf-maven-plugin 而不是 org.xolstice:protobuf-maven-plugin：
+           后者 0.6.1（2018）之后不再维护，且要靠 os-maven-plugin 扩展算平台分类器；ascopes 仍在维护，自己按当前平台
+           （windows-x86_64 / linux-x86_64 …）从 Maven Central 取 protoc 与 protoc-gen-grpc-java，同一份配置在 Windows 与 WSL 上都能用。
+           @generated=omit：生成代码不带 javax.annotation.Generated（JDK 21 上没有这个注解，省掉一个只为注解存在的依赖）。 -->
+      <plugin>
+        <groupId>io.github.ascopes</groupId>
+        <artifactId>protobuf-maven-plugin</artifactId>
+        <configuration>
+          <protoc>${protobuf.version}</protoc>
+          <plugins>
+            <plugin kind="binary-maven">
+              <groupId>io.grpc</groupId>
+              <artifactId>protoc-gen-grpc-java</artifactId>
+              <version>${grpc.version}</version>
+              <options>@generated=omit</options>
+            </plugin>
+          </plugins>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- bench/bin/*.sh 的 BENCH_EXTRA_CP = target/classes + target/lib/*。本仓库的模块（steadyrpc-bench-e2e、steadyrpc-core……）不复制：
+           它们由脚本的 steadyrpc-bench-e2e/target/classes 与 target/lib 提供（始终是最新构建，不会混进本地仓库里的旧快照）。
+           其余第三方 jar 按本模块解析出的版本复制，脚本把 BENCH_EXTRA_CP 放在 classpath 前面，运行时与本模块的测试同一组版本。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+              <excludeGroupIds>${project.groupId}</excludeGroupIds>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,7 +1,7 @@
 # 可观测性：指标
 
-`rpc-metrics-micrometer` 把每次调用记进 [Micrometer](https://micrometer.io)，可以导出到任何 Micrometer 支持的后端；本仓库的
-[docker/](../docker/README.md) 预置了 Prometheus + Grafana 与一块面板。rpc-core 不因此多出任何依赖：指标是两个普通的
+`steadyrpc-metrics-micrometer` 把每次调用记进 [Micrometer](https://micrometer.io)，可以导出到任何 Micrometer 支持的后端；本仓库的
+[docker/](../docker/README.md) 预置了 Prometheus + Grafana 与一块面板。steadyrpc-core 不因此多出任何依赖：指标是两个普通的
 `ClientFilter` / `ServerFilter` 加几个 Gauge，不用时不在调用路径上。
 
 ## 目录
@@ -19,10 +19,10 @@
 
 ### Spring Boot
 
-依赖 `rpc-metrics-micrometer`、`spring-boot-starter-actuator`、`micrometer-registry-prometheus`（见
+依赖 `steadyrpc-metrics-micrometer`、`spring-boot-starter-actuator`、`micrometer-registry-prometheus`（见
 [接入指南 7.1](getting-started.md#71-指标)），并把 `prometheus` 加进 `management.endpoints.web.exposure.include`。
 
-starter 的 `RpcMetricsAutoConfiguration` 在三个条件同时满足时生效：classpath 上有 Micrometer 与 `rpc-metrics-micrometer`；容器里有
+starter 的 `RpcMetricsAutoConfiguration` 在三个条件同时满足时生效：classpath 上有 Micrometer 与 `steadyrpc-metrics-micrometer`；容器里有
 `MeterRegistry` bean；`rpc.metrics.enabled` 不为 `false`（缺省 `true`）。它做两件事：
 
 - 注册 `MicrometerClientFilter` / `MicrometerServerFilter` 两个 bean，走 starter 现有的"Filter bean 自动接入"进入两条链；
@@ -50,7 +50,7 @@ RpcClientMetrics.bind(client, registry);             // rpc.client.inflight / rp
 实例无法回收（回收后读数为 NaN）；实例 `close()` 之后读数为 0。同一个 registry 绑定多个客户端（或多个服务端）时，用
 `bind(x, registry, Tags.of("client", "orders"))` 加区分 tag——Micrometer 对同名同 tag 的 Gauge 只注册第一次，后绑的会被静默忽略。
 
-完整可运行的例子是 `rpc-examples` 的 `PlainProvider`（`--metrics-port <p>`）。
+完整可运行的例子是 `steadyrpc-examples` 的 `PlainProvider`（`--metrics-port <p>`）。
 
 ### 内嵌 /metrics 端点
 
@@ -97,7 +97,7 @@ Micrometer 名（点分）在 Prometheus 里转成下划线，Timer 带 `_second
 
 tag 约定：
 
-- `service`：**接口全限定名**（如 `com.feynman.rpc.examples.api.InventoryService`）。选全名而不是简名：不同包里的同名接口不会合并成
+- `service`：**接口全限定名**（如 `io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService`）。选全名而不是简名：不同包里的同名接口不会合并成
   一条序列；代价是图例长一些。`version` / `group` 不进 tag（同一接口的多个版本合并统计）。
 - `method`：方法名。重载方法合并为一条（参数签名不进 tag，避免把类型名带进 tag 值）。
 - `status`：有界取值，见下节。**不使用异常类名**——业务异常类型无界，会让时间序列数失控。

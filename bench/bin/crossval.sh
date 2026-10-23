@@ -14,12 +14,12 @@
 #           CROSSVAL_TOOL_RUNS（工具测几次，缺省开环 3 次取未修正 p99 中位、闭环 1 次）。
 # 流程：起 bench server（RPC 19100 + HTTP 19180，--no-registry）→ harness 跑卡（每轮统计窗口自带 CPU 采样）→ 工具预热一次（丢弃）
 #       → 工具测量（开环 wrk2 带 -U 测 3 次、每次先预热，闭环 wrk 1 次；第 1 次测量中段采样 /proc/stat）→ 停服务端
-#       → rpc-bench-e2e crossval 比较并写 crossval-<mode>-<时间>.json / .md。
-# 退出码：0 PASS；2 FAIL（判定未通过）；1 运行出错。先构建：mvn -pl rpc-bench-e2e -am package -DskipTests
+#       → steadyrpc-bench-e2e crossval 比较并写 crossval-<mode>-<时间>.json / .md。
+# 退出码：0 PASS；2 FAIL（判定未通过）；1 运行出错。先构建：mvn -pl steadyrpc-bench-e2e -am package -DskipTests
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="$ROOT/rpc-bench-e2e"
+MODULE="$ROOT/steadyrpc-bench-e2e"
 
 MODE=""
 OUT="$ROOT/target/crossval"
@@ -67,7 +67,7 @@ case "$MODE" in
 esac
 
 if [ ! -d "$MODULE/target/lib" ]; then
-  echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+  echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
   exit 1
 fi
 TOOL_BIN="$TOOLS_BIN/$TOOL"
@@ -197,7 +197,7 @@ done
 # 4. 停服务端，比较
 stop_server
 set +e
-"$JAVA_HOME/bin/java" -cp "$CP" com.feynman.rpc.bench.Bench crossval --harness "$HARNESS_JSON" --tool "$TOOL" \
+"$JAVA_HOME/bin/java" -cp "$CP" io.github.sisyfyzhang.steadyrpc.bench.Bench crossval --harness "$HARNESS_JSON" --tool "$TOOL" \
   --tool-output "$TOOL_OUTPUTS" --tool-command "$TOOL_CMD" --tool-version "$TOOL_VERSION" \
   --cpu-tool "$(cat "$RUN_DIR/cpu-tool.txt" 2>/dev/null || echo unknown)" --out "$OUT"
 CODE=$?

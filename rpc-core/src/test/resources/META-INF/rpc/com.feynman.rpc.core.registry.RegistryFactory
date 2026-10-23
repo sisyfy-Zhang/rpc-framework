@@ -1,5 +1,0 @@
-# 进程内注册中心与永远注册失败的注册中心，供 rpc-core 自身的测试使用（core 不依赖任何真实注册中心实现）
-memory=com.feynman.rpc.core.testutil.InMemoryRegistryFactory
-failing=com.feynman.rpc.core.testutil.FailingRegistryFactory
-flaky=com.feynman.rpc.core.testutil.FlakyRegistryFactory
-lossy=com.feynman.rpc.core.testutil.LossyRegistryFactory

@@ -1,0 +1,139 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- 物料清单（BOM）：使用方 <scope>import</scope> 后，各 steadyrpc-* 模块不用再写版本（README「模块」节有用法）。
+       故意不继承 steadyrpc-parent：被 import 时 Maven 会把 BOM 的整个 dependencyManagement（含从父 pom 继承来的）并进使用方，
+       继承 steadyrpc-parent 会把本仓库锁定的 Netty / Spring / Jackson / Nacos 等第三方版本一并强加给使用方。
+       第三方只多管 ZooKeeper 一项（2.0.0 起，与根 pom 同值）：Spring Boot 不管理它，steadyrpc-registry-zookeeper 的使用方由这里拿到修复版本。
+       故意不管 Netty / jackson：Boot 4 生态（reactor-netty、lettuce 等）绑定 Netty 4.2，库的 BOM 若管理它们，会把 Boot 应用的
+       Netty / jackson 覆盖掉（import 先后决定谁生效，以 Boot 为父 pom 时本 BOM 会胜出），这是越界；Boot 应用由 Boot 的 BOM 决定，
+       非 Boot 应用由 steadyrpc-core（netty-all）与 steadyrpc-registry-nacos（jackson）的直接依赖决定（SECURITY.md「依赖漏洞」）。
+       因此 groupId / version / Central 元数据与 ZooKeeper 版本在这里各写一份；发布改版本、升级 ZooKeeper 时与根 pom 一起改
+       （docs/releasing.md；BomConsistencyTest 核对）。 -->
+  <groupId>io.github.sisyfy-zhang</groupId>
+  <artifactId>steadyrpc-bom</artifactId>
+  <version>2.0.0</version>
+  <packaging>pom</packaging>
+  <name>steadyrpc-bom</name>
+  <description>Bill of materials that pins the versions of all published steady-rpc modules and of Apache ZooKeeper.</description>
+  <url>https://github.com/sisyfy-Zhang/steady-rpc</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>sisyfy-Zhang</id>
+      <name>sisyfy-Zhang</name>
+      <email>fyenmanc@gmail.com</email>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:https://github.com/sisyfy-Zhang/steady-rpc.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/sisyfy-Zhang/steady-rpc.git</developerConnection>
+    <url>https://github.com/sisyfy-Zhang/steady-rpc</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <properties>
+    <!-- 与根 pom 的 zookeeper.version 同值（本 pom 不继承根 pom，只能写死；BomConsistencyTest 核对） -->
+    <zookeeper.version>3.9.6</zookeeper.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-registry-tck</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-registry-zookeeper</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-registry-nacos</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-serialize-fastjson2</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-serialize-protobuf</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-metrics-micrometer</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>steadyrpc-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <!-- steadyrpc-registry-zookeeper → zookeeper（Spring Boot 不管理 ZooKeeper） -->
+      <dependency>
+        <groupId>org.apache.zookeeper</groupId>
+        <artifactId>zookeeper</artifactId>
+        <version>${zookeeper.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <profiles>
+    <profile>
+      <!-- 与根 pom 的 release profile 同名、同插件版本（这里不继承根 pom 的属性，只能写死）：
+           pom 打包没有 sources / javadoc，只需签名与交给 central-publishing 打包上传 -->
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.12.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

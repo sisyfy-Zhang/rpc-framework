@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 压测服务端（前台运行；Ctrl-C / SIGTERM 优雅关闭）。先构建：mvn -pl rpc-bench-e2e -am package -DskipTests
+# 压测服务端（前台运行；Ctrl-C / SIGTERM 优雅关闭）。先构建：mvn -pl steadyrpc-bench-e2e -am package -DskipTests
 #   bench/bin/bench-server.sh --port 9000 --host 127.0.0.1 --no-registry
 #   bench/bin/bench-server.sh --port 9000 --host 127.0.0.1 --registry zk://127.0.0.1:2181
-#   BENCH_EXTRA_CP="rpc-bench-compare-grpc/target/classes:rpc-bench-compare-grpc/target/lib/*" bench/bin/bench-server.sh --transport grpc --port 9100
+#   BENCH_EXTRA_CP="steadyrpc-bench-compare-grpc/target/classes:steadyrpc-bench-compare-grpc/target/lib/*" bench/bin/bench-server.sh --transport grpc --port 9100
 #     （对比对象的服务端：classpath 上 CallTargetProvider 的 ServerLauncher；参数见该模块的 GrpcBenchServer）
 # 就绪时打印一行 "bench-server ready port=... pid=..."。
 # 环境变量：BENCH_SERVER_JAVA_OPTS 覆盖 JVM 参数；BENCH_SERVER_CPUS=<list>（如 0-4）且有 taskset 时绑核启动；
@@ -16,9 +16,9 @@
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="$ROOT/rpc-bench-e2e"
+MODULE="$ROOT/steadyrpc-bench-e2e"
 if [ ! -d "$MODULE/target/lib" ]; then
-  echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+  echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
   exit 1
 fi
 JAVA_OPTS="${BENCH_SERVER_JAVA_OPTS:--Xms1g -Xmx1g -XX:+AlwaysPreTouch}"
@@ -47,4 +47,4 @@ if [ -n "${BENCH_SERVER_CPUS:-}" ]; then
 fi
 cd "$ROOT"
 # shellcheck disable=SC2086  # JAVA_OPTS 需要按空格拆成多个参数
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench server "$@"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" io.github.sisyfyzhang.steadyrpc.bench.Bench server "$@"

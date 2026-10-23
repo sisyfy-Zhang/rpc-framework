@@ -1,7 +1,7 @@
 {
   "uid": "rpc-overview",
   "title": "RPC Overview",
-  "description": "rpc-metrics-micrometer 的调用指标：QPS、错误率、p50/p95/p99、在途、连接数、错误码分布。指标说明见 docs/observability.md。",
+  "description": "steadyrpc-metrics-micrometer 的调用指标：QPS、错误率、p50/p95/p99、在途、连接数、错误码分布。指标说明见 docs/observability.md。",
   "tags": [
     "rpc"
   ],

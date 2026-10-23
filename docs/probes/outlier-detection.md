@@ -101,7 +101,7 @@ kill 那一秒的 216 / 392 个错误不是"摘除慢"：SIGKILL 在 13:56:04.98
 判定 4 的两条证据是：**零摘除**（全部无故障运行与慢节点运行都没有一次摘除，客户端日志里没有一行 `Outlier ejected`）与**热路径微基准**。
 宏观 ±2% 在本机噪声地板之下不可判（下面的宏观对照表照登，但不据此下结论）。
 
-**热路径微基准**（`rpc-benchmark` 的 `OutlierDetectorBenchmark`，JMH 1 fork、预热 3 × 1s、测量 5 × 1s、单线程，`-prof gc`；Windows 开发机、JDK 21.0.11，
+**热路径微基准**（`steadyrpc-benchmark` 的 `OutlierDetectorBenchmark`，JMH 1 fork、预热 3 × 1s、测量 5 × 1s、单线程，`-prof gc`；Windows 开发机、JDK 21.0.11，
 与压测机不是同一环境，只看量级）：
 
 | 基准 | 含义 | ns/op | 分配 (B/op) |
@@ -111,7 +111,7 @@ kill 那一秒的 216 / 392 个错误不是"摘除慢"：SIGKILL 在 13:56:04.98
 | `onFailureNoEjection` | 每次坏结果但不触发摘除：两个桶 CAS、连续计数自增、汇总 10 个桶判断比例条件 | 64.0 ± 1.2 | ≈ 0（10⁻³） |
 
 每次调用多出的是一次过滤加一次结果回喂，约 42ns、不分配；按 closed64 的约 9 万 req/s 算，是每秒约 3.8ms CPU（不到一个核的 0.4%），
-低于下面宏观对照能分辨的量级。跑法：`java -jar rpc-benchmark/target/benchmarks.jar OutlierDetectorBenchmark -prof gc`。
+低于下面宏观对照能分辨的量级。跑法：`java -jar steadyrpc-benchmark/target/benchmarks.jar OutlierDetectorBenchmark -prof gc`。
 
 **宏观对照（噪声地板下不可判）**
 
@@ -199,7 +199,7 @@ off 里出站硬上限在 2 ~ 3 秒后把它变成可重试的"未发出"，之�
 
 ```bash
 bash ~/rpc-bench-sync.sh && cd ~/rpc-bench
-mvn -q -pl rpc-bench-e2e,rpc-bench-compare-grpc,rpc-bench-compare-dubbo -am package -DskipTests
+mvn -q -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-grpc,steadyrpc-bench-compare-dubbo -am package -DskipTests
 docker compose -f docker/compose.yaml up -d --wait zookeeper
 setsid nohup ~/tools/toxiproxy-2.13.0/toxiproxy -host 127.0.0.1 -port 8475 > toxiproxy.log 2>&1 < /dev/null &
 export TOXIPROXY_API=http://127.0.0.1:8475 TOXIPROXY_UPSTREAM_HOST=127.0.0.1 TOXIPROXY_LISTEN_HOST=127.0.0.1 TOXIPROXY_PORT_BASE=21000

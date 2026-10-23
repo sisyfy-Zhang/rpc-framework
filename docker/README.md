@@ -30,7 +30,7 @@ Prometheus 预置的抓取目标（`prometheus/prometheus.yml`，间隔 5s，地
 |---|---|---|
 | `rpc-bench-server` | 9464 | `bench server ... --metrics-port 9464`（[benchmarking.md](../docs/benchmarking.md)） |
 | `rpc-bench-client` | 9465 | `bench run ... --metrics-port 9465` |
-| `rpc-example-provider` | 9466 | `PlainProvider localhost:2181 9100 --metrics-port 9466`（[rpc-examples](../rpc-examples/README.md)） |
+| `rpc-example-provider` | 9466 | `PlainProvider localhost:2181 9100 --metrics-port 9466`（[steadyrpc-examples](../steadyrpc-examples/README.md)） |
 | `rpc-example-consumer` | 9467 | 预留 |
 
 进程没起来时对应目标在 <http://localhost:9090/targets> 上显示为 down，属正常。指标与面板的说明见 [docs/observability.md](../docs/observability.md)。

@@ -16,9 +16,9 @@ extra_cp_for() {
     echo ""
     return 0
   fi
-  module="$ROOT/rpc-bench-compare-$transport"
+  module="$ROOT/steadyrpc-bench-compare-$transport"
   if [ ! -d "$module/target/lib" ] || [ ! -d "$module/target/classes" ]; then
-    echo "rpc-bench-compare-$transport is not built; run: mvn -pl rpc-bench-e2e,rpc-bench-compare-$transport -am package -DskipTests" >&2
+    echo "steadyrpc-bench-compare-$transport is not built; run: mvn -pl steadyrpc-bench-e2e,steadyrpc-bench-compare-$transport -am package -DskipTests" >&2
     return 1
   fi
   echo "$module/target/classes:$module/target/lib/*"

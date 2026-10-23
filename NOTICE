@@ -1,4 +1,4 @@
-rpc-framework (https://github.com/sisyfy-Zhang/rpc-framework)
+steady-rpc (https://github.com/sisyfy-Zhang/steady-rpc)
 Copyright (c) 2026 feynman
 
 本项目自身的代码以 MIT 许可证发布，见根目录 LICENSE。
@@ -12,7 +12,7 @@ Protostuff 1.8.0 —— protostuff-runtime
 -------------------------------------------------------------------------------
 
   派生文件：
-    rpc-serialize-protobuf/src/main/java/io/protostuff/runtime/AllowlistIdStrategy.java
+    steadyrpc-serialize-protobuf/src/main/java/io/protostuff/runtime/AllowlistIdStrategy.java
 
   来源：protostuff-runtime 1.8.0 的 io.protostuff.runtime.DefaultIdStrategy
         原作者：Leo Romanoff、David Yu（原文件 @author 标注）

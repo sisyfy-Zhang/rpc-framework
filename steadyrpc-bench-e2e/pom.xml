@@ -1,0 +1,153 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-bench-e2e</artifactId>
+  <name>steadyrpc-bench-e2e</name>
+  <description>端到端压测 harness：按"口径卡"YAML 驱动真实 RpcServer / RpcClient 进程，输出 JSON（事实源）与由 JSON 生成的
+    Markdown 报告，环境自动采集、带断言。纯 Java 命令行，不依赖 Spring；运行方式见 docs/benchmarking.md 与 bench/bin/*.sh。</description>
+
+  <properties>
+    <!-- 命令行工具，不作为库发布 -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <!-- 不发布到 Maven Central：-Prelease 下也不出 sources / javadoc、不签名（central-publishing 另有 excludeArtifacts 名单，见根 pom） -->
+    <maven.source.skip>true</maven.source.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+    <gpg.skip>true</gpg.skip>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-registry-zookeeper</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-serialize-protobuf</artifactId>
+    </dependency>
+    <!-- metrics-port 选项：指标 Filter / Gauge 与内嵌 /metrics 端点（缺省关闭，不影响不带该参数的压测路径） -->
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-metrics-micrometer</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.hdrhistogram</groupId>
+      <artifactId>HdrHistogram</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+    </dependency>
+    <!-- 日志实现：harness 是应用而不是库，可以绑定实现。只输出 WARN 及以上到 stderr（simplelogger.properties），
+         框架告警可见、又不让日志 IO 混进测量。版本与 slf4j-api 对齐。 -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.curator</groupId>
+      <artifactId>curator-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!-- 只过滤版本文件（harness 版本写进报告的 environment），其余资源原样复制 -->
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>bench-version.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>bench-version.properties</exclude>
+        </excludes>
+      </resource>
+    </resources>
+    <plugins>
+      <!-- 与 steadyrpc-core 同一条依赖护栏：harness 是纯 Java 命令行，任何直接或传递引入 Spring 的改动都让构建失败 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>bench-has-no-spring</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <excludes>
+                    <exclude>org.springframework:*</exclude>
+                    <exclude>org.springframework.boot:*</exclude>
+                    <exclude>com.fasterxml.jackson.core:*</exclude>
+                    <exclude>info.picocli:*</exclude>
+                    <exclude>org.projectlombok:*</exclude>
+                  </excludes>
+                  <searchTransitive>true</searchTransitive>
+                  <message>steadyrpc-bench-e2e is a plain Java CLI: no Spring / Jackson / picocli / Lombok (task 6 brief).</message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 测试 JVM 的堆上限 1g：端到端测试在进程内起服务端与压测端，不设上限时 JVM 按物理内存的 1/4 定堆，测试机内存紧张时
+           会吃掉大量提交内存。@{argLine}（JaCoCo agent）与 ${argLine}（命令行 -DargLine=...）的拼接方式同父 pom。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <argLine>@{argLine} -Xmx1g ${argLine}</argLine>
+        </configuration>
+      </plugin>
+      <!-- bench/bin/*.sh 的 classpath = target/classes + target/lib/*（不用 shade：报告里的 JVM 参数与类路径一目了然） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

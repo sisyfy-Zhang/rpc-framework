@@ -1,0 +1,146 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-core</artifactId>
+  <name>steadyrpc-core</name>
+  <!-- 纯 Java 的 RPC 核心：RpcClient / RpcServer 实例与生命周期、协议编解码、Filter 链、四个 SPI。 不依赖任何容器；Spring 集成全部在 steadyrpc-spring-boot-starter。 -->
+  <description>Pure-Java RPC core (RpcClient / RpcServer, protocol codec, filter chain and SPIs) with no container or Spring dependency.</description>
+  <dependencies>
+	  <dependency>
+	    <groupId>io.netty</groupId>
+	    <artifactId>netty-all</artifactId>
+	  </dependency>
+	  <dependency>
+	    <groupId>org.slf4j</groupId>
+	    <artifactId>slf4j-api</artifactId>
+	  </dependency>
+	  <!-- 注意：steadyrpc-core 不依赖任何具体序列化库（fastjson2/protobuf 等）——
+	       它只定义 Serializer SPI 接口，具体实现放在各自的 steadyrpc-serialize-* 模块里。
+	       也不依赖 Spring：见下方 enforcer 规则与 ArchUnit 测试。 -->
+
+	  <dependency>
+	    <groupId>org.junit.jupiter</groupId>
+	    <artifactId>junit-jupiter</artifactId>
+	    <scope>test</scope>
+	  </dependency>
+	  <dependency>
+	    <groupId>com.tngtech.archunit</groupId>
+	    <artifactId>archunit-junit5</artifactId>
+	    <scope>test</scope>
+	  </dependency>
+	  <dependency>
+	    <groupId>org.awaitility</groupId>
+	    <artifactId>awaitility</artifactId>
+	    <scope>test</scope>
+	  </dependency>
+	  <dependency>
+	    <groupId>net.jqwik</groupId>
+	    <artifactId>jqwik</artifactId>
+	    <scope>test</scope>
+	  </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 依赖层面的护栏：任何直接或传递引入 Spring 的改动都会让构建失败，而不是等到使用方依赖冲突时才发现。
+           代码层面的同一条规则由 ArchUnit 测试（CoreArchitectureTest）检查。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>core-has-no-spring</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <excludes>
+                    <exclude>org.springframework:*</exclude>
+                    <exclude>org.springframework.boot:*</exclude>
+                  </excludes>
+                  <searchTransitive>true</searchTransitive>
+                  <message>steadyrpc-core must stay container-free: Spring belongs in steadyrpc-spring-boot-starter (DESIGN 3.3 / D-003).</message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 覆盖率下限（口径一：只算 steadyrpc-core 自己的单元测试）。口径二（全部模块的测试对 core 类的聚合覆盖）在
+           steadyrpc-integration-tests 里检查。报告：target/site/jacoco/。 -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>report</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>check-core-line-coverage</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <rule>
+                  <element>BUNDLE</element>
+                  <limits>
+                    <limit>
+                      <counter>LINE</counter>
+                      <value>COVEREDRATIO</value>
+                      <minimum>${rpc.core.minLineCoverage}</minimum>
+                    </limit>
+                  </limits>
+                </rule>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 测试共享件：只把泄漏断言扩展（io/github/sisyfyzhang/steadyrpc/core/testing）与它的自动注册服务文件打成 test-jar，
+           供 steadyrpc-integration-tests 复用同一份实现。刻意不打包其余测试类与 test 资源：core 的测试用 SPI 文件
+           （假序列化器、内存注册中心）一旦进入别的模块的 classpath，会改变那里的协商与注册行为。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>io.github.sisyfyzhang.steadyrpc.core</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+          <execution>
+            <!-- release（-Prelease）下用 -Dmaven.test.skip=true 构建：test-jar 目标随之跳过，不生成、不签名、不进 Central bundle，不对外发布；release 构建同时用 -pl '!steadyrpc-integration-tests' 排除唯一使用它的模块 -->
+            <id>leak-check-test-jar</id>
+            <goals>
+              <goal>test-jar</goal>
+            </goals>
+            <configuration>
+              <includes>
+                <include>io/github/sisyfyzhang/steadyrpc/core/testing/RpcLeakCheckExtension*.class</include>
+                <include>META-INF/services/org.junit.jupiter.api.extension.Extension</include>
+              </includes>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,98 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>io.github.sisyfy-zhang</groupId>
+    <artifactId>steadyrpc-parent</artifactId>
+    <version>2.0.0</version>
+  </parent>
+  <artifactId>steadyrpc-metrics-micrometer</artifactId>
+  <name>steadyrpc-metrics-micrometer</name>
+  <!-- Micrometer 指标：客户端 / 服务端 Filter 把每次调用记成 Timer（service / method / status），Gauge 暴露在途与连接数； 可选的 PrometheusEndpoint 用 JDK HttpServer 暴露 /metrics。纯 Java，不依赖 Spring；steadyrpc-core 不因它多出任何依赖。 -->
+  <description>Micrometer metrics for steady-rpc: per-call timers and in-flight / connection gauges recorded by client and server filters, plus an optional embedded Prometheus endpoint.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+    </dependency>
+    <!-- optional：只有要内嵌 /metrics 抓取端点（PrometheusEndpoint）的进程才需要，不传递给使用方 -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- 测试里跑真实的 RpcServer / RpcClient 往返，需要一个序列化实现 -->
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>steadyrpc-serialize-fastjson2</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- 只给主 jar：模块路径上的模块名（根包名），与 jar 文件名无关 -->
+            <id>default-jar</id>
+            <configuration>
+              <archive>
+                <manifestEntries>
+                  <Automatic-Module-Name>io.github.sisyfyzhang.steadyrpc.metrics.micrometer</Automatic-Module-Name>
+                </manifestEntries>
+              </archive>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 与 steadyrpc-core 同一条依赖护栏：指标模块给纯 Java 进程用，任何直接或传递引入 Spring 的改动都让构建失败 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>metrics-has-no-spring</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <excludes>
+                    <exclude>org.springframework:*</exclude>
+                    <exclude>org.springframework.boot:*</exclude>
+                  </excludes>
+                  <searchTransitive>true</searchTransitive>
+                  <message>steadyrpc-metrics-micrometer must stay container-free: Spring wiring belongs in steadyrpc-spring-boot-starter.</message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

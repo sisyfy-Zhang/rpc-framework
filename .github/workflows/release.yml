@@ -52,10 +52,10 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           expected="${tag#v}"
           version=$(./mvnw $MVN_FLAGS -N -q -DforceStdout help:evaluate -Dexpression=project.version)
-          bom_version=$(./mvnw $MVN_FLAGS -q -DforceStdout -f rpc-bom/pom.xml help:evaluate -Dexpression=project.version)
-          echo "tag=$tag rpc-parent=$version rpc-bom=$bom_version"
-          [ "$version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-parent version $version"; exit 1; }
-          [ "$bom_version" = "$expected" ] || { echo "::error::tag $tag does not match rpc-bom version $bom_version"; exit 1; }
+          bom_version=$(./mvnw $MVN_FLAGS -q -DforceStdout -f steadyrpc-bom/pom.xml help:evaluate -Dexpression=project.version)
+          echo "tag=$tag steadyrpc-parent=$version steadyrpc-bom=$bom_version"
+          [ "$version" = "$expected" ] || { echo "::error::tag $tag does not match steadyrpc-parent version $version"; exit 1; }
+          [ "$bom_version" = "$expected" ] || { echo "::error::tag $tag does not match steadyrpc-bom version $bom_version"; exit 1; }
           case "$version" in *-SNAPSHOT) echo "::error::refusing to release a SNAPSHOT version ($version)"; exit 1;; esac
 
       - name: ./mvnw -Prelease deploy (sign, bundle, upload, wait until validated)
@@ -64,13 +64,13 @@ jobs:
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           # maven-gpg-plugin 缺省从这个环境变量读口令（配合 pom 里的 --pinentry-mode loopback）
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        # maven.test.skip：测试由 ci.yml 保证，同时让 rpc-core 的 test-jar 不生成、不发布；
-        # 唯一依赖该 test-jar 的 rpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败。
+        # maven.test.skip：测试由 ci.yml 保证，同时让 steadyrpc-core 的 test-jar 不生成、不发布；
+        # 唯一依赖该 test-jar 的 steadyrpc-integration-tests（本身不发布）因此必须排除出 reactor，否则 test 作用域依赖解析失败。
         # maven.install.skip：发布用不到本地安装，且让这条命令与 docs/releasing.md 的本地 bundle 演练逐字相同。
         # ./mvnw -v 先打出 Maven / resolver 版本，留作核对：版本由 wrapper 固定为 3.9.12；之前用 runner 镜像自带的 mvn 时，镜像升到 3.10（resolver 2）曾让 bundle 混入本地仓库跟踪文件
         run: |
           ./mvnw -v
-          ./mvnw $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!rpc-integration-tests' -Dmaven.install.skip=true deploy
+          ./mvnw $MVN_FLAGS -Prelease -Dmaven.test.skip=true -Djacoco.skip=true -pl '!steadyrpc-integration-tests' -Dmaven.install.skip=true deploy
 
       # 便于核对上传了什么：各发布模块的 jar / sources / javadoc / pom 与 .asc，以及 central-publishing 打出的 bundle
       - name: Upload release artifacts
@@ -84,10 +84,10 @@ jobs:
             **/target/*.pom
             **/target/central-publishing/
             **/target/central-staging/
-            !rpc-examples/target/
-            !rpc-integration-tests/target/
-            !rpc-benchmark/target/
-            !rpc-bench-e2e/target/
-            !rpc-bench-compare-grpc/target/
-            !rpc-bench-compare-dubbo/target/
+            !steadyrpc-examples/target/
+            !steadyrpc-integration-tests/target/
+            !steadyrpc-benchmark/target/
+            !steadyrpc-bench-e2e/target/
+            !steadyrpc-bench-compare-grpc/target/
+            !steadyrpc-bench-compare-dubbo/target/
           if-no-files-found: warn

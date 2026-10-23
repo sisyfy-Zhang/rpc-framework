@@ -1,6 +1,6 @@
 # Dependabot 版本更新：GitHub Actions 与 Maven，每周一次。
 # - github-actions：workflow 里的 actions 按 commit SHA 固定（行尾注释是 tag），Dependabot 会同时更新 SHA 与注释。
-# - maven：根 pom 的 reactor（含 rpc-bom 与全部子模块）；小版本与补丁合成一个 PR，大版本各自单独 PR。
+# - maven：根 pom 的 reactor（含 steadyrpc-bom 与全部子模块）；小版本与补丁合成一个 PR，大版本各自单独 PR。
 #   升级 Netty / Spring Boot / 注册中心客户端等核心依赖前，按 CONTRIBUTING.md「哪些改动需要先开 issue」处理；
 #   对比对象（gRPC / Dubbo）的版本是压测口径的一部分，改动会让既有对比数字不再对应当前版本。
 version: 2

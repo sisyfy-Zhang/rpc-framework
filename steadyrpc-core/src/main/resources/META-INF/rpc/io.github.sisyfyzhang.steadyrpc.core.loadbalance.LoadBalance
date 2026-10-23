@@ -1,0 +1,2 @@
+roundrobin=io.github.sisyfyzhang.steadyrpc.core.loadbalance.RoundRobinLoadBalance
+p2c=io.github.sisyfyzhang.steadyrpc.core.loadbalance.P2cLoadBalance

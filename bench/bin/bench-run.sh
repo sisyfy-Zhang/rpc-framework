@@ -17,9 +17,9 @@
 set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-21}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="$ROOT/rpc-bench-e2e"
+MODULE="$ROOT/steadyrpc-bench-e2e"
 if [ ! -d "$MODULE/target/lib" ]; then
-  echo "rpc-bench-e2e is not built; run: mvn -pl rpc-bench-e2e -am package -DskipTests" >&2
+  echo "steadyrpc-bench-e2e is not built; run: mvn -pl steadyrpc-bench-e2e -am package -DskipTests" >&2
   exit 1
 fi
 JAVA_OPTS="${BENCH_CLIENT_JAVA_OPTS:--Xms1g -Xmx1g -XX:+AlwaysPreTouch}"
@@ -71,4 +71,4 @@ fi
 # 在仓库根目录运行：git sha / dirty 的采集与默认归档目录都相对仓库根
 cd "$ROOT"
 # shellcheck disable=SC2086
-exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" com.feynman.rpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"
+exec "${PIN[@]}" "$JAVA_HOME/bin/java" $JAVA_OPTS "${GC_LOG[@]}" "${JFR[@]}" -cp "${BENCH_EXTRA_CP:+$BENCH_EXTRA_CP:}$MODULE/target/classes:$MODULE/target/lib/*" io.github.sisyfyzhang.steadyrpc.bench.Bench run "$@" "${HARNESS_OPTS[@]}"

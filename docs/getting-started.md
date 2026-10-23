@@ -1,7 +1,7 @@
 # 15 分钟接入指南
 
 从一个空白的 Spring Boot 4 工程开始，接入 provider（暴露服务）与 consumer（调用服务），用 ZooKeeper 做服务发现。
-本文所有 Java 与 YAML 代码都**原样取自 `rpc-examples` 模块**（集成测试 `DocsSnippetsTest` 会逐字核对，`ExamplesEndToEndTest`
+本文所有 Java 与 YAML 代码都**原样取自 `steadyrpc-examples` 模块**（集成测试 `DocsSnippetsTest` 会逐字核对，`ExamplesEndToEndTest`
 会把这两个应用真正跑一遍），所以照抄就能工作。
 
 > 不用 Spring？看第 10 节[纯 Java](#10-不用-spring纯-java)，同样的接口，`RpcServer.builder()` / `RpcClient.builder()` 各十几行。
@@ -23,63 +23,64 @@
 ## 1. 准备
 
 - JDK 21、Maven 3.9+。
-- 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `1.0.0`，已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，第 2 节的 pom 片段直接从 Central 解析。
-  **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`，代码里 import 的包是 `com.feynman.rpc.*`。
-- 用已发布的 `1.0.0` 不需要 clone 本仓库。只有想用 main 上的最新代码时，才需要把本仓库安装到本地 Maven 仓库，并把下文的 `rpc.version` 换成本仓库根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
+- 依赖坐标：groupId `io.github.sisyfy-zhang`，版本 `2.0.0`，已发布到 [Maven Central](https://central.sonatype.com/namespace/io.github.sisyfy-zhang)，第 2 节的 pom 片段直接从 Central 解析。
+  **groupId 与 Java 包名不同**：坐标是 `io.github.sisyfy-zhang`，代码里 import 的包是 `io.github.sisyfyzhang.steadyrpc.*`。
+  `1.0.0`（旧坐标 `rpc-*`，包 `com.feynman.rpc`）仍在 Central 可用，2.0.0 起坐标与包名变更：从 1.0.0 迁移只需改依赖的 artifactId 并全局替换 import，`rpc.*` 属性与注解不变（[CHANGELOG](../CHANGELOG.md)）。
+- 用已发布的 `2.0.0` 不需要 clone 本仓库。只有想用 main 上的最新代码时，才需要把本仓库安装到本地 Maven 仓库，并把下文的 `steadyrpc.version` 换成本仓库根 `pom.xml` 的 `<version>`（main 上通常是下一个版本的 `-SNAPSHOT`）。
   第 3 步的方式 B（嵌入式 ZooKeeper）也要用到这份 clone：
 
 ```bash
-git clone https://github.com/sisyfy-Zhang/rpc-framework.git
-cd rpc-framework
+git clone https://github.com/sisyfy-Zhang/steady-rpc.git
+cd steady-rpc
 mvn install -DskipTests
 ```
 
 ### 1.1 模块一览
 
-发布到 Central 的模块都在 `rpc-bom` 里；后五行是仓库内部模块，不发布。
+发布到 Central 的模块都在 `steadyrpc-bom` 里；后五行是仓库内部模块，不发布。
 
 | 模块 | 作用 | 你需要依赖它吗 |
 |---|---|---|
-| `rpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
-| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本；第三方只管 ZooKeeper（2.0.0 起），不覆盖 Netty / jackson / Spring 等版本（用法见[第 2 节](#2-新建空白-boot-4-工程并加依赖)） | 推荐 |
-| `rpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
-| `rpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
-| `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
-| `rpc-serialize-fastjson2` | fastjson2 序列化器（SPI 名 `fastjson2`），可读、便于调试 | 至少一个 |
-| `rpc-spring-boot-starter` | Spring Boot 4 自动配置 | Boot 应用 |
-| `rpc-metrics-micrometer` | Micrometer 指标：客户端 / 服务端调用 Timer（service / method / status）、在途与连接数 Gauge、可内嵌的 Prometheus `/metrics` 端点；不依赖 Spring | 要指标时 |
-| `rpc-registry-tck` | Registry 契约测试（14 条），第三方注册中心实现可直接继承 | 实现注册中心时 |
-| `rpc-examples` | 可运行示例：Boot provider / consumer、纯 Java provider / consumer、本机试用的嵌入式 ZooKeeper | 参考 |
-| `rpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
-| `rpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
-| `rpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
-| `rpc-bench-compare-grpc` / `rpc-bench-compare-dubbo` | 对比对象：同一契约的 gRPC（grpc-java）与 Dubbo 3（triple）服务端和 harness 的 `CallTarget` 实现，见 [docs/benchmarking.md](benchmarking.md#对比对象grpc--dubbo) | — |
+| `steadyrpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
+| `steadyrpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 steadyrpc-* 模块不用写版本；第三方只管 ZooKeeper（2.0.0 起），不覆盖 Netty / jackson / Spring 等版本（用法见[第 2 节](#2-新建空白-boot-4-工程并加依赖)） | 推荐 |
+| `steadyrpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
+| `steadyrpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
+| `steadyrpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
+| `steadyrpc-serialize-fastjson2` | fastjson2 序列化器（SPI 名 `fastjson2`），可读、便于调试 | 至少一个 |
+| `steadyrpc-spring-boot-starter` | Spring Boot 4 自动配置 | Boot 应用 |
+| `steadyrpc-metrics-micrometer` | Micrometer 指标：客户端 / 服务端调用 Timer（service / method / status）、在途与连接数 Gauge、可内嵌的 Prometheus `/metrics` 端点；不依赖 Spring | 要指标时 |
+| `steadyrpc-registry-tck` | Registry 契约测试（14 条），第三方注册中心实现可直接继承 | 实现注册中心时 |
+| `steadyrpc-examples` | 可运行示例：Boot provider / consumer、纯 Java provider / consumer、本机试用的嵌入式 ZooKeeper | 参考 |
+| `steadyrpc-integration-tests` | 跨模块集成测试、全仓架构规则、覆盖率汇总（不发布） | — |
+| `steadyrpc-benchmark` | JMH 微基准（序列化、负载均衡选点） | — |
+| `steadyrpc-bench-e2e` | 端到端压测 harness：按口径卡（YAML）驱动独立的 server / client 进程，输出 JSON 与由 JSON 生成的 Markdown 报告 | — |
+| `steadyrpc-bench-compare-grpc` / `steadyrpc-bench-compare-dubbo` | 对比对象：同一契约的 gRPC（grpc-java）与 Dubbo 3（triple）服务端和 harness 的 `CallTarget` 实现，见 [docs/benchmarking.md](benchmarking.md#对比对象grpc--dubbo) | — |
 
 ## 2. 新建空白 Boot 4 工程并加依赖
 
 用 [start.spring.io](https://start.spring.io) 生成一个 Spring Boot 4.1.x、Java 21、不勾选任何依赖的 Maven 工程（或任何已有的 Boot 4 工程）。
 实际项目里接口通常放在一个独立的 `xxx-api` 模块，provider 与 consumer 各是一个应用；为了 15 分钟跑通，下面把它们放在同一个工程里
-（`rpc-examples` 就是这样组织的：`api` / `provider` / `consumer` 三个包）。
+（`steadyrpc-examples` 就是这样组织的：`api` / `provider` / `consumer` 三个包）。
 
-- 下文每段代码前标的是它在 `rpc-examples` 里的路径；照抄时把前缀 `rpc-examples/` 换成你的工程根目录，**保留包名**
-  `com.feynman.rpc.examples.*`（要换成自己的包名就三个包一起换，并同步改 import）。
+- 下文每段代码前标的是它在 `steadyrpc-examples` 里的路径；照抄时把前缀 `steadyrpc-examples/` 换成你的工程根目录，**保留包名**
+  `io.github.sisyfyzhang.steadyrpc.examples.*`（要换成自己的包名就三个包一起换，并同步改 import）。
 - 删掉 start.spring.io 生成的 `DemoApplication` 与 `src/test` 下的 `DemoApplicationTests`：同一工程里会有 provider、consumer
   两个启动类（第 5、6 节），多出来的第三个 main 只会让 `mvn spring-boot:run` 更难选；删了 `DemoApplication` 而留着
   `DemoApplicationTests` 会让 `mvn test` 找不到 `@SpringBootConfiguration`。
 
-在 `pom.xml` 里加入（先导入 BOM `rpc-bom`，各 rpc-* 模块就不用逐个写版本；它管理哪些第三方版本，见代码块后的说明）：
+在 `pom.xml` 里加入（先导入 BOM `steadyrpc-bom`，各 steadyrpc-* 模块就不用逐个写版本；它管理哪些第三方版本，见代码块后的说明）：
 
 ```xml
 <properties>
-  <rpc.version>1.0.0</rpc.version>   <!-- 用本地 install 的版本时改成本仓库根 pom.xml 的 <version> -->
+  <steadyrpc.version>2.0.0</steadyrpc.version>   <!-- 用本地 install 的版本时改成本仓库根 pom.xml 的 <version> -->
 </properties>
 
 <dependencyManagement>
   <dependencies>
     <dependency>
       <groupId>io.github.sisyfy-zhang</groupId>
-      <artifactId>rpc-bom</artifactId>
-      <version>${rpc.version}</version>
+      <artifactId>steadyrpc-bom</artifactId>
+      <version>${steadyrpc.version}</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -90,21 +91,21 @@ mvn install -DskipTests
   <!-- Boot 集成：@RpcService / @RpcReference、rpc.* 配置、生命周期 -->
   <dependency>
     <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-spring-boot-starter</artifactId>
+    <artifactId>steadyrpc-spring-boot-starter</artifactId>
   </dependency>
-  <!-- 注册中心：ZooKeeper（换 Nacos 用 rpc-registry-nacos 并设 rpc.registry.type=nacos） -->
+  <!-- 注册中心：ZooKeeper（换 Nacos 用 steadyrpc-registry-nacos 并设 rpc.registry.type=nacos） -->
   <dependency>
     <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-registry-zookeeper</artifactId>
+    <artifactId>steadyrpc-registry-zookeeper</artifactId>
   </dependency>
   <!-- 序列化：至少一个。Protostuff 是缺省（不配 rpc.serializer 时用它）；fastjson2 可读、便于调试，两者可以同时在 classpath 上，建连时协商 -->
   <dependency>
     <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-serialize-protobuf</artifactId>
+    <artifactId>steadyrpc-serialize-protobuf</artifactId>
   </dependency>
   <dependency>
     <groupId>io.github.sisyfy-zhang</groupId>
-    <artifactId>rpc-serialize-fastjson2</artifactId>
+    <artifactId>steadyrpc-serialize-fastjson2</artifactId>
   </dependency>
   <!-- 可选：有 Actuator 时自动注册健康组件 rpc（已启动且已注册 = UP） -->
   <dependency>
@@ -114,10 +115,10 @@ mvn install -DskipTests
 </dependencies>
 ```
 
-**rpc-bom 与第三方版本**（2.0.0 起）：rpc-bom 只管本框架模块与 ZooKeeper 的版本（Spring Boot 不管理 ZooKeeper），不覆盖 Netty、jackson、Spring 等第三方版本。
+**steadyrpc-bom 与第三方版本**（2.0.0 起）：steadyrpc-bom 只管本框架模块与 ZooKeeper 的版本（Spring Boot 不管理 ZooKeeper），不覆盖 Netty、jackson、Spring 等第三方版本。
 Boot 应用的 Netty / jackson 由 Boot 的 BOM 决定（Boot 4.1 管理 Netty 4.2.x；本框架在 CI 上同时验证 Netty 4.1 与 4.2，`netty-42` 作业），
 请保持 Boot 的补丁版本最新——第三方依赖的漏洞修复随 Boot 补丁版本进来（见 [SECURITY.md「依赖漏洞」](../SECURITY.md#依赖漏洞)）。
-非 Boot 应用由本框架的直接依赖决定：rpc-core 声明 netty-all（Netty 4.1 线），rpc-registry-nacos 直接声明 jackson-core / jackson-databind，
+非 Boot 应用由本框架的直接依赖决定：steadyrpc-core 声明 netty-all（Netty 4.1 线），steadyrpc-registry-nacos 直接声明 jackson-core / jackson-databind，
 按就近原则压过 nacos-client 2.4.3 写死的 jackson 2.13.5。
 
 ## 3. 起一个 ZooKeeper
@@ -128,13 +129,13 @@ Boot 应用的 Netty / jackson 由 Boot 的 BOM 决定（Boot 4.1 管理 Netty 4
 # A. Docker（推荐，和生产最接近）
 docker run -d --name zk -p 2181:2181 zookeeper:3.9
 
-# B. 不装任何东西：rpc-examples 自带的嵌入式 ZooKeeper（curator-test 的 TestingServer，仅供试验）
-cd rpc-framework/rpc-examples
+# B. 不装任何东西：steadyrpc-examples 自带的嵌入式 ZooKeeper（curator-test 的 TestingServer，仅供试验）
+cd steady-rpc/steadyrpc-examples
 mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
-java -cp "target/classes:$(cat target/classpath.txt)" com.feynman.rpc.examples.EmbeddedZooKeeper
+java -cp "target/classes:$(cat target/classpath.txt)" io.github.sisyfyzhang.steadyrpc.examples.EmbeddedZooKeeper
 ```
 
-（Windows 的 classpath 分隔符是 `;`，PowerShell 写法见 [rpc-examples/README.md](../rpc-examples/README.md#运行)。）
+（Windows 的 classpath 分隔符是 `;`，PowerShell 写法见 [steadyrpc-examples/README.md](../steadyrpc-examples/README.md#运行)。）
 
 写自动化测试时，在测试里直接 `new TestingServer(true)`（依赖 `org.apache.curator:curator-test`，test scope），
 把 `getConnectString()` 作为 `rpc.registry.address` 传给应用即可——本仓库的集成测试全部这样做，不依赖 Docker。
@@ -144,10 +145,10 @@ java -cp "target/classes:$(cat target/classpath.txt)" com.feynman.rpc.examples.E
 接口、DTO、业务异常放在 provider 与 consumer 共享的包里（本节 5 个文件：三个接口、一个 DTO、一个业务异常——下文的 provider 与
 consumer 代码都依赖它们，少一个就编译不过）：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/api/UserFacade.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/api/UserFacade.java`：
 
 ```java
-package com.feynman.rpc.examples.api;
+package io.github.sisyfyzhang.steadyrpc.examples.api;
 
 import java.util.List;
 
@@ -160,10 +161,10 @@ public interface UserFacade {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/api/UserService.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/api/UserService.java`：
 
 ```java
-package com.feynman.rpc.examples.api;
+package io.github.sisyfyzhang.steadyrpc.examples.api;
 
 import java.util.List;
 
@@ -176,10 +177,10 @@ public interface UserService {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/api/InventoryService.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/api/InventoryService.java`：
 
 ```java
-package com.feynman.rpc.examples.api;
+package io.github.sisyfyzhang.steadyrpc.examples.api;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -206,10 +207,10 @@ public interface InventoryService {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/api/User.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/api/User.java`：
 
 ```java
-package com.feynman.rpc.examples.api;
+package io.github.sisyfyzhang.steadyrpc.examples.api;
 
 /**
  * 示例 DTO。经序列化器传输的类型用普通类（无参构造 + 可变字段）而不是 record：
@@ -251,10 +252,10 @@ public class User {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/api/InsufficientStockException.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/api/InsufficientStockException.java`：
 
 ```java
-package com.feynman.rpc.examples.api;
+package io.github.sisyfyzhang.steadyrpc.examples.api;
 
 /**
  * 业务异常示例：库存不足。放在 api 包里与接口一起发布——消费端 classpath 上有这个类，框架就会把服务端抛出的
@@ -288,17 +289,17 @@ public class InsufficientStockException extends RuntimeException {
 实现类标 `@RpcService`（它元注解了 `@Component`，不需要再写 `@Service`）。暴露的是容器里的最终实例，事务等切面对远程调用同样生效。
 实现类里依赖的其他 bean 照常注入：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/UserFacadeImpl.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/provider/UserFacadeImpl.java`：
 
 ```java
-package com.feynman.rpc.examples.provider;
+package io.github.sisyfyzhang.steadyrpc.examples.provider;
 
 import java.util.List;
 
-import com.feynman.rpc.examples.api.User;
-import com.feynman.rpc.examples.api.UserFacade;
-import com.feynman.rpc.examples.api.UserService;
-import com.feynman.rpc.starter.RpcService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade;
+import io.github.sisyfyzhang.steadyrpc.examples.api.UserService;
+import io.github.sisyfyzhang.steadyrpc.starter.RpcService;
 
 /** 暴露给消费端的门面；内部依赖的 UserService 是本地 bean 注入，不经过网络。 */
 @RpcService
@@ -323,19 +324,19 @@ public class UserFacadeImpl implements UserFacade {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/UserServiceImpl.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/provider/UserServiceImpl.java`：
 
 ```java
-package com.feynman.rpc.examples.provider;
+package io.github.sisyfyzhang.steadyrpc.examples.provider;
 
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.feynman.rpc.examples.api.User;
-import com.feynman.rpc.examples.api.UserService;
-import com.feynman.rpc.starter.RpcService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.examples.api.UserService;
+import io.github.sisyfyzhang.steadyrpc.starter.RpcService;
 
 /**
  * 参数按方法签名上的泛型类型反序列化：远程传来的 {@code List<User>} 元素就是 User，而不是 Map / JSONObject。
@@ -357,10 +358,10 @@ public class UserServiceImpl implements UserService {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/InventoryServiceImpl.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/provider/InventoryServiceImpl.java`：
 
 ```java
-package com.feynman.rpc.examples.provider;
+package io.github.sisyfyzhang.steadyrpc.examples.provider;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -368,10 +369,10 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.feynman.rpc.examples.api.InsufficientStockException;
-import com.feynman.rpc.examples.api.InventoryService;
-import com.feynman.rpc.examples.api.User;
-import com.feynman.rpc.starter.RpcService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.starter.RpcService;
 
 /** 内存版库存：每个 SKU 初始 10 件。 */
 @RpcService
@@ -413,10 +414,10 @@ public class InventoryServiceImpl implements InventoryService {
 consumer 读 `consumer.yml`），照抄即可。以后拆成两个独立应用时，各自 `SpringApplication.run(XxxApplication.class, args)`、
 用默认的 `application.yml`，去掉 `spring.config.name`：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/ProviderApplication.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/provider/ProviderApplication.java`：
 
 ```java
-package com.feynman.rpc.examples.provider;
+package io.github.sisyfyzhang.steadyrpc.examples.provider;
 
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -448,7 +449,7 @@ public class ProviderApplication {
 
 配置放在 `src/main/resources/provider.yml`（不是 `application.yml`：同一工程里 consumer 也会读到 `application.yml`）：
 
-`rpc-examples/src/main/resources/provider.yml`：
+`steadyrpc-examples/src/main/resources/provider.yml`：
 
 ```yaml
 # 服务提供方示例配置（ProviderApplication 以 spring.config.name=provider 加载本文件）
@@ -482,7 +483,7 @@ management:
 
 logging:
   level:
-    com.feynman.rpc: INFO
+    io.github.sisyfyzhang.steadyrpc: INFO
 ```
 
 要点：
@@ -495,16 +496,16 @@ logging:
 
 在任意 bean 的接口类型字段上标 `@RpcReference`。注入发生在初始化回调之前，`@PostConstruct` 里就能用：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/UserGateway.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/consumer/UserGateway.java`：
 
 ```java
-package com.feynman.rpc.examples.consumer;
+package io.github.sisyfyzhang.steadyrpc.examples.consumer;
 
 import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.examples.api.User;
-import com.feynman.rpc.examples.api.UserFacade;
-import com.feynman.rpc.starter.RpcReference;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade;
+import io.github.sisyfyzhang.steadyrpc.starter.RpcReference;
 
 /** 业务代码里使用远程服务的样子：字段上标 {@code @RpcReference}，像本地接口一样调用。 */
 @Component
@@ -521,19 +522,19 @@ public class UserGateway {
 
 业务异常按类型 catch，与本地调用写法相同：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/OrderGateway.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/consumer/OrderGateway.java`：
 
 ```java
-package com.feynman.rpc.examples.consumer;
+package io.github.sisyfyzhang.steadyrpc.examples.consumer;
 
 import java.util.List;
 
 import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.examples.api.InsufficientStockException;
-import com.feynman.rpc.examples.api.InventoryService;
-import com.feynman.rpc.examples.api.User;
-import com.feynman.rpc.starter.RpcReference;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.starter.RpcReference;
 
 /** 下单路径上的远程库存调用：业务异常按类型 catch，与本地调用写法相同。 */
 @Component
@@ -563,10 +564,10 @@ public class OrderGateway {
 
 启动后发起一次调用的 `ApplicationRunner`：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/DemoRunner.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/consumer/DemoRunner.java`：
 
 ```java
-package com.feynman.rpc.examples.consumer;
+package io.github.sisyfyzhang.steadyrpc.examples.consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -575,7 +576,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
 
 /** 启动后发起一次示例调用；{@code examples.consumer.demo-call=false} 可关闭（集成测试自己驱动调用）。 */
 @Component
@@ -598,10 +599,10 @@ public class DemoRunner implements ApplicationRunner {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/ConsumerApplication.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/consumer/ConsumerApplication.java`：
 
 ```java
-package com.feynman.rpc.examples.consumer;
+package io.github.sisyfyzhang.steadyrpc.examples.consumer;
 
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -631,7 +632,7 @@ public class ConsumerApplication {
 }
 ```
 
-`rpc-examples/src/main/resources/consumer.yml`：
+`steadyrpc-examples/src/main/resources/consumer.yml`：
 
 ```yaml
 # 服务消费方示例配置（ConsumerApplication 以 spring.config.name=consumer 加载本文件）
@@ -649,7 +650,7 @@ rpc:
 
 logging:
   level:
-    com.feynman.rpc: INFO
+    io.github.sisyfyzhang.steadyrpc: INFO
 ```
 
 `@RpcReference` 的属性：`version`、`group`（与 `@RpcService` 对应）、`timeout`（毫秒，整次调用含重试的总预算，0 = 用
@@ -684,26 +685,26 @@ provider 的"注册完成"不等于 consumer 的"已经看到它"：consumer 若
 
 ```bash
 # 终端 1：provider
-mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.provider.ProviderApplication
+mvn spring-boot:run -Dspring-boot.run.main-class=io.github.sisyfyzhang.steadyrpc.examples.provider.ProviderApplication
 # 终端 2：consumer
-mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.consumer.ConsumerApplication
+mvn spring-boot:run -Dspring-boot.run.main-class=io.github.sisyfyzhang.steadyrpc.examples.consumer.ConsumerApplication
 ```
 
 同一个原因，这个"两个应用放一个工程"的布局不能直接 `mvn package` 成可执行 jar（`repackage` 同样报 `Unable to find a single main class`）：
 它只用来试跑；要部署时按第 2 节说的拆成独立应用，各自一个启动类。
 
-provider 日志里应看到（下面是在本机实际运行 rpc-examples 的输出，去掉了时间戳与进程号；地址以实际为准）：
+provider 日志里应看到（下面是在本机实际运行 steadyrpc-examples 的输出，去掉了时间戳与进程号；地址以实际为准）：
 
 ```text
-INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.InventoryService::default -> com.feynman.rpc.examples.provider.InventoryServiceImpl
-INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.UserService::default -> com.feynman.rpc.examples.provider.UserServiceImpl
-INFO  [main] com.feynman.rpc.core.RpcServer : Exported com.feynman.rpc.examples.api.UserFacade::default -> com.feynman.rpc.examples.provider.UserFacadeImpl
-INFO  [main] com.feynman.rpc.core.RpcServer : RpcServer bound on port 9000 (advertised as 192.168.0.103:9000), services=[com.feynman.rpc.examples.api.InventoryService::default, com.feynman.rpc.examples.api.UserService::default, com.feynman.rpc.examples.api.UserFacade::default]
+INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.InventoryServiceImpl
+INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserServiceImpl
+INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserFacadeImpl
+INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : RpcServer bound on port 9000 (advertised as 192.168.0.103:9000), services=[io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default]
 INFO  [main] c.f.r.e.provider.ProviderApplication : Started ProviderApplication in 2.975 seconds (process running for 3.939)
-INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.InventoryService::default at 192.168.0.103:9000
-INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.UserService::default at 192.168.0.103:9000
-INFO  [er-registry-5-1] com.feynman.rpc.core.RpcServer : Registered com.feynman.rpc.examples.api.UserFacade::default at 192.168.0.103:9000
-WARN  [-server-biz-4-2] c.f.rpc.core.server.ServiceDispatcher : com.feynman.rpc.examples.api.InventoryService::default#reserve (request 2) threw com.feynman.rpc.examples.api.InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
+INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default at 192.168.0.103:9000
+INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default at 192.168.0.103:9000
+INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default at 192.168.0.103:9000
+WARN  [-server-biz-4-2] c.f.rpc.core.server.ServiceDispatcher : io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default#reserve (request 2) threw io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
 INFO  [-server-biz-4-4] c.f.rpc.examples.provider.TenantFilter : buyers called for tenant acme
 INFO  [-server-biz-4-5] c.f.r.examples.provider.UserServiceImpl : UserServiceImpl.save called with User{id=1, name=zzz}
 ```
@@ -713,15 +714,15 @@ INFO  [-server-biz-4-5] c.f.r.examples.provider.UserServiceImpl : UserServiceImp
 consumer 启动、调用、退出：
 
 ```text
-INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of com.feynman.rpc.examples.api.InventoryService::default updated: [192.168.0.103:9000]
-INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of com.feynman.rpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
+INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default updated: [192.168.0.103:9000]
+INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
 INFO  [main] c.f.r.e.consumer.ConsumerApplication : Started ConsumerApplication in 3.487 seconds (process running for 4.328)
 INFO  [main] c.f.r.e.consumer.CallShapesRunner : left=7
 INFO  [main] c.f.r.e.consumer.CallShapesRunner : InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
 INFO  [main] c.f.r.e.consumer.CallShapesRunner : async buyers=[User{id=1, name=order-1}]
 INFO  [main] c.f.r.e.consumer.CallShapesRunner : buyers(tenant=acme)=1
 INFO  [main] c.f.rpc.examples.consumer.DemoRunner : Remote saveUser returned User{id=1, name=zzz}
-INFO  [main] com.feynman.rpc.core.RpcClient : RpcClient closed in 130ms (all in-flight calls completed)
+INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcClient : RpcClient closed in 130ms (all in-flight calls completed)
 ```
 
 ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`，节点数据是
@@ -731,10 +732,10 @@ ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{
 启动时与 `DemoRunner` 一起执行，任何一步失败都会让启动失败，日志就是上面 `CallShapesRunner` 那四行），provider 侧用一个
 `ServerFilter` 读 attachment（`ServerFilter` / `ClientFilter` bean 由 starter 自动接入）。这两个文件也照抄进工程：
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/consumer/CallShapesRunner.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/consumer/CallShapesRunner.java`：
 
 ```java
-package com.feynman.rpc.examples.consumer;
+package io.github.sisyfyzhang.steadyrpc.examples.consumer;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -746,10 +747,10 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.core.RpcContext;
-import com.feynman.rpc.examples.api.InsufficientStockException;
-import com.feynman.rpc.examples.api.InventoryService;
-import com.feynman.rpc.examples.api.User;
+import io.github.sisyfyzhang.steadyrpc.core.RpcContext;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException;
+import io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService;
+import io.github.sisyfyzhang.steadyrpc.examples.api.User;
 
 /** 启动后再演示三种调用形态：业务异常跨进程、异步、attachments（同步调用见 {@link DemoRunner}）。 */
 @Component
@@ -788,10 +789,10 @@ public class CallShapesRunner implements ApplicationRunner {
 }
 ```
 
-`rpc-examples/src/main/java/com/feynman/rpc/examples/provider/TenantFilter.java`：
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/provider/TenantFilter.java`：
 
 ```java
-package com.feynman.rpc.examples.provider;
+package io.github.sisyfyzhang.steadyrpc.examples.provider;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -799,10 +800,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import com.feynman.rpc.core.filter.Invocation;
-import com.feynman.rpc.core.filter.Invoker;
-import com.feynman.rpc.core.filter.Result;
-import com.feynman.rpc.core.filter.ServerFilter;
+import io.github.sisyfyzhang.steadyrpc.core.filter.Invocation;
+import io.github.sisyfyzhang.steadyrpc.core.filter.Invoker;
+import io.github.sisyfyzhang.steadyrpc.core.filter.Result;
+import io.github.sisyfyzhang.steadyrpc.core.filter.ServerFilter;
 
 /**
  * 服务端 Filter 示例：读取调用方用 {@code RpcContext.setAttachment("tenant", ...)} 带来的 attachment。
@@ -841,7 +842,7 @@ public class TenantFilter implements ServerFilter {
 
 ### 7.1 指标
 
-可选。`rpc-metrics-micrometer` 把每次调用记成 Micrometer Timer（`rpc.client.calls` / `rpc.server.calls`，tag 为 `service`、`method`、`status`），
+可选。`steadyrpc-metrics-micrometer` 把每次调用记成 Micrometer Timer（`rpc.client.calls` / `rpc.server.calls`，tag 为 `service`、`method`、`status`），
 在途与连接数记成 Gauge；指标名、tag 取值与 PromQL 见 [observability.md](observability.md)。
 
 **Boot 应用**：加下面四个依赖，再暴露 Prometheus 端点（`management.endpoints.web.exposure.include` 加上 `prometheus`）。
@@ -852,7 +853,7 @@ public class TenantFilter implements ServerFilter {
 ```xml
 <dependency>
   <groupId>io.github.sisyfy-zhang</groupId>
-  <artifactId>rpc-metrics-micrometer</artifactId>   <!-- 版本由第 2 步导入的 rpc-bom 管理 -->
+  <artifactId>steadyrpc-metrics-micrometer</artifactId>   <!-- 版本由第 2 步导入的 steadyrpc-bom 管理 -->
 </dependency>
 <dependency>
   <groupId>org.springframework.boot</groupId>
@@ -871,13 +872,13 @@ public class TenantFilter implements ServerFilter {
 用命令行参数覆盖 `WebApplicationType.NONE` 并暴露端点（也可以写进 `provider.yml`），再跑一次 consumer 后抓取：
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.main-class=com.feynman.rpc.examples.provider.ProviderApplication "-Dspring-boot.run.arguments=--spring.main.web-application-type=servlet --management.endpoints.web.exposure.include=health,prometheus"
+mvn spring-boot:run -Dspring-boot.run.main-class=io.github.sisyfyzhang.steadyrpc.examples.provider.ProviderApplication "-Dspring-boot.run.arguments=--spring.main.web-application-type=servlet --management.endpoints.web.exposure.include=health,prometheus"
 curl -s localhost:8080/actuator/prometheus | grep '^rpc_server_calls_seconds_count'
-# rpc_server_calls_seconds_count{method="buyers",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
-# rpc_server_calls_seconds_count{method="buyersAsync",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
-# rpc_server_calls_seconds_count{method="reserve",service="com.feynman.rpc.examples.api.InventoryService",status="BIZ_EXCEPTION"} 1
-# rpc_server_calls_seconds_count{method="reserve",service="com.feynman.rpc.examples.api.InventoryService",status="OK"} 1
-# rpc_server_calls_seconds_count{method="saveUser",service="com.feynman.rpc.examples.api.UserFacade",status="OK"} 1
+# rpc_server_calls_seconds_count{method="buyers",service="io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService",status="OK"} 1
+# rpc_server_calls_seconds_count{method="buyersAsync",service="io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService",status="OK"} 1
+# rpc_server_calls_seconds_count{method="reserve",service="io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService",status="BIZ_EXCEPTION"} 1
+# rpc_server_calls_seconds_count{method="reserve",service="io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService",status="OK"} 1
+# rpc_server_calls_seconds_count{method="saveUser",service="io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade",status="OK"} 1
 ```
 
 （这 5 行来自第 7 节 consumer 的一次运行：`DemoRunner` 的 `saveUser`，加上 `CallShapesRunner` 的四次 `InventoryService` 调用；
@@ -950,7 +951,7 @@ management:
 
 | 现象（异常 / 日志） | 原因 | 处理 |
 |---|---|---|
-| 启动失败：`No extension named 'protobuf' found for type com.feynman.rpc.core.serialize.Serializer` | `rpc.serializer` 写的实现不在 classpath 上；没配 `rpc.serializer` 时缺省就是 `protobuf`，只带了 `rpc-serialize-fastjson2` 也会这样（注册中心同理：`... for type com.feynman.rpc.core.registry.RegistryFactory`） | 加对应模块依赖（`rpc-serialize-protobuf` / `rpc-registry-zookeeper` 等），或改正名字（只用 fastjson2 时设 `rpc.serializer: fastjson2`） |
+| 启动失败：`No extension named 'protobuf' found for type io.github.sisyfyzhang.steadyrpc.core.serialize.Serializer` | `rpc.serializer` 写的实现不在 classpath 上；没配 `rpc.serializer` 时缺省就是 `protobuf`，只带了 `steadyrpc-serialize-fastjson2` 也会这样（注册中心同理：`... for type io.github.sisyfyzhang.steadyrpc.core.registry.RegistryFactory`） | 加对应模块依赖（`steadyrpc-serialize-protobuf` / `steadyrpc-registry-zookeeper` 等），或改正名字（只用 fastjson2 时设 `rpc.serializer: fastjson2`） |
 | provider 日志反复出现 `Failed to create registry ...` 或 `Failed to register ... (attempt N), retrying in ...ms; port ... keeps serving but is not discoverable yet` | 注册中心不可达或地址写错；端口已经在服务，但消费端发现不了它 | 检查 `rpc.registry.address` 与网络；恢复后自动注册，无需重启。health 组件 `rpc` 此时为 OUT_OF_SERVICE |
 | consumer 调用抛 `RpcException: No available provider for: ...` | 订阅到的提供者为空：provider 没启动 / 还没注册成功 / `version`、`group` 与 provider 不一致 / 注册中心不可达 | 确认 provider 已注册（日志 `Registered ... at ...`）；核对 `@RpcReference` 与 `@RpcService` 的 version / group |
 | `RpcException: SERVICE_NOT_FOUND from server for ...: no such method: ...`（或 `no such service: ...`） | 两端接口版本不一致（方法名或参数类型不同） | 两端使用同一版本的 API 包；需要兼容时用新的 `version` 并行暴露 |
@@ -965,11 +966,11 @@ management:
 
 ## 10. 不用 Spring：纯 Java
 
-依赖把第 2 节的 `rpc-spring-boot-starter` 换成 `rpc-core`（版本同样由 `rpc-bom` 管理），注册中心与序列化模块不变。
+依赖把第 2 节的 `steadyrpc-spring-boot-starter` 换成 `steadyrpc-core`（版本同样由 `steadyrpc-bom` 管理），注册中心与序列化模块不变。
 
 接口与 DTO 放在双方共享的 API 包里（DTO 用普通类，**不要用 record**，见[第 4 节](#4-定义接口与-dto)与[第 11 节](#protostuff不支持-record字段演进需要纪律)）。下面两段代码就是
-`rpc-examples` 的 [`PlainProvider`](../rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainProvider.java) 与
-[`PlainConsumer`](../rpc-examples/src/main/java/com/feynman/rpc/examples/plain/PlainConsumer.java)，由集成测试 `PlainJavaExamplesTest` 跑通。
+`steadyrpc-examples` 的 [`PlainProvider`](../steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/plain/PlainProvider.java) 与
+[`PlainConsumer`](../steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/plain/PlainConsumer.java)，由集成测试 `PlainJavaExamplesTest` 跑通。
 其中的接口 `InventoryService`、实现 `InventoryServiceImpl`、DTO `User` 与业务异常 `InsufficientStockException` 的完整代码见
 [第 4、5 节](#4-定义接口与-dto)。
 
@@ -1024,7 +1025,7 @@ management:
 	}
 ```
 
-运行这两个示例（与 Boot 版本可同时运行，纯 Java provider 用 9100 端口）见 [rpc-examples/README.md「运行」](../rpc-examples/README.md#运行)。
+运行这两个示例（与 Boot 版本可同时运行，纯 Java provider 用 9100 端口）见 [steadyrpc-examples/README.md「运行」](../steadyrpc-examples/README.md#运行)。
 
 ## 11. 已知限制
 
@@ -1058,7 +1059,7 @@ management:
 
 ### 离群摘除只按失败、按时间放回
 
-离群摘除在 1.0.0 之后加入 main（缺省开）。进程存活但不回包、被 kill 但注册中心还没摘时，坏节点在连续 5 个坏结果（或 10 秒内过半失败）后被摘，摘除期间不再分到流量；
+离群摘除自 2.0.0 起提供（缺省开；1.0.0 没有）。进程存活但不回包、被 kill 但注册中心还没摘时，坏节点在连续 5 个坏结果（或 10 秒内过半失败）后被摘，摘除期间不再分到流量；
 但它**不做半开探测与主动健康检查**——到期直接放回，若节点仍坏，放回后的前几个请求会再失败一次才再被摘（时长按次数倍增到 60s）；**不按延迟摘除**（慢节点交给 `p2c`）；
 只有一个提供者的服务永远不摘（最多摘一半、至少留 1 个）；没有服务级熔断。实验见 [docs/probes/outlier-detection.md](probes/outlier-detection.md)。
 
@@ -1074,6 +1075,6 @@ IO 线程只做停机 / 执行器满载的拒绝；deadline 检查与用户 Filt
 
 ### 尚未实现：链路追踪、压缩、客户端单向调用
 
-**还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在后续计划里。Micrometer 调用指标已由 `rpc-metrics-micrometer` 提供（[observability.md](observability.md)）。性能数字只来自一台笔记本的同机 loopback，见 README「[性能与证据](../README.md#性能与证据)」的"不可外推"。
+**还没有链路追踪**：attachments 已预留 W3C `traceparent` 等键，OpenTelemetry 集成在后续计划里。Micrometer 调用指标已由 `steadyrpc-metrics-micrometer` 提供（[observability.md](observability.md)）。性能数字只来自一台笔记本的同机 loopback，见 README「[性能与证据](../README.md#性能与证据)」的"不可外推"。
 
 **压缩标志位未实现**：收到置位的请求会回 `BAD_REQUEST`；单向调用标志服务端已支持，客户端尚不发送。

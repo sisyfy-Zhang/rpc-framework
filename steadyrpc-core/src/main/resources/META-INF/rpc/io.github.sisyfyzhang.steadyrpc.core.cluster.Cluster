@@ -1,0 +1,3 @@
+failfast=io.github.sisyfyzhang.steadyrpc.core.cluster.FailfastCluster
+failover=io.github.sisyfyzhang.steadyrpc.core.cluster.FailoverCluster
+failback=io.github.sisyfyzhang.steadyrpc.core.cluster.FailbackCluster
