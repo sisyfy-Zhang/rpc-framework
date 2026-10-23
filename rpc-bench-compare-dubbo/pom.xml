@@ -26,7 +26,7 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>rpc-bench-e2e</artifactId>
     </dependency>
-    <!-- all-in-one：triple 协议、hessian2 / fastjson2 序列化、netty4 传输都在里面；它依赖的 netty-all 由根 pom 管理到 4.1.136 -->
+    <!-- all-in-one：triple 协议、hessian2 / fastjson2 序列化、netty4 传输都在里面；它依赖的 netty-all 由根 pom 的 netty-bom 管理到 netty.version（2.0.0 起 4.1.139；归档压测数据测于 4.1.136） -->
     <dependency>
       <groupId>org.apache.dubbo</groupId>
       <artifactId>dubbo</artifactId>

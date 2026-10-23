@@ -140,6 +140,34 @@ jobs:
           if grep -rln "LEAK:" --include='*.txt' --include='*.xml' . ; then echo "::error::Netty reported ByteBuf leaks"; exit 1; fi
           echo "no LEAK reports"
 
+  # Netty 4.2 线：Spring Boot 4.1 的 spring-boot-dependencies 把 Netty 管理到 4.2.x，Boot 应用里的 rpc-core 实际跑在 4.2 上。
+  # 本仓库在 4.1 线上构建与压测（根 pom netty.version）；这里用 Boot 4.1.0 管理的版本覆盖 netty.version（netty-bom 的 import 版本），
+  # 跑同一份全量构建 + 测试，保证两条线都可用。
+  netty-42:
+    name: netty-42 (full build on Netty 4.2, the line Spring Boot 4.1 manages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NETTY_42_VERSION: 4.2.15.Final
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: ./mvnw clean install on Netty 4.2
+        run: ./mvnw $MVN_FLAGS clean install -Djacoco.skip=true -Dnetty.version=$NETTY_42_VERSION
+      - name: Netty override really applies (every io.netty artifact of rpc-core and rpc-registry-zookeeper on 4.2)
+        if: always()
+        run: |
+          set -o pipefail
+          ./mvnw $MVN_FLAGS -q -pl rpc-core,rpc-registry-zookeeper -am dependency:list -Dnetty.version=$NETTY_42_VERSION -DoutputFile=deps.txt
+          cat rpc-core/deps.txt rpc-registry-zookeeper/deps.txt
+          grep -h "io.netty:" rpc-core/deps.txt rpc-registry-zookeeper/deps.txt > netty.txt
+          test -s netty.txt
+          if grep -v ":$NETTY_42_VERSION" netty.txt | grep -v "netty-tcnative"; then echo "::error::io.netty artifacts not on $NETTY_42_VERSION"; exit 1; fi
+
   jdk25:
     name: jdk25 (optional)
     runs-on: ubuntu-latest

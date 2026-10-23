@@ -59,3 +59,9 @@ cp wrk ~/tools/bin/wrk2
 wrk2 的发送节拍是**毫秒粒度**：`src/wrk.c` 第 604 行 `msec_to_wait = round((time_usec_to_wait / 1000.0L) + 0.5)` 把等待向上取整到
 整毫秒、交给毫秒粒度的 ae 定时器，每个请求都比计划时刻晚发零点几到一毫秒多，并计入它的"修正后"延迟。所以亚毫秒级目标上，
 开环交叉验证比较的是 harness 的服务时间与 wrk2 `-U` 的"未修正"延迟，wrk2 的修正后延迟只作信息项。
+
+## 依赖漏洞扫描：osv_scan.py
+
+与压测无关，放在这里只因为它也是仓库自带的小工具：`python -I bench/tools/osv_scan.py tree.log` 用 [OSV](https://osv.dev) 核对
+`./mvnw -B dependency:tree` 输出里每个第三方构件的已知漏洞（只用 Python 3 标准库）。用法与发布前的要求见
+[docs/releasing.md「依赖漏洞核对」](../../docs/releasing.md#依赖漏洞核对)。

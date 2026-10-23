@@ -21,9 +21,20 @@
       <groupId>org.apache.curator</groupId>
       <artifactId>curator-recipes</artifactId>
     </dependency>
+    <!-- 排除 zookeeper 自带的全部 Netty（netty-handler / netty-transport-native-epoll / netty-tcnative-boringssl-static）：
+         它们在使用方的依赖图里比 rpc-core → netty-all 的同名构件近一层，按就近原则会胜出（3.9.4 时是 netty-handler 4.1.119，
+         与 netty-all 的其余构件混成两个版本）；本 pom 的 dependencyManagement 对使用方不生效，只有 exclusion 会随 pom 发布。
+         ZooKeeper 客户端缺省走 NIO（ClientCnxnSocketNIO）；使用方改用 ClientCnxnSocketNetty（ZK 客户端 TLS）时，
+         所需的 netty-handler / native epoll 由 rpc-core 的 netty-all 提供（同一 Netty 版本）；要 OpenSSL 引擎时自己加 netty-tcnative。 -->
     <dependency>
       <groupId>org.apache.zookeeper</groupId>
       <artifactId>zookeeper</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>io.netty</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>

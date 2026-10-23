@@ -41,7 +41,7 @@ mvn install -DskipTests
 | 模块 | 作用 | 你需要依赖它吗 |
 |---|---|---|
 | `rpc-core` | RpcClient / RpcServer、协议编解码、Filter 链、四个 SPI 接口与负载均衡 / 容错实现。只依赖 Netty 与 slf4j-api | 必需 |
-| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本，只管本框架模块、不覆盖第三方版本（用法见[第 2 节](#2-新建空白-boot-4-工程并加依赖)） | 推荐 |
+| `rpc-bom` | 物料清单（BOM）：`<scope>import</scope>` 后各 rpc-* 模块不用写版本；第三方只管 ZooKeeper（2.0.0 起），不覆盖 Netty / jackson / Spring 等版本（用法见[第 2 节](#2-新建空白-boot-4-工程并加依赖)） | 推荐 |
 | `rpc-registry-zookeeper` | ZooKeeper 注册中心（Curator 5.8） | 二选一 |
 | `rpc-registry-nacos` | Nacos 注册中心（nacos-client 2.4） | 二选一 |
 | `rpc-serialize-protobuf` | Protostuff 序列化器（SPI 名 `protobuf`，缺省），推荐 | 至少一个 |
@@ -67,7 +67,7 @@ mvn install -DskipTests
   两个启动类（第 5、6 节），多出来的第三个 main 只会让 `mvn spring-boot:run` 更难选；删了 `DemoApplication` 而留着
   `DemoApplicationTests` 会让 `mvn test` 找不到 `@SpringBootConfiguration`。
 
-在 `pom.xml` 里加入（先导入 BOM `rpc-bom`，各 rpc-* 模块就不用逐个写版本；BOM 只管本框架模块，不覆盖 Spring Boot 管理的第三方版本）：
+在 `pom.xml` 里加入（先导入 BOM `rpc-bom`，各 rpc-* 模块就不用逐个写版本；它管理哪些第三方版本，见代码块后的说明）：
 
 ```xml
 <properties>
@@ -113,6 +113,12 @@ mvn install -DskipTests
   </dependency>
 </dependencies>
 ```
+
+**rpc-bom 与第三方版本**（2.0.0 起）：rpc-bom 只管本框架模块与 ZooKeeper 的版本（Spring Boot 不管理 ZooKeeper），不覆盖 Netty、jackson、Spring 等第三方版本。
+Boot 应用的 Netty / jackson 由 Boot 的 BOM 决定（Boot 4.1 管理 Netty 4.2.x；本框架在 CI 上同时验证 Netty 4.1 与 4.2，`netty-42` 作业），
+请保持 Boot 的补丁版本最新——第三方依赖的漏洞修复随 Boot 补丁版本进来（见 [SECURITY.md「依赖漏洞」](../SECURITY.md#依赖漏洞)）。
+非 Boot 应用由本框架的直接依赖决定：rpc-core 声明 netty-all（Netty 4.1 线），rpc-registry-nacos 直接声明 jackson-core / jackson-databind，
+按就近原则压过 nacos-client 2.4.3 写死的 jackson 2.13.5。
 
 ## 3. 起一个 ZooKeeper
 

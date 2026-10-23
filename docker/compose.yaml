@@ -6,7 +6,7 @@ name: rpc-evidence
 
 services:
   zookeeper:
-    image: zookeeper:3.9.4
+    image: zookeeper:3.9.6
     ports:
       - "2181:2181"
     environment:

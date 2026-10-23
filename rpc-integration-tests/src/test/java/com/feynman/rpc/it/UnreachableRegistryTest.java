@@ -43,7 +43,7 @@ class UnreachableRegistryTest {
 
 	/**
 	 * ZK 出现之后、补推 / 后台注册完成的等待上界。不是 15s：TestingServer 启动时监听端口先于 ZooKeeperServer 就绪，恰好在这一瞬间
-	 * 连进来的客户端被服务端以 "ZooKeeperServer not running" 关闭，而 ZK 3.9.4 的 {@code NIOServerCnxn.close} 在
+	 * 连进来的客户端被服务端以 "ZooKeeperServer not running" 关闭，而 ZK 的 {@code NIOServerCnxn.close}（3.9.4 时观察到；3.9.6 仍保留 45s 上界）在
 	 * {@code zkServer.removeCnxn} 处 NPE（{@code zkDb} 为 null），{@code closeSock()} 没执行到——服务端不回包也不关套接字，
 	 * 客户端的握手被吊到 ZK 客户端连接超时（sessionTimeout 30s / 1 台主机 = 30s）才断开重连。CI paranoid 作业的那次失败正是这样
 	 * （日志里 ZK 出现时的 NPE、之后 15s 内消费端没有 CONNECTED）；探针 ZookeeperLateBackendProbeTest 复现为 ZK 出现后 30.3s 才补推。

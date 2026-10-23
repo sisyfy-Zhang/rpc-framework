@@ -27,7 +27,7 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>rpc-bench-e2e</artifactId>
     </dependency>
-    <!-- grpc-netty-shaded：Netty 被重定位到 io.grpc.netty.shaded.io.netty，与 harness 的 netty-all 4.1.136 互不影响 -->
+    <!-- grpc-netty-shaded：Netty 被重定位到 io.grpc.netty.shaded.io.netty，与 harness 的 netty-all（netty.version，2.0.0 起 4.1.139）互不影响 -->
     <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-netty-shaded</artifactId>

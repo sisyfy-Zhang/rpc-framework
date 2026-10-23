@@ -70,7 +70,7 @@
 ```
 
 纯 Java 把 starter 换成 `rpc-core`；可再加 `rpc-serialize-fastjson2`，建连时与对端协商序列化方式。
-BOM 只管本框架模块的版本，不覆盖 Netty、Spring 等第三方版本；不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
+BOM 管本框架模块与 ZooKeeper 的版本，不覆盖 Netty、jackson、Spring 等第三方版本；不用 BOM 时给每个依赖写 `<version>1.0.0</version>`。
 想用 main 上的最新代码时，在仓库根目录 `./mvnw install -DskipTests` 装到本地仓库，并把版本换成根 `pom.xml` 的 `<version>`。
 
 **接口**放在双方共享的 API 包里；DTO 用普通类，不要用 `record`（Protostuff 不支持）：

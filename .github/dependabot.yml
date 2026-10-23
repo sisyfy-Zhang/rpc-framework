@@ -23,3 +23,19 @@ updates:
         update-types:
           - minor
           - patch
+    # 版本线约束（理由见 SECURITY.md「依赖漏洞」与 CONTRIBUTING.md）：这些只收补丁，跨线升级由人按 issue 评估
+    ignore:
+      # Netty 留在 4.1 线（构建与压测口径；4.2 由 CI 的 netty-42 作业另验），4.1→4.2 在 Dependabot 看来是 minor
+      - dependency-name: 'io.netty:*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      # protobuf-java 留在 3.25 线：gRPC 对比模块的生成代码与 grpc-protobuf 同线
+      - dependency-name: 'com.google.protobuf:*'
+        versions: ['>= 4']
+      # nacos-client 留在 2.x：3.x 是不兼容的大版本
+      - dependency-name: 'com.alibaba.nacos:nacos-client'
+        versions: ['>= 3']
+      # Spring Boot 的 minor / major 随 starter 适配一起人工升级
+      - dependency-name: 'org.springframework.boot:*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      # Maven wrapper 固定 3.9.12（docs/releasing.md：Maven 版本影响 central-publishing 打出的 bundle）
+      - dependency-name: 'org.apache.maven:apache-maven'

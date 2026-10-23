@@ -29,7 +29,7 @@ A Java RPC library you can depend on in a real project: Netty transport, a custo
 </dependencies>
 ```
 
-For plain Java use `rpc-core` instead of the starter; add `rpc-serialize-fastjson2` to negotiate a second format. Shared interface (DTOs must be plain classes, not records: Protostuff doesn't support them), provider, and consumer, copied verbatim from [`rpc-examples`](rpc-examples/README.md):
+For plain Java use `rpc-core` instead of the starter; add `rpc-serialize-fastjson2` to negotiate a second format. The BOM manages the versions of the framework modules and ZooKeeper; it does not override Netty, Jackson, Spring or other third-party versions. Shared interface (DTOs must be plain classes, not records: Protostuff doesn't support them), provider, and consumer, copied verbatim from [`rpc-examples`](rpc-examples/README.md):
 
 ```java
 public interface UserFacade {

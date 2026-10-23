@@ -18,7 +18,7 @@ compose 的项目名固定为 `rpc-evidence`（容器名 `rpc-evidence-<服务>-
 
 | 服务 | 镜像 | 宿主机端口 | 用途 / 健康检查 |
 |---|---|---|---|
-| ZooKeeper | `zookeeper:3.9.4` | 2181 | 注册中心；4lw 白名单 `srvr,ruok,stat,mntr`，健康检查 `srvr` |
+| ZooKeeper | `zookeeper:3.9.6` | 2181 | 注册中心；4lw 白名单 `srvr,ruok,stat,mntr`，健康检查 `srvr` |
 | Nacos | `nacos/nacos-server:v2.4.3`（standalone） | 8848（HTTP / 控制台 `/nacos`）、9848（gRPC） | 注册中心；健康检查 `/nacos/v1/console/health/readiness` |
 | Prometheus | `prom/prometheus:v3.15.0` | 9090 | 抓取宿主机上的 RPC 进程（见下表）；健康检查 `/-/ready` |
 | Grafana | `grafana/grafana:12.4.13` | 3000 | 面板 **RPC Overview**（uid `rpc-overview`）；健康检查 `/api/health` |

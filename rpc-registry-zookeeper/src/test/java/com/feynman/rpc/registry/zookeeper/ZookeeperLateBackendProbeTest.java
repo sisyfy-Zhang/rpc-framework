@@ -55,7 +55,7 @@ class ZookeeperLateBackendProbeTest {
 
 	/**
 	 * CI 失败（paranoid 作业）的现场：TestingServer 启动时监听端口先于 ZooKeeperServer 就绪，这一瞬间连进来的客户端被服务端以
-	 * "ZooKeeperServer not running" 关闭，而 ZK 3.9.4 的 {@code NIOServerCnxn.close} 在 {@code zkServer.removeCnxn} 处 NPE
+	 * "ZooKeeperServer not running" 关闭，而 ZK 的 {@code NIOServerCnxn.close} 在 {@code zkServer.removeCnxn} 处 NPE（3.9.4 时观察到；升到 3.9.6 后仍保留同一上界）
 	 * （{@code zkDb} 为 null），{@code closeSock()} 没执行到——套接字留着、不回包。这里用"接受连接后不回包、也不关"的端口
 	 * 复现客户端看到的东西：握手被吊住，直到 ZK 客户端的连接超时（sessionTimeout / 主机数）才断开重连。
 	 */

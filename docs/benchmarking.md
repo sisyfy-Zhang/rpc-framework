@@ -604,6 +604,8 @@ public interface CallTargetProvider {
 | 服务端 | `GrpcBenchServer --port --io-threads --executor grpc-default\|fixed\|direct`（缺省 grpc-default） | `DubboBenchServer --port --io-threads`（Dubbo 需要具体端口） |
 | Netty | grpc-netty-shaded（重定位，与 harness 的 netty-all 互不影响） | Dubbo 3.3.6 声明依赖 netty-all 4.2.2.Final（未 shade）；根 pom 统一管理成 4.1.136.Final（`dependency:tree -Dverbose` 实证 4.2.2 被 managed 掉；3.3.6 不引用 4.2 才有的 IoHandler 系 API，测试与压测在 4.1.136 上跑通），同一 JVM 只有一份 Netty |
 
+归档数据测于 Netty 4.1.136 / ZooKeeper 3.9.4；2.0.0 升到 4.1.139 / 3.9.6（依赖漏洞修复，见 [SECURITY.md](../SECURITY.md#依赖漏洞)），热路径代码未变，未重跑。
+
 ### 对等性：线程、执行器、连接、序列化
 
 | | 本框架（rpc 卡） | gRPC | Dubbo |

@@ -19,7 +19,7 @@
 |---|---|
 | 机器 | 一台笔记本：AMD Ryzen 5 4600H，WSL2 Ubuntu（10 vCPU，内核 6.18.33.2-microsoft-standard-WSL2），接通电源；宿主运行期间空闲（[NOTES.md](../bench/reports/20261022-d23e39d/NOTES.md#环境)） |
 | 绑核 | 服务端 cpu 0-4，压测端 cpu 5-9（开环调度线程独占 cpu5），两端各自独立 JVM，走 loopback |
-| JVM | Temurin 21.0.12，两端 `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`、G1；Netty 4.1.136 |
+| JVM | Temurin 21.0.12，两端 `-Xms1g -Xmx1g -XX:+AlwaysPreTouch`、G1；Netty 4.1.136（归档数据测于 Netty 4.1.136 / ZooKeeper 3.9.4；2.0.0 升到 4.1.139 / 3.9.6（依赖漏洞修复，见 [SECURITY.md](../SECURITY.md#依赖漏洞)），热路径代码未变，未重跑） |
 | 负载 | `BenchService#echo`，1024 字节 `byte[]` 原样回显；闭环 64 并发 / 开环 10000 req/s；超时 1s |
 | 轮次 | 每轮 60s（预热 20s，统计窗口 [20s, 55s]），每张卡 3 轮；闭环取吞吐中位那一轮、开环取 p99 中位那一轮为正式轮 |
 | 序列化 | 本框架 Protostuff；gRPC 生成的 protobuf 消息；Dubbo triple 的 Java 接口模式缺省 hessian2（外包一层 triple 的 protobuf 信封） |

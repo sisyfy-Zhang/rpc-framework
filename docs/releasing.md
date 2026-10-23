@@ -55,9 +55,69 @@
   三处必须一致；release.yml 会核对 tag 与根 pom、rpc-bom 的版本，不一致直接失败。
 - 已发布的版本**不可覆盖、不可删除**（见[回滚与重发](#回滚与重发)），所以任何改动都发新版本号。
 
+## 依赖漏洞核对
+
+发布步骤 1 之前做，三项都要过（第 2 项 (b) 的命中按 Boot 版本解读）（规则与版本线约束见 [SECURITY.md「依赖漏洞」](../SECURITY.md#依赖漏洞)）：
+
+1. **reactor 依赖树 0 命中**：
+   ```bash
+   ./mvnw -B dependency:tree > tree.log
+   python -I bench/tools/osv_scan.py tree.log      # 只用标准库，联网查 api.osv.dev；退出码 0 = 无命中
+   ```
+2. **使用方视角**：根 pom 的 `dependencyManagement` 对使用方不生效，所以再用两个消费者工程各解析一次。
+   先 `./mvnw -B install -DskipTests` 把当前版本装进本地仓库，在仓库外各建一个目录放 `pom.xml`（`rpc.version` 换成根 pom 的 `<version>`）。
+
+   **(a) 不导入任何 BOM**（非 Boot 应用：Netty / jackson / ZooKeeper 全由本框架的直接依赖决定），要求 **0 命中**：
+   ```xml
+   <project xmlns="http://maven.apache.org/POM/4.0.0">
+     <modelVersion>4.0.0</modelVersion>
+     <groupId>tmp.vuln</groupId><artifactId>consumer-nobom</artifactId><version>0</version>
+     <properties><rpc.version>X.Y.Z</rpc.version></properties>
+     <dependencies>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-core</artifactId><version>${rpc.version}</version></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-zookeeper</artifactId><version>${rpc.version}</version></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-nacos</artifactId><version>${rpc.version}</version></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-serialize-protobuf</artifactId><version>${rpc.version}</version></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-serialize-fastjson2</artifactId><version>${rpc.version}</version></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-metrics-micrometer</artifactId><version>${rpc.version}</version></dependency>
+     </dependencies>
+   </project>
+   ```
+
+   **(b) Spring Boot 父 pom + rpc-bom**（Boot 应用的典型写法）：这里的 Netty / jackson 由 Boot 的 BOM 决定，**命中按 Boot 版本解读**——
+   落在 Boot 管理的构件上的命中随 Boot 补丁版本修复（SECURITY.md「依赖漏洞」），不算本框架的阻断项；落在 ZooKeeper 或本框架直接依赖上的命中仍要 0。
+   `<parent>` 的版本用本框架当前测试的 Boot 版本（根 pom 的 `spring-boot.version`）：
+   ```xml
+   <project xmlns="http://maven.apache.org/POM/4.0.0">
+     <modelVersion>4.0.0</modelVersion>
+     <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>4.1.0</version><relativePath/></parent>
+     <groupId>tmp.vuln</groupId><artifactId>consumer-bootparent</artifactId><version>0</version>
+     <properties><rpc.version>X.Y.Z</rpc.version></properties>
+     <dependencyManagement><dependencies>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-bom</artifactId><version>${rpc.version}</version><type>pom</type><scope>import</scope></dependency>
+     </dependencies></dependencyManagement>
+     <dependencies>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-spring-boot-starter</artifactId></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-zookeeper</artifactId></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-registry-nacos</artifactId></dependency>
+       <dependency><groupId>io.github.sisyfy-zhang</groupId><artifactId>rpc-serialize-protobuf</artifactId></dependency>
+     </dependencies>
+   </project>
+   ```
+   ```bash
+   # 在仓库根目录执行，用同一个 wrapper；两个目录各跑一次
+   ./mvnw -B -f <消费者目录>/pom.xml dependency:tree > consumer-tree.log
+   python -I bench/tools/osv_scan.py consumer-tree.log
+   ```
+   顺带看一眼两份树里的 `io.netty:*` 是否各自只有一个版本（(a) 为根 pom 的 4.1 线，(b) 为 Boot 管理的 4.2 线）。
+3. **Scorecard**：main 上最近一次 scorecard workflow 的 Vulnerabilities 检查为 10/10（`gh workflow run scorecard.yml` 可手动触发；
+   分数在 Security → Code scanning 或 `api.scorecard.dev` 上看）。
+
+有命中时按 SECURITY.md 处理：版本线内有修复版本就升级；确属不适用的写进 SECURITY.md「不适用说明」，不在发布前静默放过。
+
 ## 发布步骤
 
-以 `1.0.0` 为例，在 main 上、工作区干净、CI 全绿（下面给人看的命令写 `mvn`，本机 Maven 3.9.x 即可；CI 用仓库里的 `./mvnw`，Maven 版本固定为 3.9.12）：
+以 `1.0.0` 为例，在 main 上、工作区干净、CI 全绿、[依赖漏洞核对](#依赖漏洞核对)通过（下面给人看的命令写 `mvn`，本机 Maven 3.9.x 即可；CI 用仓库里的 `./mvnw`，Maven 版本固定为 3.9.12）：
 
 ```bash
 # 1. 去掉 -SNAPSHOT（只改 pom 里的版本号；改完核对再没有 $V-SNAPSHOT）

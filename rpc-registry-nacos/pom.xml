@@ -14,6 +14,17 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>rpc-core</artifactId>
     </dependency>
+    <!-- 对 nacos-client 2.4.3 写死的 jackson 2.13.5 的对齐：在 nacos-client 之前直接声明 jackson-core / jackson-databind，
+         版本由根 pom 的 jackson-bom 管理。使用方的依赖图里这两项比 nacos-client → jackson 近一层，按就近原则胜出；
+         只在 dependencyManagement 里管理不够（它对使用方不生效），使用方会拿到 2.13.5（SECURITY.md「依赖漏洞」）。 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
     <dependency>
       <groupId>com.alibaba.nacos</groupId>
       <artifactId>nacos-client</artifactId>
