@@ -1,0 +1,59 @@
+# OpenSSF Scorecard：push main 与每周一次，结果发布到 api.scorecard.dev（README 徽章读它），SARIF 同时进 Security → Code scanning。
+# 按 ossf/scorecard-action 官方模板写；publish_results: true 时服务端会校验本 workflow，必须满足：
+#   - 不能有顶层 env / defaults，顶层不能有写权限，只有本 job 能拿 id-token: write；
+#   - 本 job 不能有 env / defaults / container / services，跑在 GitHub 托管的 Ubuntu runner 上；
+#   - 本 job 只能用 actions/checkout、actions/upload-artifact、github/codeql-action/upload-sarif、ossf/scorecard-action、step-security/harden-runner。
+# 所以这里不照抄 ci.yml 的顶层 MVN_FLAGS，也不要往这个 job 里加别的步骤。
+# actions 按 commit SHA 固定，行尾注释是对应 tag（见 ci.yml 顶部说明）。
+name: scorecard
+
+on:
+  # Scorecard 只支持默认分支
+  push:
+    branches: [main]
+  schedule:
+    # 每周六 01:30 UTC（与官方模板相同）
+    - cron: '30 1 * * 6'
+  # 分支保护规则变化时重算 Branch-Protection 检查
+  branch_protection_rule:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # 上传 SARIF 到 Code scanning
+      security-events: write
+      # publish_results: true 需要 GitHub OIDC token
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      # SARIF 作为 workflow artifact 留 5 天，便于不看 Security 页也能核对
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: results.sarif
