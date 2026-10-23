@@ -80,7 +80,7 @@
          protoc 用同一版本生成代码（生成代码与运行时同一条 3.25 线）。protoc / protoc-gen-grpc-java 由 ascopes 的
          protobuf-maven-plugin 按平台从 Maven Central 取（Windows 与 Linux 同一份配置，不需要 os-maven-plugin 扩展）。 -->
     <grpc.version>1.85.0</grpc.version>
-    <protobuf.version>3.25.9</protobuf.version>
+    <protobuf.version>4.36.2</protobuf.version>
     <protobuf-maven-plugin.version>5.1.11</protobuf-maven-plugin.version>
     <!-- 对比对象（rpc-bench-compare-dubbo）：Dubbo 3.3 线当前稳定版（3.3.6，2025-10-17），all-in-one 的 org.apache.dubbo:dubbo。
          它声明依赖 netty-all 4.2.2.Final（未 shade）；本仓库在下面统一管理 netty-all 4.1.136.Final，Dubbo 模块也解析到 4.1.136
