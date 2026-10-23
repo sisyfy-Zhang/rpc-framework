@@ -55,30 +55,30 @@
     <!-- 经 netty-bom 管理全部 io.netty:* 构件（不止 netty-all）：zookeeper 等依赖单独声明的 netty-handler / netty-transport-native-epoll
          也对齐到同一版本，classpath 上不会混入旧版 Netty。留在 4.1 线；CI 的 netty-42 作业用 -Dnetty.version=4.2.x 另验 4.2（Boot 4 管理的线）。 -->
     <netty.version>4.1.139.Final</netty.version>
-    <spring.version>7.0.8</spring.version>
-    <junit-bom.version>6.1.2</junit-bom.version>
+    <spring.version>7.0.9</spring.version>
+    <junit-bom.version>6.1.3</junit-bom.version>
     <!-- Testcontainers 2.x 只 shade 了 jackson-databind/core，jackson-annotations 走 classpath：docker-java-api 3.7.1 要 ≥ 2.20 的 annotations，
          不管理时 nacos-client 2.4.3 写死的 2.13.5 按就近原则胜出，CI 有 Docker 时 NoSuchFieldError。
          2.21 线与 Spring Boot 4.1 的 jackson-2-bom 同线；2.21.7 起修复 2.20.x 上的 jackson-core / databind 公告（SECURITY.md「依赖漏洞」）。
          steadyrpc-registry-nacos 另外直接声明 jackson-core / databind，让使用方也拿到这个版本（本 dependencyManagement 对使用方不生效）。 -->
     <jackson-bom.version>2.21.8</jackson-bom.version>
-    <fastjson2.version>2.0.60</fastjson2.version>
-    <slf4j.version>2.0.17</slf4j.version> <!-- 1.7.x 的 StaticLoggerBinder 机制和 logback-classic 1.5.x（基于 SLF4J 2.x ServiceLoader）不兼容，绑定了也不生效 -->
+    <fastjson2.version>2.0.66</fastjson2.version>
+    <slf4j.version>2.0.20</slf4j.version> <!-- 1.7.x 的 StaticLoggerBinder 机制和 logback-classic 1.5.x（基于 SLF4J 2.x ServiceLoader）不兼容，绑定了也不生效 -->
     <zookeeper.version>3.9.6</zookeeper.version> <!-- 3.9.5 起修复 ZKTrustManager 反向 DNS 回退与 ZKConfig 配置值写入日志；steadyrpc-bom 里写死同一版本，两处一起改（BomConsistencyTest 核对） -->
-    <curator.version>5.8.0</curator.version> <!-- 5.2.0 的 curator-test 和 zookeeper 3.9.4 有二进制不兼容（IncompatibleClassChangeError），升到 5.8.0 修复 -->
+    <curator.version>5.9.0</curator.version> <!-- 5.2.0 的 curator-test 和 zookeeper 3.9.4 有二进制不兼容（IncompatibleClassChangeError），升到 5.8.0 修复 -->
     <protostuff.version>1.8.0</protostuff.version>
-    <nacos-client.version>2.4.3</nacos-client.version>
-    <logback.version>1.5.34</logback.version> <!-- 与 Spring Boot 4.1.0 的 spring-boot-starter-logging 对齐：1.5.13 不认识 Boot 4 defaults.xml 里 conversionRule 的 class 属性，%clr 解析失败 -->
+    <nacos-client.version>2.5.4</nacos-client.version>
+    <logback.version>1.6.5</logback.version> <!-- 与 Spring Boot 4.1.0 的 spring-boot-starter-logging 对齐：1.5.13 不认识 Boot 4 defaults.xml 里 conversionRule 的 class 属性，%clr 解析失败 -->
     <!-- log4j-api / log4j-to-slf4j 只经 Boot 的 spring-boot-starter-logging 进来（starter 里是 optional 的 Actuator，不传递给使用方）；
          Boot 4.1.0 带的 2.25.4 有 MapMessage JSON 编码公告，这里补丁级对齐到 2.25.5（Boot 4.1.1 起自身也是 2.25.5），不动 Boot 版本 -->
-    <log4j2.version>2.25.5</log4j2.version>
-    <spring-boot.version>4.1.0</spring-boot.version> <!-- 基于 Spring Framework 7.x，与本项目锁定的 spring.version 匹配 -->
-    <archunit.version>1.3.2</archunit.version>
+    <log4j2.version>2.26.1</log4j2.version>
+    <spring-boot.version>4.1.1</spring-boot.version> <!-- 基于 Spring Framework 7.x，与本项目锁定的 spring.version 匹配 -->
+    <archunit.version>1.5.1</archunit.version>
     <awaitility.version>4.3.0</awaitility.version>
     <jqwik.version>1.10.2</jqwik.version>
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
     <testcontainers.version>2.0.5</testcontainers.version>
-    <jacoco.version>0.8.14</jacoco.version>
+    <jacoco.version>0.8.15</jacoco.version>
     <!-- steadyrpc-bench-e2e：延迟直方图与口径卡解析（只用 SafeConstructor 加载成 Map，不反序列化到 Bean） -->
     <hdrhistogram.version>2.2.2</hdrhistogram.version>
     <snakeyaml.version>2.7</snakeyaml.version>
@@ -225,7 +225,7 @@
       <dependency>
         <groupId>commons-lang</groupId>
         <artifactId>commons-lang</artifactId>
-        <version>2.4</version>
+        <version>2.6</version>
       </dependency>
 
       <!-- Protostuff：通过运行时推导 schema 实现真正的 Protobuf 线上格式编码，不需要 .proto 文件/
@@ -409,7 +409,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.2.5</version>
+          <version>3.6.0</version>
           <configuration>
             <!-- 探针类（类名以 ProbeTest 结尾，并标 @Tag("probe")）会改 Protostuff 全局 IdStrategy，默认不跑，用 -Pprobe 单独运行。
                  不用 excludedGroups：没有 JUnit 依赖的模块（如 steadyrpc-benchmark）一配 groups/excludedGroups，surefire 就直接构建失败。 -->
@@ -434,7 +434,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
-          <version>3.4.1</version>
+          <version>3.5.1</version>
           <configuration>
             <archive>
               <manifest>
@@ -449,7 +449,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-dependency-plugin</artifactId>
-          <version>3.7.0</version>
+          <version>3.11.0</version>
         </plugin>
         <plugin>
           <groupId>io.github.ascopes</groupId>
