@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # 与 ci.yml 同一套 JDK 与缓存；server-* 参数让 setup-java 生成 ~/.m2/settings.xml：
       # <server><id>central</id><username>${env.CENTRAL_USERNAME}</username><password>${env.CENTRAL_TOKEN}</password></server>，
