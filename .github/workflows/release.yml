@@ -30,7 +30,7 @@ jobs:
       # 与 ci.yml 同一套 JDK 与缓存；server-* 参数让 setup-java 生成 ~/.m2/settings.xml：
       # <server><id>central</id><username>${env.CENTRAL_USERNAME}</username><password>${env.CENTRAL_TOKEN}</password></server>，
       # 真实值只在下面 deploy 步骤的 env 里注入，不落盘
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
