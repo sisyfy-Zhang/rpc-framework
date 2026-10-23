@@ -8,7 +8,7 @@ import org.apache.curator.test.TestingServer;
 /**
  * 只用于本机试跑示例的进程内 ZooKeeper（curator-test 的 TestingServer），省去安装 ZooKeeper 或 Docker。
  * 默认监听 2181（与 provider.yml / consumer.yml 一致），参数可指定端口；Ctrl+C 退出。数据在临时目录，退出即删除。
- * 生产与长期使用请用真实的 ZooKeeper（例如 {@code docker run -d -p 2181:2181 zookeeper:3.9}）。
+ * 生产与长期使用请用真实的 ZooKeeper（例如 {@code docker run -d -p 2181:2181 zookeeper:3.9.6}）。
  */
 public final class EmbeddedZooKeeper {
 

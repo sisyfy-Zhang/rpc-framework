@@ -68,7 +68,9 @@ mvn install -DskipTests
   两个启动类（第 5、6 节），多出来的第三个 main 只会让 `mvn spring-boot:run` 更难选；删了 `DemoApplication` 而留着
   `DemoApplicationTests` 会让 `mvn test` 找不到 `@SpringBootConfiguration`。
 
-在 `pom.xml` 里加入（先导入 BOM `steadyrpc-bom`，各 steadyrpc-* 模块就不用逐个写版本；它管理哪些第三方版本，见代码块后的说明）：
+在 `pom.xml` 里加入（先导入 BOM `steadyrpc-bom`，各 steadyrpc-* 模块就不用逐个写版本；它管理哪些第三方版本，见代码块后的说明）。
+把 `<properties>`、`<dependencyManagement>`、`<dependencies>` 合并进 start.spring.io 生成的 pom 里已有的同名元素，不要整段粘贴成第二份
+（重复的 `<properties>` 会让 Maven 报 `Non-parseable POM ... Duplicated tag: 'properties'`）：
 
 ```xml
 <properties>
@@ -123,19 +125,79 @@ Boot 应用的 Netty / jackson 由 Boot 的 BOM 决定（Boot 4.1 管理 Netty 4
 
 ## 3. 起一个 ZooKeeper
 
-任选一种，监听 `localhost:2181`：
+任选一种，监听 `localhost:2181`。A 最接近生产；B 适合已经在本仓库开发的读者；C 只依赖 Central，不需要 Docker，也不需要 clone 本仓库。
 
 ```bash
-# A. Docker（推荐，和生产最接近）
-docker run -d --name zk -p 2181:2181 zookeeper:3.9
+# A. Docker（推荐，和生产最接近；版本与 steadyrpc-bom 管理的 ZooKeeper 客户端一致）
+docker run -d --name zk -p 2181:2181 zookeeper:3.9.6
 
-# B. 不装任何东西：steadyrpc-examples 自带的嵌入式 ZooKeeper（curator-test 的 TestingServer，仅供试验）
+# B. 本仓库 steadyrpc-examples 自带的嵌入式 ZooKeeper（curator-test 的 TestingServer，仅供试验）：
+#    需要本仓库的 clone 并 ./mvnw install（见第 1 节），适合已经在本仓库开发的读者
 cd steady-rpc/steadyrpc-examples
 mvn -q dependency:build-classpath -Dmdep.outputFile=target/classpath.txt
 java -cp "target/classes:$(cat target/classpath.txt)" io.github.sisyfyzhang.steadyrpc.examples.EmbeddedZooKeeper
 ```
 
 （Windows 的 classpath 分隔符是 `;`，PowerShell 写法见 [steadyrpc-examples/README.md](../steadyrpc-examples/README.md#运行)。）
+
+**C. 只依赖 Central 的嵌入式 ZooKeeper**（仅供本机试跑，不要用于生产）：在第 2 步的工程里加 `curator-test`。steadyrpc-bom 不管理 Curator，
+所以写明版本，与 steadyrpc-registry-zookeeper 所用的 Curator 5.8.0 一致；`provided` scope 不会进可执行 jar，但 `spring-boot:run` 的 classpath 上有它：
+
+```xml
+<dependency>
+  <groupId>org.apache.curator</groupId>
+  <artifactId>curator-test</artifactId>
+  <version>5.8.0</version>
+  <scope>provided</scope>
+</dependency>
+```
+
+再把下面这个类抄进工程（包名按第 2 节的约定，换包名时同步改 `package` 一行）：
+
+`steadyrpc-examples/src/main/java/io/github/sisyfyzhang/steadyrpc/examples/EmbeddedZooKeeper.java`：
+
+```java
+package io.github.sisyfyzhang.steadyrpc.examples;
+
+import java.util.concurrent.CountDownLatch;
+
+import org.apache.curator.test.InstanceSpec;
+import org.apache.curator.test.TestingServer;
+
+/**
+ * 只用于本机试跑示例的进程内 ZooKeeper（curator-test 的 TestingServer），省去安装 ZooKeeper 或 Docker。
+ * 默认监听 2181（与 provider.yml / consumer.yml 一致），参数可指定端口；Ctrl+C 退出。数据在临时目录，退出即删除。
+ * 生产与长期使用请用真实的 ZooKeeper（例如 {@code docker run -d -p 2181:2181 zookeeper:3.9.6}）。
+ */
+public final class EmbeddedZooKeeper {
+
+	private EmbeddedZooKeeper() {
+	}
+
+	public static void main(String[] args) throws Exception {
+		int port = args.length > 0 ? Integer.parseInt(args[0]) : 2181;
+		TestingServer server = new TestingServer(new InstanceSpec(null, port, -1, -1, true, -1, 2000, -1), true);
+		CountDownLatch stopped = new CountDownLatch(1);
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			try {
+				server.close();
+			} catch (Exception e) {
+				e.printStackTrace();
+			} finally {
+				stopped.countDown();
+			}
+		}, "embedded-zookeeper-shutdown"));
+		System.out.println("Embedded ZooKeeper listening on " + server.getConnectString() + " (Ctrl+C to stop)");
+		stopped.await();
+	}
+}
+```
+
+在工程根目录单开一个终端启动它，看到 `Embedded ZooKeeper listening on 127.0.0.1:2181` 后再按第 7 节启动 provider 与 consumer：
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.main-class=io.github.sisyfyzhang.steadyrpc.examples.EmbeddedZooKeeper
+```
 
 写自动化测试时，在测试里直接 `new TestingServer(true)`（依赖 `org.apache.curator:curator-test`，test scope），
 把 `getConnectString()` 作为 `rpc.registry.address` 传给应用即可——本仓库的集成测试全部这样做，不依赖 Docker。
@@ -693,20 +755,21 @@ mvn spring-boot:run -Dspring-boot.run.main-class=io.github.sisyfyzhang.steadyrpc
 同一个原因，这个"两个应用放一个工程"的布局不能直接 `mvn package` 成可执行 jar（`repackage` 同样报 `Unable to find a single main class`）：
 它只用来试跑；要部署时按第 2 节说的拆成独立应用，各自一个启动类。
 
-provider 日志里应看到（下面是在本机实际运行 steadyrpc-examples 的输出，去掉了时间戳与进程号；地址以实际为准）：
+provider 日志里应看到（下面是 2.0.0 从 Central 复验时的实际输出：一个只依赖 Central 构件的空白 Boot 4.1 工程照抄本文运行，
+包名换回本文的示例包；logger 名是 Boot 缺省日志格式的缩写，去掉了时间戳、进程号与对齐空格；地址以实际为准）：
 
 ```text
-INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.InventoryServiceImpl
-INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserServiceImpl
-INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserFacadeImpl
-INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcServer : RpcServer bound on port 9000 (advertised as 192.168.0.103:9000), services=[io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default]
-INFO  [main] c.f.r.e.provider.ProviderApplication : Started ProviderApplication in 2.975 seconds (process running for 3.939)
-INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default at 192.168.0.103:9000
-INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default at 192.168.0.103:9000
-INFO  [er-registry-5-1] io.github.sisyfyzhang.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default at 192.168.0.103:9000
-WARN  [-server-biz-4-2] c.f.rpc.core.server.ServiceDispatcher : io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default#reserve (request 2) threw io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
-INFO  [-server-biz-4-4] c.f.rpc.examples.provider.TenantFilter : buyers called for tenant acme
-INFO  [-server-biz-4-5] c.f.r.examples.provider.UserServiceImpl : UserServiceImpl.save called with User{id=1, name=zzz}
+INFO  [main] i.g.s.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.InventoryServiceImpl
+INFO  [main] i.g.s.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserServiceImpl
+INFO  [main] i.g.s.steadyrpc.core.RpcServer : Exported io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default -> io.github.sisyfyzhang.steadyrpc.examples.provider.UserFacadeImpl
+INFO  [main] i.g.s.steadyrpc.core.RpcServer : RpcServer bound on port 9000 (advertised as 192.168.0.103:9000), services=[io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default, io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default]
+INFO  [main] i.g.s.s.e.provider.ProviderApplication : Started ProviderApplication in 5.86 seconds (process running for 6.674)
+INFO  [er-registry-5-1] i.g.s.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default at 192.168.0.103:9000
+INFO  [er-registry-5-1] i.g.s.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserService::default at 192.168.0.103:9000
+INFO  [er-registry-5-1] i.g.s.steadyrpc.core.RpcServer : Registered io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default at 192.168.0.103:9000
+WARN  [-server-biz-4-2] i.g.s.s.core.server.ServiceDispatcher : io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default#reserve (request 2) threw io.github.sisyfyzhang.steadyrpc.examples.api.InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
+INFO  [-server-biz-4-4] i.g.s.s.examples.provider.TenantFilter : buyers called for tenant acme
+INFO  [-server-biz-4-5] i.g.s.s.e.provider.UserServiceImpl : UserServiceImpl.save called with User{id=1, name=zzz}
 ```
 
 （`WARN` 那一行是业务异常的服务端日志：异常照常回给调用方，见下面的验证清单。）
@@ -714,19 +777,21 @@ INFO  [-server-biz-4-5] c.f.r.examples.provider.UserServiceImpl : UserServiceImp
 consumer 启动、调用、退出：
 
 ```text
-INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default updated: [192.168.0.103:9000]
-INFO  [main] c.f.rpc.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
-INFO  [main] c.f.r.e.consumer.ConsumerApplication : Started ConsumerApplication in 3.487 seconds (process running for 4.328)
-INFO  [main] c.f.r.e.consumer.CallShapesRunner : left=7
-INFO  [main] c.f.r.e.consumer.CallShapesRunner : InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
-INFO  [main] c.f.r.e.consumer.CallShapesRunner : async buyers=[User{id=1, name=order-1}]
-INFO  [main] c.f.r.e.consumer.CallShapesRunner : buyers(tenant=acme)=1
-INFO  [main] c.f.rpc.examples.consumer.DemoRunner : Remote saveUser returned User{id=1, name=zzz}
-INFO  [main] io.github.sisyfyzhang.steadyrpc.core.RpcClient : RpcClient closed in 130ms (all in-flight calls completed)
+INFO  [main] i.g.s.s.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.InventoryService::default updated: [192.168.0.103:9000]
+INFO  [main] i.g.s.s.core.client.ServiceDirectory : Providers of io.github.sisyfyzhang.steadyrpc.examples.api.UserFacade::default updated: [192.168.0.103:9000]
+INFO  [main] i.g.s.s.e.consumer.ConsumerApplication : Started ConsumerApplication in 2.863 seconds (process running for 3.589)
+INFO  [main] i.g.s.s.e.consumer.CallShapesRunner : left=7
+INFO  [main] i.g.s.s.e.consumer.CallShapesRunner : InsufficientStockException: sku 3001 has 7 left, order order-2 wants 100
+INFO  [main] i.g.s.s.e.consumer.CallShapesRunner : async buyers=[User{id=1, name=order-1}]
+INFO  [main] i.g.s.s.e.consumer.CallShapesRunner : buyers(tenant=acme)=1
+INFO  [main] i.g.s.s.examples.consumer.DemoRunner : Remote saveUser returned User{id=1, name=zzz}
+INFO  [main] i.g.s.steadyrpc.core.RpcClient : RpcClient closed in 139ms (all in-flight calls completed)
 ```
 
-ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`，节点数据是
-`weight=1&proto=2&ts=...&pid=...` 形式的元数据。停掉 provider（Ctrl+C）后节点立即消失。
+ZooKeeper 里的节点结构（`zkCli.sh ls -R /rpc`）：`/rpc/{接口全名}:{version}:{group}/providers/{host:port}`。不配 version / group 时
+version 为空、group 为 `default`，例如 `/rpc/com.example.api.UserFacade::default/providers/192.168.0.103:9000`（两个冒号之间是空的 version）；
+节点数据形如 `weight=1&proto=2&ts=…&pid=…`。停掉 provider（Ctrl+C）后节点立即消失。在 Git Bash 里执行 zkCli（包括
+`docker exec zk zkCli.sh ls -R /rpc`）要先 `export MSYS_NO_PATHCONV=1`，否则 `/rpc` 会被改写成 Windows 路径，报 `Path must start with / character`。
 
 **验证清单**。`DemoRunner` 只发了一次同步调用；业务异常跨进程、异步、attachments 三种形态由下面这个 runner 演示（consumer
 启动时与 `DemoRunner` 一起执行，任何一步失败都会让启动失败，日志就是上面 `CallShapesRunner` 那四行），provider 侧用一个

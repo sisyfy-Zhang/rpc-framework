@@ -24,7 +24,9 @@
 2.0.0 起项目改名为 steady-rpc：坐标 `rpc-*` → `steadyrpc-*`（groupId 不变），包 `com.feynman.rpc` → `io.github.sisyfyzhang.steadyrpc`，GitHub 仓库 `rpc-framework` → `steady-rpc`（旧 URL 由 GitHub 自动重定向）。`rpc.*` 配置属性、注解与类名、`META-INF/rpc/` 目录、线上协议均不变（[CHANGELOG](../CHANGELOG.md)）。发布 2.0.0 时额外注意：
 
 - **旧坐标 1.0.0 不下架**：Central 上的 `rpc-*:1.0.0` 不可删除，也无需删除；已有使用方继续可用，迁移方式见 CHANGELOG。
-- **javadoc.io**：新坐标 `steadyrpc-core` 在 Central 上可见之后，才能在 javadoc.io 上打开 `io.github.sisyfy-zhang/steadyrpc-core` 并点 Sync；发布前 README 的 javadoc 徽章会显示未找到。
+- **javadoc.io**：新坐标在 Central 上可见之后，打开 `https://javadoc.io/versions/io.github.sisyfy-zhang/<模块>` 点 **Sync from Maven**；
+  Sync 后版本处于 DISCOVERED（"Not uploaded yet"），还要勾选该版本点 **Upload**，约 2 分钟后变为 Available。每个模块单独触发
+  （README 的 javadoc 徽章与链接指向 `steadyrpc-core`）；触发之前 `/doc/...` 会 303 跳回 versions 页，徽章显示未找到。
 - **Codecov**：仓库改名后在 Codecov 的仓库设置里点 Resync，让它按新仓库名关联上传；徽章 URL 已换成新仓库名。
 - **Scorecard**：`api.scorecard.dev` 上的项目按仓库 URL 索引，徽章与查看链接已改为 `github.com/sisyfy-Zhang/steady-rpc`；新 URL 的分数要等 scorecard workflow 在 main 上跑过一次才出现。
 
@@ -164,6 +166,17 @@ release.yml 成功后，到 central.sonatype.com → *Publish* → *Deployments*
 - 状态应为 **VALIDATED**。展开核对组件清单（10 个组件，每个的文件齐全、签名通过）。
 - 确认无误点 **Publish**；状态经 PUBLISHING → **PUBLISHED**，通常十几分钟到几十分钟后在 Maven Central 搜索与 `repo1.maven.org` 上可见。
 - 有问题点 **Drop** 丢弃这次 deployment（未发布前可以丢弃，不占用版本号）。
+
+### 发布后复验
+
+PUBLISHED 之后，在仓库外按 [getting-started](getting-started.md) 新建空白 Boot 4 工程，只依赖 Central 上的新版本跑通 provider + consumer：
+
+- 用**独立的空本地仓库**（`-Dmaven.repo.local=<空目录>`），保证构件真从 Central 下载，而不是用本机 install 过的同版本。
+- 下载日志里每个用到的 `steadyrpc-*` pom / jar 都应是 `Downloaded from central: ...`；主机是 `repo.maven.apache.org` 或 `repo1.maven.org`，
+  取决于 Maven 版本与镜像配置（本次 2.0.0 复验用 Maven 3.10.0，是前者），两者是同一个 Central，按 `central` 检索而不是按主机名。
+- 核对 jar 的 MANIFEST（`Implementation-Version` 为新版本、`Automatic-Module-Name` 以 `io.github.sisyfyzhang.steadyrpc.` 开头），
+  并下载 `.asc` 用临时 `GNUPGHOME` 从 keyserver 导入发布公钥后 `gpg --verify`，应为 Good signature。
+- 按上面 javadoc.io 一条触发收录。
 
 ## 回滚与重发
 

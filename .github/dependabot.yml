@@ -34,6 +34,12 @@ updates:
       # nacos-client 留在 2.x：3.x 是不兼容的大版本
       - dependency-name: 'com.alibaba.nacos:nacos-client'
         versions: ['>= 3']
+      # jackson 2.x 只收补丁，跟 Spring Boot 管理的 2.21 线（steadyrpc-registry-nacos 直接声明 jackson-core / databind，
+      # 压过 nacos-client 写死的旧版本；跨 minor 由人随 Boot 一起评估）
+      - dependency-name: 'com.fasterxml.jackson:*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      - dependency-name: 'com.fasterxml.jackson.core:*'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
       # Spring Boot 的 minor / major 随 starter 适配一起人工升级
       - dependency-name: 'org.springframework.boot:*'
         update-types: ['version-update:semver-major', 'version-update:semver-minor']

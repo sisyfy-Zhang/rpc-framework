@@ -7,11 +7,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -25,6 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>{@code ```xml} 代码块（pom 片段）只核对坐标：其中每个 {@code <artifactId>} 都必须出现在 steadyrpc-examples/pom.xml
  * 或 steadyrpc-bom/pom.xml 里（{@link #NOT_IN_EXAMPLES} 列出的刻意例外除外），模块改名或文档拼错时失败。bash 块不核对。
+ *
+ * <p>2.0.0 改名（{@code com.feynman.rpc} → {@code io.github.sisyfyzhang.steadyrpc}）的残留检查见
+ * {@link #noPreRenameResidueInPublicDocs()}：示例日志、路径里的旧包名不在代码块核对范围内，靠它兜底。
  */
 class DocsSnippetsTest {
 
@@ -35,6 +40,42 @@ class DocsSnippetsTest {
 	/** 文档里出现、但 steadyrpc-examples 刻意不依赖的 artifact → 原因。 */
 	private static final Map<String, String> NOT_IN_EXAMPLES = Map.of(
 			"spring-boot-starter-webmvc", "getting-started 7.1: scraping /actuator/prometheus needs a web server; the examples run as WebApplicationType.NONE");
+
+	/** 改名前的包名残留：Boot 缩写的 logger 名（c.f.r.* / c.f.rpc.*）与路径形式，任何公开文档里都不应出现。 */
+	private static final List<String> FORBIDDEN_EVERYWHERE = List.of("c.f.r", "c.f.rpc", "com/feynman");
+	/** {@code com.feynman} 只允许出现在这些文件的迁移说明里（1.0.0 → 2.0.0）。 */
+	private static final Set<String> OLD_PACKAGE_ALLOWED_IN = Set.of(
+			"CHANGELOG.md", "README.md", "README.en.md", "docs/getting-started.md", "docs/releasing.md");
+
+	@Test
+	void noPreRenameResidueInPublicDocs() throws IOException {
+		List<Path> documents = new ArrayList<>();
+		for (String top : List.of("README.md", "README.en.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md")) {
+			documents.add(ROOT.resolve(top));
+		}
+		try (Stream<Path> files = Files.walk(ROOT.resolve("docs"))) {
+			files.filter(Files::isRegularFile).filter(file -> file.toString().endsWith(".md")).sorted().forEach(documents::add);
+		}
+		List<String> violations = new ArrayList<>();
+		for (Path document : documents) {
+			String relative = ROOT.relativize(document).toString().replace('\\', '/');
+			List<String> lines = Files.readAllLines(document, StandardCharsets.UTF_8);
+			for (int i = 0; i < lines.size(); i++) {
+				String line = lines.get(i);
+				for (String forbidden : FORBIDDEN_EVERYWHERE) {
+					if (line.contains(forbidden)) {
+						violations.add(relative + ":" + (i + 1) + " contains '" + forbidden + "'");
+					}
+				}
+				if (line.contains("com.feynman") && !OLD_PACKAGE_ALLOWED_IN.contains(relative)) {
+					violations.add(relative + ":" + (i + 1) + " contains 'com.feynman' (allowed only in " + new TreeSet<>(OLD_PACKAGE_ALLOWED_IN) + ")");
+				}
+			}
+		}
+		System.out.printf("[docs] pre-rename residue: %d document(s) scanned%n", documents.size());
+		assertTrue(documents.size() > 10, "expected README / CHANGELOG / CONTRIBUTING / SECURITY and docs/**/*.md, got " + documents);
+		assertTrue(violations.isEmpty(), "pre-rename residue in public docs: " + violations);
+	}
 
 	@ParameterizedTest
 	@ValueSource(strings = { "README.md", "docs/getting-started.md" })
